@@ -1,20 +1,18 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Callable
 
 from coderio.tools.base import DESTRUCTIVE_TOOLS
 
 
-class PermissionMode:
+class PermissionMode(StrEnum):
+    """Permission modes. StrEnum so members ARE strings (== works with raw str),
+    but invalid values raise ValueError at construction — catching config typos
+    early instead of silently degrading at runtime."""
     CONFIRM = "confirm"
     PLAN = "plan"
     AUTO = "auto"
-    _ALL = frozenset({CONFIRM, PLAN, AUTO})
-
-    def __new__(cls, value: str) -> str:
-        if value not in cls._ALL:
-            raise ValueError(f"Invalid permission mode: {value!r}")
-        return value
 
 
 class PermissionGate:
