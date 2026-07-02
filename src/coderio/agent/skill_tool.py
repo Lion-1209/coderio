@@ -31,5 +31,5 @@ class ActivateSkillTool:
         if not self.store.has(name):
             return f"Error: skill not found: {name}. Available: {', '.join(self.store.names())}"
         skill = self.store.get(name)
-        self.active.activate(skill)
-        return f"Activated skill: {name}"
+        newly = self.active.activate(skill)
+        return f"Activated skill: {name}" if newly else f"Skill already active: {name}"

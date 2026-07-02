@@ -10,10 +10,17 @@ class ActiveSkills:
     """Tracks currently-active skills for the session (spec §2.4)."""
     _active: dict = field(default_factory=dict)  # name -> Skill
 
-    def activate(self, skill) -> None:
-        if skill is not None:
-            skill.load_body()
-            self._active[skill.name] = skill
+    def activate(self, skill) -> bool:
+        """Activate a skill (load its body into context). Idempotent: if the
+        skill is already active, does nothing and returns False (avoids
+        re-reading the file on duplicate activation). Returns True if newly activated."""
+        if skill is None:
+            return False
+        if skill.name in self._active:
+            return False  # already active — skip the redundant load_body()
+        skill.load_body()
+        self._active[skill.name] = skill
+        return True
 
     def deactivate(self, name: str) -> bool:
         return self._active.pop(name, None) is not None
