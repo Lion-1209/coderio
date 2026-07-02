@@ -1,0 +1,40 @@
+{
+  "skill_name": "testing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我给这个函数写测试: function calculateDiscount(price, level) { if (level === 'vip') return price * 0.8; if (level === 'svip') return price * 0.7; return price; }",
+      "expected": "先识别为纯函数→直接输入输出断言、零 mock、单元层。测行为不测实现(断言返回值非内部 if 分支)。覆盖核心三类(vip/svip/普通)+边界(0/负/未知level/非数值)。一测一事、名字描述行为。发现的疑似 bug(负价打折/NaN)先报告不固化"
+    },
+    {
+      "id": 2,
+      "prompt": "我要测这个服务: class OrderService { constructor(db, emailSvc) {...} async create(order) { const id = await this.db.save(order); await this.emailSvc.send(order.email, '下单成功'); return id; } } 我打算把 db 和 emailSvc 都 mock 掉。这样测可以吗?",
+      "expected": "区分 mock 合理性(没简单说都 mock)。识别为有外部依赖的逻辑。db/emailSvc 都是外部副作用 mock 合理,但 mock 后被测逻辑(处理 save 返回 id、把 order 传给 save、邮件发给正确地址)仍要被验证,不能退化成只验证'调了 save'。用'mock 之后被测对象真实逻辑还在被验证吗'尺子区分合理 vs 过度 mock"
+    },
+    {
+      "id": 3,
+      "prompt": "我们项目测试覆盖率到了 95%,挺高的吧?但最近好几个 bug 都是测试没抓到的。怎么回事?",
+      "expected": "不附和'挺高',识别覆盖率崇拜(高行覆盖≠有效覆盖)。覆盖率是必要不充分,只告诉'哪些没跑过'不告诉'测得好不好'。95% 可能全是 happy path,错误路径/边界/并发/异常没测。建议从'什么 bug 漏了'反推该补什么测试,而非盯覆盖率数字"
+    },
+    {
+      "id": 4,
+      "prompt": "我们团队的测试主要是端到端测试,因为这样最真实。每次跑 CI 要 40 分钟,而且经常改一处代码好几条端到端挂。我们觉得测试太脆了,怎么办?",
+      "expected": "识别为倒金字塔(端到端多单元少),解释为什么糟糕(慢/脆/改一处一片红)。建议改金字塔分布(单元最多/集成适量/端到端最少)。给判断尺子'这测试到底测什么'(纯逻辑→单元/协作→集成/用户目标→端到端)。指出能用下层测的别上上层。端到端最真实但最慢最脆,只用在验证用户路径而非全覆盖"
+    },
+    {
+      "id": 5,
+      "prompt": "我在给一个转账函数写测试,发现余额是负数时它居然还能转成功(转出后余额更负)。我把这个行为写成测试固定下来了: transfer(-50) 后余额是 -100,测试通过。这样对吧?",
+      "expected": "不附和'测试通过就对',识别这是把潜在 bug 固化成通过的测试。用'行为符合需求/常理吗'判断——负余额还能转账不符合常理→是 bug 不该固化。建议先报告确认(确认 bug 先修代码再写测试,确认预期再固化)。指出危险:未来修这个 bug 会被这条测试挡住"
+    },
+    {
+      "id": 6,
+      "prompt": "帮我给这个 React 组件写测试: function Counter() { const [n, setN] = useState(0); return <button onClick={() => setN(n+1)}>点击 {n}</button>; }",
+      "expected": "先识别为 UI 组件→用组件测试库测渲染输出与交互。测行为(点击后显示数字变化)非测实现(不断言 useState 调用次数/setN 传参)。覆盖核心行为(初始0/点击变1/多次递增)。避免测框架(不断言 useState 来自 React)。一测一事名字描述行为"
+    }
+  ],
+  "_validation_history": {
+    "round_1": "v1 跑 case 1/2/3：3×4=12 项全过。但发现 v1 缺'测试金字塔层次''测试发现bug该测还是该报告'两块",
+    "round_2": "v2 跑变体 case 4/5/6：3×4=12 项全过，压测两处新增能力(金字塔/bug固化)全部生效,case6 回归测行为不测实现保持",
+    "round_3": "v3 补'先识别被测对象性质'(发现 v2 该项靠 subagent 凭经验、缺统一前置);回归 case 1/2/3：3×4-5=13 项全过，确认 v3 生效且未破坏 v1/v2。迭代收敛"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "skill_name": "code-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我 review 一下这段代码: async function getUser(id) { const user = await db.find(id); return user.name; }",
+      "expected": "不只看风格,重点查正确性(user 可能 null,user.name 抛错=blocking)。按严重度分层(null 问题 critical 排最前)。给具体建议(加 null 检查/抛业务错)。不用 nit 淹没真问题。按改动性质调整重点(外部依赖 db→重点查边界/异常)"
+    },
+    {
+      "id": 2,
+      "prompt": "这个 PR 加了个登录功能,代码大概 200 行。我让你 review,你说'看起来不错,逻辑清晰'。这样 review 够吗?",
+      "expected": "识别表面附和式 review('看起来不错'没实际检查,空 review 等于没 review)。指出有效 review 要查具体维度(正确性/边界/安全/并发/测试)。针对登录点出该查的安全点(密码哈希/限流防爆破/SQL参数化/错误信息泄露)。强调不能只说不错要指出查了什么发现什么"
+    },
+    {
+      "id": 3,
+      "prompt": "我 review 同事的代码,挑了一堆问题:变量名不规范、注释少了点、缩进不一致、函数有点长、可以提取个常量。我列了 15 条让他改。这样 review 好吗?",
+      "expected": "识别逐行挑 nit(15 条全风格,淹没正确性/安全)。指出 review 要分严重度,nit 不该和 critical 混。建议聚焦 critical/重要(逻辑/安全/边界),nit 归并或交 linter。区分该人 review 的(判断性) vs 该工具做的(机械风格)"
+    },
+    {
+      "id": 4,
+      "prompt": "同事提了个 PR,改了 30 个文件、800 行,既有重构又有新功能还有 bugfix 混在一起。我一看就头大,不知从哪审。怎么办?",
+      "expected": "不附和'硬着头皮读完',给大 PR 分块策略。先读 PR 描述/commit message 抓主线,review 时对照主线。按逻辑分块(功能模块)非按文件,一块审完总结再下块。抓主线正确性优先再下沉细节。太大就要求拆——大而杂 PR 几乎无法有效 review,是 PR 问题非 reviewer 问题"
+    },
+    {
+      "id": 5,
+      "prompt": "我刚写完一个功能,想提交前自己 review 一遍。我打算从头到尾再读一遍代码看看有没有问题。这样行吗?",
+      "expected": "不附和'从头读一遍就行',指出刚写完自我 review 有盲点(代码在短期记忆会自动补全)。建议放一会儿/换视角(假装 review 别人代码)。先用工具跑(测试/lint/类型检查)再人眼看。对照 commit message 自查揪混入的无关改动。产出标准同对外 review(说查了什么发现什么)"
+    },
+    {
+      "id": 6,
+      "prompt": "帮我 review 一下这段代码: function transfer(from, to, amount) { accounts[from] -= amount; accounts[to] += amount; }",
+      "expected": "不只看风格重点查正确性。查关键问题:余额不足没检查(变负)、amount 负/NaN/非数值(资金方向反转/数据损坏)、账户不存在、缺原子性(中途失败钱凭空消失/产生)。按严重度分层 critical 排前。给具体建议。按改动性质调整重点(涉及钱→重点查原子性/一致性+并发竞态)"
+    }
+  ],
+  "_validation_history": {
+    "round_1": "v1 跑 case 1/2/3：3×4=12 项全过。但发现 v1 缺'大 PR 分块策略''自我 review 技巧'两块",
+    "round_2": "v2 跑变体 case 4/5/6：3×4-5=14 项全过，压测两处新增能力(大PR/自我review)全部生效,case6 回归正确性优先保持且 review 质量极高(抓到原子性/竞态深层问题)",
+    "round_3": "v3 补'按改动性质调整重点'(发现 v2 维度清单静态、缺针对性);回归 case 1/2/3：3×4-5=14 项全过,确认 v3 生效且未破坏 v1/v2。迭代收敛"
+  }
+}

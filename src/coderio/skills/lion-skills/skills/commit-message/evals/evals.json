@@ -1,0 +1,20 @@
+{
+  "skill_name": "commit-message",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我把一个 React 组件的状态从 useState 换成了 useReducer，还顺手修了个内存泄漏 bug。写个 commit message。",
+      "expected": "归类为 refactor，subject 说做了什么（不写怎么实现），body 解释为什么，提及附加的 bug 修复"
+    },
+    {
+      "id": 2,
+      "prompt": "上一条提交信息是 'update'，太笼统了。假设当前 diff 是给登录接口加了密码哈希校验，帮我重写成规范的。",
+      "expected": "重写为 feat/fix 类，scope=auth，subject 具体，符合 Conventional Commits"
+    },
+    {
+      "id": 3,
+      "prompt": "我改了登录接口、数据库迁移脚本、README 三个地方，怎么提交？",
+      "expected": "识别这是不相关改动，建议拆成 3 条提交而非塞一条"
+    }
+  ]
+}

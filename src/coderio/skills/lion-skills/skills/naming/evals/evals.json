@@ -1,0 +1,20 @@
+{
+  "skill_name": "naming",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我有个函数叫 processData，它其实是把 CSV 文本转成 JSON 并校验数据合法性。起个更好的名字。",
+      "expected": "给出具体动词前缀的名字如 parseCsvToRecords / validateAndConvertCsv，解释为何 processData 不好（无意义动词）"
+    },
+    {
+      "id": 2,
+      "prompt": "这个变量叫 flag，根据上下文它表示用户是否已登录。叫啥好？",
+      "expected": "建议 isLoggedIn，说明布尔用 is 前缀、flag 是无意义词"
+    },
+    {
+      "id": 3,
+      "prompt": "我在设计一个 REST API，资源是'用户订单里的商品'。URL 路径和返回字段怎么命名？",
+      "expected": "URL 用复数名词嵌套如 /users/{id}/orders/{oid}/items，字段遵循语言 case 约定，避免动词进 URL"
+    }
+  ]
+}

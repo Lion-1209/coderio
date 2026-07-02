@@ -1,0 +1,20 @@
+{
+  "skill_name": "lion-writing-skills",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我想加个 skill，每次写完代码帮我自查有没有边界情况没处理。帮我按 Lion-Skills 的规范创建。",
+      "expected": "走五步流程，产出一个符合规范的 SKILL.md 草稿（含 frontmatter、正文骨架），而非直接堆内容"
+    },
+    {
+      "id": 2,
+      "prompt": "我的 skill 的 description 是'用于代码审查，会检查风格、安全、性能'，帮我看看写得对不对、怎么优化。",
+      "expected": "指出这违反'别写工作流'规则（写了会做什么），改成只写触发条件"
+    },
+    {
+      "id": 3,
+      "prompt": "我写了这个 SKILL.md，帮我验证它真好用。",
+      "expected": "引导用 subagent 带着新 skill 跑 2-3 个真实 prompt 并评审输出"
+    }
+  ]
+}

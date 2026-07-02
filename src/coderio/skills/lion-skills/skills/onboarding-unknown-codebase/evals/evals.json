@@ -1,0 +1,20 @@
+{
+  "skill_name": "onboarding-unknown-codebase",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我刚 clone 了 vite 这个项目到本地，帮我看懂它是干啥的、结构怎样、入口在哪。把它当成陌生代码库来梳理。",
+      "expected": "走三遍法，产出一个结构化项目地图（是什么/技术栈/目录结构/核心流程/关键文件/怎么跑），而不是一头扎进某个文件"
+    },
+    {
+      "id": 2,
+      "prompt": "同事离职留下一个项目，我接手了，不知道怎么跑起来也看不懂整体逻辑。帮我梳理。",
+      "expected": "对象未给出时，先向用户要项目路径/README，不默认当前目录或臆造；拿到后先读 README/配置搞清怎么跑，再理结构产出地图"
+    },
+    {
+      "id": 3,
+      "prompt": "我刚 clone 了 expressjs/express，讲讲它从收到 HTTP 请求到返回响应经过哪些层。",
+      "expected": "走第三遍主线追踪，从 express 入口（createApplication/handle）顺请求经过中间件链到响应"
+    }
+  ]
+}
