@@ -50,10 +50,12 @@ class CoderioTUI(App):
 
     name = "textual_tui"  # StreamHandler protocol compat
 
-    def __init__(self, on_input=None, show_tool_output: bool = True) -> None:
+    def __init__(self, on_input=None, show_tool_output: bool = True,
+                 banner: str | None = None) -> None:
         super().__init__()
         self._on_input = on_input  # callback(line: str) called on each user submit
         self.show_tool_output = show_tool_output
+        self._banner = banner  # startup info (model/perm/mode), shown on mount
         # StreamHandler state
         self.buffer = ""
         self.usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -72,6 +74,8 @@ class CoderioTUI(App):
     def on_mount(self) -> None:
         self.title = "coderio"
         self.sub_title = "skill-driven coding agent"
+        if self._banner:
+            self._write_main(Panel(self._banner, title="[bold magenta]coderio[/bold magenta]", border_style="magenta"))
         self.query_one("#msg", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -234,9 +238,29 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
     ensure_user_dirs()
     search_from = "."
     creds_path = Path.home() / ".coderio" / "credentials"
-    cfg, store, model, tools, gate, session, active, _rich_stream = build_runtime(
-        search_from=search_from, console=None, creds_path=creds_path,
-        provider_override=provider_override, model_override=model_override,
+    try:
+        cfg, store, model, tools, gate, session, active, _rich_stream = build_runtime(
+            search_from=search_from, console=None, creds_path=creds_path,
+            provider_override=provider_override, model_override=model_override,
+        )
+    except Exception as e:
+        # Init errors must not crash with a raw traceback. Show a minimal TUI
+        # with just the error, so the user sees it instead of a stack trace.
+        tui = CoderioTUI()
+        tui._banner = (
+            f"[red]启动失败:[/red] {type(e).__name__}: {e}\n\n"
+            "[dim]常见原因: API key 未配置 / provider 无效 / 网络不通。[/dim]\n"
+            "[dim]运行 coderio config 检查配置, 或设置 ANTHROPIC_API_KEY 环境变量。[/dim]"
+        )
+        tui.run()
+        return
+
+    banner = (
+        f"[bold magenta]coderio[/bold magenta]  [dim]model=[/dim]{cfg.model.default}  "
+        f"[dim]perm=[/dim]{gate.mode}"
+        "\n[dim]模式:[/dim] [cyan]single-agent (Textual TUI)[/cyan]. "
+        "大需求可用 [yellow]/crew[/yellow] 进 6-agent 流水线."
+        "\n[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开思考[/dim]"
     )
 
     def on_input(line: str) -> None:
@@ -280,5 +304,5 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
             harness_enabled=cfg.skills.harness,
         )
 
-    tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output)
+    tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
     tui.run()
