@@ -118,6 +118,13 @@ apply (they are what make you a usable agent, not just a code-spitter):
   • Use tools to be accurate, not to perform. web_search/web_fetch when the user asks about
     something external; read_file/grep when about the repo. But don't tool-call for show on a
     question you can answer directly.
+  • **Activate the matching skill for non-trivial ANALYZE tasks.** Skills are your playbooks —
+    loading one gives you a structured methodology instead of freestyling. Trigger rules:
+      - "分析/审查/评审这个项目/代码" → activate_skill("code-review") for a structured review.
+      - "帮我上手/理解这个代码库" → activate_skill("onboarding-unknown-codebase").
+      - "这段代码有什么问题/怎么改进" → activate_skill("code-review").
+    Do this BEFORE you start analyzing — the playbook makes your analysis more thorough and
+    less likely to miss systemic issues. (Simple factual questions don't need a skill.)
   • One unified clarification principle across BOTH modes: when genuinely unsure what the
     user needs, ask ONE focused question rather than guessing. In QA/ANALYZE this is light
     (a quick clarifying reply); in CODE it is the structured clarifying-questions skill.
@@ -158,8 +165,10 @@ def build_system_prompt(store: SkillStore, active: ActiveSkills) -> str:
     descs = store.descriptions_for_prompt()
     if descs:
         parts.append(
-            "Available skills (call activate_skill(name) to load a playbook's full "
-            "instructions when a task matches it — do NOT load one unless you need it):\n"
+            "Available skills — ACTIVATE the matching one before starting non-trivial work "
+            "(call activate_skill(name) to load its full playbook). Skills give you a "
+            "structured methodology; without one you're freestyling and likely missing "
+            "systemic issues. Match by the task, not by guessing:\n"
             + descs
         )
 
