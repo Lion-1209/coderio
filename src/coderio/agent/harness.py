@@ -7,16 +7,22 @@ from a soft prompt rule into a STRUCTURAL constraint. The harness sits inside
 an injected message. All decisions are based on observed tool calls/results
 (ground truth), never on the model's self-report.
 
-Three gates (spec §1):
-  * PlanGate (soft)      — nudge to decompose before writing, when no todos exist.
-  * VerifyGate (hard)    — block "done" while code is written-but-not-run.
-  * CompletionGate (hard)— block "done" while non-trivial todos remain pending.
+Four gates (spec §1):
+  * PlanGate (soft)       — nudge to decompose before writing, when no todos exist.
+  * VerifyGate (hard)     — block "done" while code is written-but-not-run.
+  * CompletionGate (hard) — block "done" while non-trivial todos remain pending.
+  * GroundingGate (hard)  — block "done" when the model cites code locations it
+                            never actually read (analyses built on assumptions,
+                            not evidence). Guards the ANALYZE/QA failure mode where
+                            the model trusts documentation or memory over source.
 
-VerifyGate + CompletionGate use progressive escalation: force-continue twice, then
-release with a visible warning (never silently, never infinite-loop).
+VerifyGate + CompletionGate + GroundingGate use progressive escalation:
+force-continue twice, then release with a visible warning (never silently, never
+infinite-loop).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -27,6 +33,10 @@ if TYPE_CHECKING:
 # "unverified write" that the VerifyGate watches.
 WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit"})
 
+# Read-only tools that "ground" a claim about a file — if the model cited a path
+# and one of these tools touched it, the citation is evidence-backed.
+READ_TOOLS: frozenset[str] = frozenset({"read_file", "grep", "list_dir", "glob"})
+
 # Running a shell command counts as a verification attempt — even a failing one
 # means the agent tried to run its code, so we stop nagging. This avoids both
 # "wrote then claimed done" and infinite "it errored, keep trying" loops.
@@ -34,6 +44,19 @@ VERIFY_TOOL: str = "bash"
 
 # After this many forced-continues a gate gives up and releases with a warning.
 _MAX_GATE_ATTEMPTS: int = 2
+
+# Match file paths the model might cite in an analysis: "loader.py", "src/x.py",
+# "loader.py:81", "agent/loop.py". Requires a dotted extension so ordinary prose
+# like "the loader" or "go to step 2" doesn't false-positive. Anchored to a word
+# boundary on the left; the path body may include /, \, word chars, dash, dot.
+_CITED_FILE_RE = re.compile(
+    r"(?<![\w/])"                       # not preceded by a word/slash char
+    r"(?:[\w./\\-]+[\\/])?"             # optional dir prefix (src/, agent\)
+    r"[\w-]+\."                         # basename stem + dot
+    r"(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml|rs|go|java|rb|sh|css|html)"
+    r"(?::\d+)?"                        # optional :line-number
+    r"(?![\w])"                         # not followed by a word char
+)
 
 
 def _is_success(result: str) -> bool:
@@ -62,6 +85,12 @@ class HarnessState:
     completion_attempts: int = 0
     # Whether the plan gate has nudged already this turn (nudge at most once).
     plan_nudged: bool = False
+    # Files the model has actually READ this turn (via read_file/grep/glob/list_dir).
+    # The GroundingGate checks citations against this set: claiming "loader.py:81
+    # does X" without loader.py in here is an ungrounded assertion.
+    read_files: set[str] = field(default_factory=set)
+    # Times the grounding gate has force-continued this turn.
+    grounding_attempts: int = 0
 
 
 @dataclass
@@ -80,6 +109,7 @@ class Harness:
         """Update internal state from a tool execution (called after every tool).
 
         - successful write tool  -> record path as an unverified write
+        - read tool              -> record the path/pattern as "actually read"
         - bash (any result)      -> writes are now "verified attempt", clear + reset
         """
         if not self.enabled:
@@ -88,6 +118,16 @@ class Harness:
             path = str(args.get("path", ""))
             if path and path not in self.state.writes_since_verify:
                 self.state.writes_since_verify.append(path)
+        elif name in READ_TOOLS:
+            # Record whatever path/pattern the read tool was aimed at. For grep
+            # the relevant arg is `pattern`/`path`; for read_file/list_dir/glob
+            # it is `path`/`file_path`/`pattern`. Store all candidates loosely —
+            # the GroundingGate matches by basename substring, so a dir read
+            # (list_dir "src/agent") still counts as having looked at files there.
+            for key in ("path", "file_path", "pattern"):
+                v = str(args.get(key, "")).strip()
+                if v:
+                    self.state.read_files.add(v)
         elif name == VERIFY_TOOL:
             # Any bash call counts as a verification attempt: the agent ran its
             # code. Clear the pending writes and reset the gate counter.
@@ -137,7 +177,15 @@ class Harness:
             return (cont, inject, warn)
 
         # CompletionGate: only meaningful when a non-trivial todo list exists.
-        return self._completion_gate()
+        cont, inject, warn = self._completion_gate()
+        if cont or warn:
+            return (cont, inject, warn)
+
+        # GroundingGate: guards the ANALYZE/QA failure mode where the model cites
+        # code it never read (built its answer on docs/memory/assumption). Runs
+        # last because the first two handle CODE-mode termination; this one mainly
+        # catches the no-writes/no-todos analysis case.
+        return self._grounding_gate(final_text)
 
     # --------------------------------------------------------------- VerifyGate
     def _verify_gate(self) -> tuple[bool, str | None, str | None]:
@@ -194,3 +242,96 @@ class Harness:
                 "truly done, or finish the remaining work. Do not claim overall "
                 "completion with pending todos.",
                 None)
+
+    # ----------------------------------------------------------- GroundingGate
+    def _grounding_gate(self, final_text: str) -> tuple[bool, str | None, str | None]:
+        """Hard gate: an analysis that cites code it never read is ungrounded.
+
+        Failure mode this catches: the model produces a confident-sounding review
+        ("loader.py:81 does X", "the harness never reads config.harness") built on
+        documentation, memory, or assumption — WITHOUT having opened the file. When
+        source and docs diverge (the docs are stale), this silently produces wrong
+        conclusions. This gate checks citations against the set of files actually
+        read this turn (``state.read_files``, populated by observe()).
+
+        Only fires when the model EXPLICITLY cites a file path (``foo.py``,
+        ``src/x.py:42``) — a pure-conversation answer with no file references is
+        left alone (it isn't claiming code-level facts).
+        """
+        cited = _cited_files(final_text)
+        if not cited:
+            return (False, None, None)
+        ungrounded = [c for c in cited if not self._was_read(c)]
+        if not ungrounded:
+            return (False, None, None)
+
+        attempt = self.state.grounding_attempts
+        self.state.grounding_attempts += 1
+
+        if attempt >= _MAX_GATE_ATTEMPTS:
+            files = ", ".join(sorted(ungrounded))
+            return (False, None,
+                    f"agent cited code in [{files}] without reading it this turn. "
+                    "Conclusions about that code may rest on stale docs or memory — "
+                    "please verify against the actual source.")
+        if attempt == 0:
+            files = ", ".join(sorted(ungrounded))
+            return (True,
+                    f"[harness] You cited {files} but did not read it this turn. A claim "
+                    "about code must be grounded in the actual source, not documentation "
+                    "or memory (docs go stale; source is ground truth). Read the cited "
+                    "file(s) with read_file now, then revise your analysis to match what "
+                    "you actually find. Do not repeat the citation unread.",
+                    None)
+        files = ", ".join(sorted(ungrounded))
+        return (True,
+                f"[harness] STILL unread: {files}. Read them with read_file before you "
+                "make any claim about their contents. If the file doesn't exist, say so "
+                "explicitly instead of asserting things about it.",
+                None)
+
+    @staticmethod
+    def _basename(path: str) -> str:
+        """Last path component (basename), slash/backslash agnostic. 'a/b.py' -> 'b.py'."""
+        for sep in ("/", "\\"):
+            if sep in path:
+                path = path.rsplit(sep, 1)[1]
+        return path
+
+    def _was_read(self, cited: str) -> bool:
+        """Did any read tool touch the cited path this turn?
+
+        Matches loosely: if the model cited ``loader.py`` and we read ``src/agent/``
+        (list_dir) or ``loader.py`` directly or grep'd with path ``src/agent``, that
+        counts. We compare on basename AND substring so a dir read covers its files.
+        A bare ``:line`` suffix on the citation is stripped first.
+        """
+        c = cited.rsplit(":", 1)[0] if ":" in cited else cited  # drop :line
+        c_base = self._basename(c)
+        for r in self.state.read_files:
+            if not r:
+                continue
+            r_base = self._basename(r)
+            # direct match on basename, or the read path contains the cited stem,
+            # or the cited path contains the read dir (read "src/x" covers "src/x/y.py").
+            if c_base == r_base or c in r or r in c or c_base in r:
+                return True
+        return False
+
+
+def _cited_files(text: str) -> list[str]:
+    """Extract file-path citations from prose. Returns deduped list (order kept).
+
+    Matches patterns like ``loader.py``, ``src/agent/loop.py``, ``a.py:81``.
+    Requires a code-ish extension so ordinary words ("step 2", "the loader") do
+    not false-positive. De-dupes on basename+line so the same file cited twice
+    with different line numbers only lists once for the user-facing message.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _CITED_FILE_RE.finditer(text):
+        path = m.group(0)
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out

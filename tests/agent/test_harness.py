@@ -209,3 +209,108 @@ def test_disabled_harness_check_termination_passthrough():
     h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
     cont, inject, warn = h.check_termination("done")
     assert (cont, inject, warn) == (False, None, None)
+
+
+# ------------------------------------------------------ check_termination — GroundingGate
+def test_grounding_gate_passthrough_when_no_files_cited():
+    """A pure-conversation answer with no file citations is left alone."""
+    h = _harness()
+    cont, inject, warn = h.check_termination("答案是 42，因为这就是生命之义。")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_grounding_gate_blocks_unread_citation():
+    """The core regression: model cites loader.py:81 but never read loader.py."""
+    h = _harness()
+    cont, inject, warn = h.check_termination(
+        "分析发现 loader.py:81 已经接入了 config.harness。"
+    )
+    assert cont is True
+    assert inject is not None and "loader.py" in inject
+    assert "read_file" in inject
+    assert warn is None
+
+
+def test_grounding_gate_passes_when_file_was_read():
+    """Cite a file you actually read this turn → no interception."""
+    h = _harness()
+    h.observe("read_file", {"path": "src/agent/loader.py"}, "<file contents>")
+    cont, inject, warn = h.check_termination(
+        "读了 loader.py:81，确认已接入。"
+    )
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_grounding_gate_basename_match():
+    """Citing 'loop.py' counts as read if we read 'src/coderio/agent/loop.py'."""
+    h = _harness()
+    h.observe("read_file", {"path": "src/coderio/agent/loop.py"}, "<contents>")
+    cont, inject, warn = h.check_termination("loop.py 的 _execute_turn 做了拦截。")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_grounding_gate_dir_read_covers_files():
+    """A list_dir on 'src/agent/' counts as having looked at files there."""
+    h = _harness()
+    h.observe("list_dir", {"path": "src/agent/"}, "loop.py\nharness.py")
+    # Citing a file under that dir — basename 'harness.py' isn't in read_files,
+    # but the read path 'src/agent/' is a substring of 'src/agent/harness.py'.
+    cont, inject, warn = h.check_termination("src/agent/harness.py 定义了四道门。")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_grounding_gate_escalates_to_warn_after_max():
+    """After 2 forced-continues, release with a warning (never silent, never loop)."""
+    h = _harness()
+    text = "loader.py:81 确认接入了。"  # never read
+    cont0, _, warn0 = h.check_termination(text)
+    cont1, _, warn1 = h.check_termination(text)
+    cont2, _, warn2 = h.check_termination(text)
+    assert (cont0, warn0) == (True, None)
+    assert (cont1, warn1) == (True, None)
+    assert cont2 is False
+    assert warn2 is not None and "loader.py" in warn2
+
+
+def test_grounding_gate_attempt1_names_files():
+    """Second interception names the unread files (tighter feedback)."""
+    h = _harness()
+    h.check_termination("config.py 的 loader 没读 harness 字段。")
+    cont, inject, _ = h.check_termination("config.py 的 loader 没读 harness 字段。")
+    assert cont is True and "config.py" in inject
+
+
+def test_grounding_gate_partial_read():
+    """Citing two files but only read one → block on the unread one."""
+    h = _harness()
+    h.observe("read_file", {"path": "a.py"}, "<contents>")
+    cont, inject, warn = h.check_termination(
+        "a.py 正确，但 b.py:10 有 bug。"
+    )
+    assert cont is True
+    assert inject is not None and "b.py" in inject
+    assert "a.py" not in inject  # don't nag about the one we read
+
+
+def test_grounding_gate_does_not_false_positive_on_prose():
+    """Ordinary words must not trip the citation regex.
+
+    'step 2', 'the loader', 'go to main', 'config.harness' (no .py) should NOT
+    be treated as file citations. Only dotted code extensions count."""
+    from coderio.agent.harness import _cited_files
+    assert _cited_files("请跳到 step 2，然后看 the loader 的逻辑") == []
+    assert _cited_files("config.harness 字段在 ModelsConfig 里") == []
+    # but a real file path IS caught (with its :line citation)
+    cited = _cited_files("看 loader.py:81")
+    assert len(cited) == 1 and cited[0].startswith("loader.py")
+
+
+def test_grounding_gate_catches_multiple_citations():
+    h = _harness()
+    cont, inject, warn = h.check_termination(
+        "loop.py 处理 turn，harness.py 定义 gate，prompts.py 路由意图。"
+    )
+    assert cont is True
+    assert inject is not None
+    for f in ("loop.py", "harness.py", "prompts.py"):
+        assert f in inject

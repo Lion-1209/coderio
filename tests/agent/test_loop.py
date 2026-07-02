@@ -408,3 +408,60 @@ def test_non_retryable_tool_error_is_classified(tmp_path):
     tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert "[non-retryable]" in tool_results[0].content
     assert "PermissionError" in tool_results[0].content
+
+
+def test_grounding_gate_intercepts_unread_citation_then_passes(tmp_path):
+    """Loop-level integration of GroundingGate.
+
+    Scenario: the model analyzes loader.py, citing 'loader.py:81', but never read
+    the file. The gate must force-continue (inject a demand to read it). On the
+    next round the model reads the file, then its answer passes cleanly.
+
+    This is the exact failure mode observed in coderio's self-analysis: it trusted
+    documentation over source and made wrong claims about config.harness wiring.
+    """
+    f = tmp_path / "loader.py"
+    f.write_text("HARNESS = True\n", encoding="utf-8")
+    model = _model_returning(
+        # round 1: cites loader.py:81 WITHOUT reading it
+        AIMessage(content="loader.py:81 已经接入了 config.harness，没问题。", tool_calls=[]),
+        # round 2: after the harness nudge, reads the file
+        _tool_call_msg("read_file", {"path": str(f)}),
+        # round 3: grounded answer
+        AIMessage(content="loader.py 确认接入了。", tool_calls=[]),
+    )
+    session = Session.create(tmp_path, {"meta": "test"})
+    stream = _RecStream()
+    final = run_agent(
+        user_input="分析 loader.py 接入没", model=model, tools=build_default_tools(),
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=stream, max_rounds=10,
+    )
+    # the harness injected a [harness] demand to read the cited file
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
+    assert len(harness_msgs) == 1, "expected grounding gate to force-continue once"
+    assert "loader.py" in harness_msgs[0]
+    assert "read_file" in harness_msgs[0]
+    # after reading, the final answer passes — no escalation warning
+    assert "loader.py" in final
+    assert stream.warnings == [], "should pass cleanly once the file is read"
+
+
+def test_grounding_gate_no_op_for_pure_conversation(tmp_path):
+    """An answer with no file citations must not be intercepted — the gate only
+    guards code-level claims, not ordinary conversation."""
+    model = _model_returning(
+        AIMessage(content="这个项目用 Python 写的，基于 langchain。", tool_calls=[]),
+    )
+    session = Session.create(tmp_path, {"meta": "test"})
+    stream = _RecStream()
+    final = run_agent(
+        user_input="这个项目用什么语言", model=model, tools=build_default_tools(),
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=stream, max_rounds=5,
+    )
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
+    assert harness_msgs == [], "no file cited → no grounding interception"
+    assert stream.warnings == []
