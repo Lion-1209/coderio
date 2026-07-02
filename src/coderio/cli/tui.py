@@ -59,7 +59,18 @@ class CoderioTUI(App):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="history")
         with Vertical(id="input-bar"):
-            yield Input(placeholder="输入消息, /help 看命令, Ctrl+O 展开思考", id="msg")
+            # Autocomplete: when the user types "/", SuggestFromList offers the
+            # matching slash commands (and their argument forms, e.g.
+            # "/mode confirm"). Tab/Right accepts the suggestion. The completion
+            # list comes from commands.slash_completions() — the single source of
+            # truth shared with handle_slash and /help, so they can never drift.
+            from textual.suggester import SuggestFromList
+            from coderio.cli.commands import slash_completions
+            yield Input(
+                placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
+                id="msg",
+                suggester=SuggestFromList(slash_completions(), case_sensitive=False),
+            )
 
     def on_mount(self) -> None:
         self.title = "coderio"

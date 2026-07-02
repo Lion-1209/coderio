@@ -37,18 +37,22 @@ def main(
     continue_last: bool = typer.Option(False, "--continue", help="Resume most recent session."),
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
-    use_tui: bool = typer.Option(False, "--tui", help="Use the Textual interactive TUI (Ctrl+O expand thinking, scrollable history)."),
+    no_tui: bool = typer.Option(False, "--no-tui", help="Use the plain Rich REPL instead of the Textual TUI (no autocomplete)."),
 ):
-    """coderio — start the REPL (default) or run a subcommand."""
+    """coderio — start the TUI (default) or run a subcommand.
+
+    By default launches the interactive Textual TUI (foldable thinking, scrollable
+    history, slash-command autocomplete). Pass --no-tui for the simpler Rich REPL.
+    """
     if ctx.invoked_subcommand is not None:
         return
     ensure_user_dirs()
-    if use_tui:
-        from coderio.cli.tui import run_tui
-        run_tui(provider_override=provider, model_override=model)
-    else:
+    if no_tui:
         from coderio.cli.repl import run_repl
         run_repl(resume=resume, continue_last=continue_last, provider_override=provider, model_override=model)
+    else:
+        from coderio.cli.tui import run_tui
+        run_tui(provider_override=provider, model_override=model)
 
 
 @skills_app.command("list")
