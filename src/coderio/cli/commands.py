@@ -1,8 +1,56 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from coderio.cli.render import mask_key
+
+
+@dataclass(frozen=True)
+class SlashCommand:
+    """A single slash command's metadata, for both help and autocomplete.
+
+    ``completions`` lists the full strings the autocomplete should offer when the
+    user has typed the command's prefix — including the bare command and any
+    subcommand/argument forms. e.g. /mode offers "/mode confirm", "/mode plan",
+    "/mode auto". Kept as the ONE source of truth so handle_slash, /help, and the
+    TUI suggester can never drift apart.
+    """
+    name: str          # the bare command, e.g. "/mode"
+    summary: str       # one-line description for /help
+    completions: list[str] = field(default_factory=list)  # full strings to suggest
+    aliases: tuple[str, ...] = ()  # alternate names (e.g. /quit for /exit)
+
+
+# The single source of truth for all slash commands. handle_slash() below resolves
+# against the same names listed here; /help renders from this; the TUI suggester
+# feeds its completions list from this. Add a command here and all three update.
+SLASH_COMMANDS: list[SlashCommand] = [
+    SlashCommand("/help", "show this help", ["/help"]),
+    SlashCommand("/exit", "exit the REPL", ["/exit"], aliases=("/quit",)),
+    SlashCommand("/skills", "list skills (★ = active)",
+                 ["/skills", "/skills install"]),
+    SlashCommand("/clear", "reset context (new session + clear active skills)",
+                 ["/clear"]),
+    SlashCommand("/config", "show current configuration", ["/config"]),
+    SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
+    SlashCommand("/mode", "change permission mode",
+                 ["/mode confirm", "/mode plan", "/mode auto"]),
+    SlashCommand("/model", "switch model at runtime", ["/model "]),
+    SlashCommand("/cost", "show token usage for this session", ["/cost"]),
+    SlashCommand("/think", "expand the last round's collapsed thinking", ["/think"]),
+]
+
+
+def slash_completions() -> list[str]:
+    """Flatten all completion candidates (commands + aliases + subcommands).
+
+    Used by the TUI SuggestFromList. Aliases are included so /quit completes too.
+    """
+    out: list[str] = []
+    for c in SLASH_COMMANDS:
+        out.extend(c.completions)
+        out.extend(c.aliases)
+    return out
 
 
 @dataclass
@@ -29,22 +77,24 @@ class CommandResult:
     message: str | None = None
 
 
-_HELP = """coderio slash commands:
-  /help                 show this help
-  /exit | /quit         exit the REPL
-  /skills               list skills (★ = active)
-  /clear                reset context (new session + clear active skills)
-  /config               show current configuration
-  /sessions             list recent sessions
-  /mode <confirm|plan|auto>   change permission mode
-  /model <name>         switch model at runtime
-  /cost                 show token usage for this session
-  /think                expand the last round's collapsed thinking
-  /skills install       install/update Lion-Skills"""
+def _help_text() -> str:
+    """Build /help from SLASH_COMMANDS so the listing never drifts from the
+    actual command handlers. Aliases are joined with the primary name."""
+    names: dict[str, SlashCommand] = {}
+    for c in SLASH_COMMANDS:
+        key = c.name
+        if c.aliases:
+            key = f"{c.name} | {' | '.join(c.aliases)}"
+        names[key] = c
+    width = max(len(k) for k in names)
+    lines = ["coderio slash commands:"]
+    for key, c in names.items():
+        lines.append(f"  {key:<{width}}  {c.summary}")
+    return "\n".join(lines)
 
 
 def _cmd_help(ctx) -> CommandResult:
-    return CommandResult(message=_HELP)
+    return CommandResult(message=_help_text())
 
 
 def _cmd_skills(ctx) -> CommandResult:

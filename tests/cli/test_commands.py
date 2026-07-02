@@ -11,6 +11,8 @@ class _FakeCtx:
         self.api_key = "sk-abcdef1234"
         self.base_url = "https://open.bigmodel.cn/api/anthropic"
         self.recent_sessions = ["20260625-120000-ab12"]
+        self.usage = None
+        self.stream = None
 
 
 def test_help_lists_commands():
@@ -97,3 +99,53 @@ def test_cost_reports_none_when_no_usage():
     res = handle_slash("/cost", ctx)
     msg = res.message or ""
     assert "暂无" in msg or "unavailable" in msg.lower()
+
+
+# ----------------------------------------------- autocomplete / single-source
+def test_completions_cover_every_registered_command():
+    """Every command in SLASH_COMMANDS must appear in the autocomplete list.
+    This is the guard against drift: add a command but forget to list it for
+    completion, and this test fails."""
+    from coderio.cli.commands import SLASH_COMMANDS, slash_completions
+    completions = slash_completions()
+    for cmd in SLASH_COMMANDS:
+        # at least one completion candidate starts with the bare command name
+        assert any(c.startswith(cmd.name) for c in completions), \
+            f"{cmd.name} missing from completions"
+
+
+def test_completions_include_aliases():
+    """/quit must be completable even though it's an alias of /exit."""
+    from coderio.cli.commands import slash_completions
+    completions = slash_completions()
+    assert "/quit" in completions
+
+
+def test_every_completion_resolves_to_real_command():
+    """No phantom completions: every string the suggester offers must resolve to
+    a real command (not 'Unknown command'). Strips any argument after the command
+    name first, since handle_slash parses command + arg separately."""
+    from coderio.cli.commands import slash_completions
+    ctx = _FakeCtx()
+    ctx.usage = {"input_tokens": 0, "output_tokens": 0}
+    for comp in slash_completions():
+        # "/mode confirm" -> command "/mode", arg "confirm"
+        parts = comp.split(maxsplit=1)
+        cmd = parts[0]
+        res = handle_slash(cmd, ctx)
+        msg = (res.message or "").lower()
+        assert "unknown command" not in msg, f"{cmd} offered but unrecognized"
+
+
+def test_help_lists_all_commands():
+    """/help must list every registered command (no command silently absent)."""
+    from coderio.cli.commands import SLASH_COMMANDS
+    msg = (handle_slash("/help", _FakeCtx()).message or "")
+    for cmd in SLASH_COMMANDS:
+        assert cmd.name in msg, f"{cmd.name} missing from /help output"
+
+
+def test_help_includes_subcommands_like_skills_install():
+    """/skills install is a real subcommand; /help should surface it."""
+    msg = (handle_slash("/help", _FakeCtx()).message or "")
+    assert "skills" in msg.lower()
