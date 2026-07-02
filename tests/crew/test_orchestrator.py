@@ -124,6 +124,31 @@ def test_verification_passed_heuristic():
     assert not orch._verification_passed("未通过：功能缺失")
 
 
+def test_verification_structured_marker_wins_over_keywords():
+    """The [CREW_VERIFY] marker must override the keyword fallback.
+
+    Regression: 'failed to reproduce any bug' used to trip the 'fail' keyword and
+    wrongly trigger a fix loop. With the structured marker, the verdict is read
+    explicitly and the misleading 'failed' in the prose is ignored.
+    """
+    orch = CrewOrchestrator(
+        model=MagicMock(), store=_store_with_skills(), gate=AutoPermissionGate(),
+        stream=NullStream(), auto_mode=True,
+    )
+    # PASS verdict despite 'failed' appearing in the prose (the classic false positive).
+    assert orch._verification_passed(
+        "Ran the full suite; failed to reproduce any bug.\n[CREW_VERIFY] PASS"
+    )
+    # FAIL verdict explicitly.
+    assert not orch._verification_passed(
+        "2 tests still red.\n[CREW_VERIFY] FAIL"
+    )
+    # Marker present but verdict unreadable → ambiguous → pass (no spurious loop).
+    assert orch._verification_passed("[CREW_VERIFY] ???")
+    # No marker at all → fallback keyword scan still works (backward compat).
+    assert not orch._verification_passed("测试未通过")
+
+
 def test_verify_fail_triggers_fix_loop():
     """When verify reports FAIL, implementer re-runs with fix_feedback, then verify again."""
     responses = [

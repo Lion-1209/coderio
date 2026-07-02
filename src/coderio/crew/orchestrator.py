@@ -187,12 +187,39 @@ class CrewOrchestrator:
         return "commit"  # budget exhausted — proceed even if still failing
 
     # ------------------------------------------------------------ helpers (preserved)
+    # Structured verify signal. The verifier is instructed (in _build_prompt) to
+    # end its report with a machine-readable verdict line. We parse that FIRST —
+    # it is unambiguous and avoids the keyword-scan false positives (e.g. a
+    # sentence like "failed to reproduce any bug" wrongly tripping the word
+    # "fail"). When the model does not emit the marker, we fall back to the
+    # conservative keyword heuristic so a non-compliant verifier still works.
+    _VERIFY_MARKER = "[CREW_VERIFY]"
+    _PASS_TOKENS = ("pass", "passed", "通过", "ok", "success")
+    _FAIL_TOKENS = ("fail", "failed", "未通过", "不通过", "❌", "不满足")
+
     def _verification_passed(self, verification: str) -> bool:
-        """Heuristic: only loop when there's a CLEAR failure signal. Explicit PASS
-        or ambiguous output both count as passed (avoid spurious fix loops)."""
+        """Decide pass/fail. Structured marker wins; keyword scan is the fallback.
+
+        Both paths default to PASSED on ambiguity (no clear signal) to avoid
+        spurious fix loops that waste rounds re-running the implementer.
+        """
+        if not verification:
+            return True
         v = verification.lower()
-        fail_signals = ["fail", "未通过", "不通过", "failed", "❌", "不满足"]
-        has_fail = any(s in v for s in fail_signals)
+
+        # 1) Structured marker: "[CREW_VERIFY] PASS" or "... FAIL" anywhere in text.
+        if self._VERIFY_MARKER.lower() in v:
+            tail = v.split(self._VERIFY_MARKER.lower(), 1)[1]
+            verdict = tail.strip().split()[0] if tail.strip() else ""
+            if any(verdict.startswith(t) for t in self._FAIL_TOKENS):
+                return False
+            if any(verdict.startswith(t) for t in self._PASS_TOKENS):
+                return True
+            # Marker present but verdict unreadable — treat as ambiguous → pass.
+
+        # 2) Fallback: conservative keyword scan. Only FAIL on a CLEAR fail token;
+        # ambiguous/positive output both count as passed.
+        has_fail = any(s in v for s in self._FAIL_TOKENS)
         return not has_fail
 
     def _build_prompt(self, role: AgentRole, state) -> str:
@@ -230,6 +257,15 @@ class CrewOrchestrator:
         parts.append(f"## 你的产出\n把你的最终回复作为产出（编排器会存入 {role.writes} 字段）。")
         if role.stage == "clarify":
             parts.append("提出澄清问题；不要假设答案。")
+        if role.stage == "verify":
+            # The orchestrator parses this marker to decide pass/fail (structured
+            # verdict beats the keyword fallback). Omitting it works but is less
+            # reliable — ambiguous prose risks a spurious fix loop.
+            parts.append(
+                "报告验证结果，并在最后一行输出结构化判定（独占一行）：\n"
+                f"  {self._VERIFY_MARKER} PASS   # 全部满足 spec\n"
+                f"  {self._VERIFY_MARKER} FAIL   # 有未解决的问题（在上方说明）"
+            )
         return "\n".join(parts)
 
     def _run_role(self, role: AgentRole, system_prompt: str) -> str:
