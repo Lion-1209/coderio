@@ -115,7 +115,10 @@ def handle_slash(line: str, ctx) -> CommandResult:
     if cmd == "/clear":
         return _cmd_clear(ctx)
     if cmd == "/model":
-        return CommandResult(reset_runtime=True, message=f"/model {arg!r}: rebuild requested (set model via config for now).")
+        name = arg.strip()
+        if not name:
+            return CommandResult(message=f"当前模型: {ctx.model_name}")
+        return CommandResult(reset_runtime=True, message=f"已切换模型 → {name}（下一轮生效）。")
     if cmd == "/cost":
         u = ctx.usage or {}
         inp = u.get("input_tokens", 0)

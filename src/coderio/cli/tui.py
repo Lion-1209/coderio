@@ -290,6 +290,9 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
         "\n[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
     )
 
+    # Mutable runtime holder — /model and /mode rebuild parts of this in place.
+    rt = {"cfg": cfg, "model": model, "gate": gate}
+
     def on_input(line: str) -> None:
         if line.startswith("/"):
             from coderio.cli.commands import handle_slash, ReplContext
@@ -298,12 +301,12 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
             ctx = ReplContext(
                 available_skills=store.names(),
                 active_skills_names={s.name for s in active.all()},
-                permission_mode=gate.mode,
-                model_name=cfg.model.default,
-                provider_id=cfg.model.provider_id,
+                permission_mode=rt["gate"].mode,
+                model_name=rt["cfg"].model.default,
+                provider_id=rt["cfg"].model.provider_id,
                 api_key="",
-                base_url=cfg.model.base_url,
-                recent_sessions=Session.list_recent(_P(cfg.session.save_dir).expanduser()),
+                base_url=rt["cfg"].model.base_url,
+                recent_sessions=Session.list_recent(_P(rt["cfg"].session.save_dir).expanduser()),
                 usage=tui.usage,
                 stream=tui,
             )
@@ -312,6 +315,23 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
                 tui._add_text(res.message)
             if not res.continue_loop:
                 tui.exit()
+                return
+            if res.reset_runtime:
+                from dataclasses import replace as _replace
+                from coderio.cli.repl import build_gate
+                from coderio.llm import build_chat_model
+                c = rt["cfg"]
+                if res.new_permission_mode:
+                    c = _replace(c, tools=_replace(c.tools, permission_mode=res.new_permission_mode))
+                    rt["cfg"] = c
+                    rt["gate"] = build_gate(c, console=None)
+                cmd_name = line.strip().split(maxsplit=1)[0]
+                if cmd_name == "/model":
+                    parts = line.strip().split(maxsplit=1)
+                    if len(parts) > 1 and parts[1].strip():
+                        c = _replace(c, model=_replace(c.model, default=parts[1].strip()))
+                        rt["cfg"] = c
+                        rt["model"] = build_chat_model(c, creds_path=creds_path)
             return
         from coderio.agent.loop import run_agent
         from coderio.cli.multimodal import build_user_content, extract_images
@@ -320,11 +340,11 @@ def run_tui(provider_override: str | None = None, model_override: str | None = N
             tui._add_text(f"📎 已附加 {len(imgs)} 张图片: " + ", ".join(p for p, _, _ in imgs), style="dim")
         user_content = build_user_content(line)
         run_agent(
-            user_input=user_content, model=model, tools=tools, gate=gate,
+            user_input=user_content, model=rt["model"], tools=tools, gate=rt["gate"],
             skill_store=store, active_skills=active, session=session, stream=tui,
-            max_rounds=cfg.tools.max_tool_rounds,
-            stage_auto_inject=cfg.skills.stage_auto_inject,
-            harness_enabled=cfg.skills.harness,
+            max_rounds=rt["cfg"].tools.max_tool_rounds,
+            stage_auto_inject=rt["cfg"].skills.stage_auto_inject,
+            harness_enabled=rt["cfg"].skills.harness,
         )
 
     tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
