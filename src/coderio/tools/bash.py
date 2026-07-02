@@ -81,7 +81,12 @@ class BashTool:
                 errors="replace",
                 timeout=timeout,
             )
-            return (proc.stdout or "") + (proc.stderr or "")
+            out = (proc.stdout or "") + (proc.stderr or "")
+            # Append exit code so the model can tell success (0) from failure
+            # without guessing from the output text. Critical for the harness
+            # VerifyGate: a non-zero exit means the verification attempt failed,
+            # which the model should read and fix — not just "ran = verified".
+            return f"{out}\n[exit_code: {proc.returncode}]"
         except subprocess.TimeoutExpired:
             return f"Error: command timed out after {timeout}s"
         except FileNotFoundError as e:
