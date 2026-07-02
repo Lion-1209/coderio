@@ -17,6 +17,7 @@ dependencies = [
     "deepagents>=0.6",
     "pydantic>=2",
     "rich>=13",
+    "textual>=0.40",
     "tomli-w>=1.0",
     "typer>=0.12",
 ]
