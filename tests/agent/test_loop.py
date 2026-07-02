@@ -339,7 +339,10 @@ def test_bad_tool_args_become_result_not_crash(tmp_path):
     assert "recovered" in final
     tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert tool_results, "expected a bash tool result even though the call was bad"
-    assert "rejected" in tool_results[0].content or "Error" in tool_results[0].content
+    # TypeError from a bad signature is classified retryable so the model knows
+    # it can fix the call and retry (rather than abandon the tool).
+    assert "[retryable]" in tool_results[0].content
+    assert "rejected" in tool_results[0].content
 
 
 def test_tool_raising_arbitrary_exception_becomes_result(tmp_path):
@@ -371,3 +374,37 @@ def test_tool_raising_arbitrary_exception_becomes_result(tmp_path):
     assert "moved on" in final
     tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert "kaboom" in tool_results[0].content
+    # Unknown exceptions are conservatively retryable and carry the type name.
+    assert "[retryable]" in tool_results[0].content
+    assert "RuntimeError" in tool_results[0].content
+
+
+def test_non_retryable_tool_error_is_classified(tmp_path):
+    """Environmental errors (PermissionError/FileNotFoundError) must be tagged
+    non-retryable so the model stops hammering a tool that will never succeed and
+    switches approach instead of looping on the same call."""
+    session = Session.create(tmp_path, {"meta": "test"})
+
+    class _Protected:
+        name = "bash"
+        description = "stub"
+
+        def run(self, **kwargs):
+            raise PermissionError("cannot access /etc/shadow")
+
+    tools = [t for t in build_default_tools() if t.name != "bash"]
+    tools.append(_Protected())
+    model = _model_returning(
+        _tool_call_msg("bash", {"command": "cat /etc/shadow"}),
+        AIMessage(content="gave up, switching approach", tool_calls=[]),
+    )
+    final = run_agent(
+        user_input="go", model=model, tools=tools,
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=NullStream(), max_rounds=5,
+    )
+    assert "switching approach" in final
+    tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
+    assert "[non-retryable]" in tool_results[0].content
+    assert "PermissionError" in tool_results[0].content

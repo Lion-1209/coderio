@@ -92,16 +92,30 @@ def _invoke_tool(tool, name: str, args: dict) -> str:
     (e.g. drop the bad `path` kwarg and retry). Only base-model API errors
     (auth/network/rate-limit, which surface from run_step, not here) are truly
     fatal. So we catch everything from tool.run and return it as a normal result.
+
+    Error CLASSIFICATION gives the model an actionable signal rather than a flat
+    "failed": it distinguishes retryable (fix the call and try again) from
+    non-retryable (this tool won't work for this task — switch approach). This lets
+    the model stop hammering a tool that will never succeed (e.g. PermissionError
+    on a protected path is not going away by rephrasing args).
     """
     try:
         return tool.run(**args)
     except TypeError as e:
         # Most common case: the model passed an arg the tool doesn't accept
-        # (e.g. bash(path=...) when bash takes cwd). Name the tool + the bad call.
-        return (f"Error: tool {name!r} rejected the arguments ({e}). "
+        # (e.g. bash(path=...) when bash takes cwd). Retryable — fix the call.
+        return (f"[retryable] tool {name!r} rejected the arguments ({e}). "
                 f"Check the tool's accepted parameters and retry with valid args.")
+    except (PermissionError, FileNotFoundError, IsADirectoryError, NotADirectoryError) as e:
+        # Non-retryable: the environment refuses this operation. Re-trying with
+        # tweaked args won't help — the model should pick another path or method.
+        return (f"[non-retryable] tool {name!r} cannot proceed: "
+                f"{type(e).__name__}: {e}. This is an environmental constraint — "
+                f"do not repeat the same call; choose a different path or approach.")
     except Exception as e:  # noqa: BLE001 — tool failures must not kill the turn
-        return f"Error: tool {name!r} failed: {type(e).__name__}: {e}"
+        # Unknown failure — conservatively retryable. Surface the type so the
+        # model can reason about it (a ValueError vs OSError mean different things).
+        return f"[retryable] tool {name!r} failed: {type(e).__name__}: {e}"
 
 
 class _BoundModelCache:
