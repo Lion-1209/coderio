@@ -88,12 +88,35 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- binding: Ctrl+O
     def action_toggle_thinking(self) -> None:
-        """Ctrl+O — toggle (expand/collapse) the most recent thinking block."""
-        if self._last_collapsible is None:
+        """Ctrl+O — toggle the thinking block at the current focus.
+
+        Walks up from the focused widget to find the enclosing Collapsible. If
+        the focus is on (or inside) a thinking block, toggles THAT one — so the
+        user can choose which round to expand by clicking into it first. If no
+        thinking block is focused (e.g. focus is on the input bar), falls back
+        to the most recent one.
+        """
+        target = self._focused_collapsible()
+        if target is None:
+            # Fallback: focus not on a thinking block → toggle the most recent.
+            target = self._last_collapsible
+        if target is None:
             self._add_text("最近一轮没有思考内容。", style="dim")
             return
-        # Collapsible uses the `collapsed` property (bool), not a toggle() method.
-        self._last_collapsible.collapsed = not self._last_collapsible.collapsed
+        target.collapsed = not target.collapsed
+
+    def _focused_collapsible(self):
+        """Find the Collapsible enclosing the currently-focused widget, if any."""
+        focused = self.focused
+        if focused is None:
+            return None
+        # Walk up the widget tree looking for a Collapsible ancestor.
+        node = focused
+        while node is not None:
+            if isinstance(node, Collapsible):
+                return node
+            node = node.parent
+        return None
 
     # ----------------------------------------------------- StreamHandler protocol
     def on_step_start(self) -> None:
