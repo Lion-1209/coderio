@@ -38,11 +38,13 @@ def main(
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
     no_tui: bool = typer.Option(False, "--no-tui", help="Use the plain Rich REPL instead of the Textual TUI (no autocomplete)."),
+    use_tui: bool = typer.Option(False, "--tui", help="(Deprecated) TUI is now the default; this flag is a no-op kept for backward compat."),
 ):
     """coderio — start the TUI (default) or run a subcommand.
 
     By default launches the interactive Textual TUI (foldable thinking, scrollable
     history, slash-command autocomplete). Pass --no-tui for the simpler Rich REPL.
+    The --tui flag is accepted but ignored (TUI is already the default).
     """
     if ctx.invoked_subcommand is not None:
         return
