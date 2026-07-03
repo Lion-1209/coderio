@@ -23,6 +23,120 @@ from textual.screen import ModalScreen
 from textual.widgets import Collapsible, Input, ListItem, ListView, Static
 
 
+class CommandMenu(Vertical):
+    """Popup slash-command menu (Claude-Code-style autocomplete).
+
+    Shown when the input starts with "/". Lists matching commands, filtered live
+    as the user types. ↑↓ navigates, Tab/Enter fills the chosen command into the
+    input, Esc or clearing "/" hides it. Unlike SuggestFromList (which shows a
+    single inline grey suggestion), this is a visible, browsable menu — the user
+    can see all candidates and pick one with the keyboard.
+    """
+
+    DEFAULT_CSS = """
+    CommandMenu {
+        display: none;          /* hidden until input starts with "/" */
+        dock: bottom;
+        height: auto; max-height: 12;
+        layer: above;
+        background: $surface;
+        border: round $accent;
+        padding: 0;
+        margin: 0 1;
+    }
+    CommandMenu.-visible { display: block; }
+    CommandMenu ListView { background: $surface; }
+    CommandMenu ListItem { padding: 0 1; }
+    CommandMenu ListItem > Widget :hover { background: $boost; }
+    """
+
+    def __init__(self, completions: list[str]) -> None:
+        super().__init__()
+        self._all = completions
+        self._input: Input | None = None  # the Input this menu feeds
+        # Value last accepted by Tab/Enter. refresh_for skips reopening while the
+        # input still equals this — otherwise setting .value in accept() retriggers
+        # on_input_changed and the menu pops right back open.
+        self._accepted_value: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield ListView(id="cmd-list")
+
+    def bind_input(self, inp: Input) -> None:
+        self._input = inp
+
+    def _matches(self, prefix: str) -> list[str]:
+        if not prefix:
+            return []
+        p = prefix.lower()
+        # rank: exact prefix match first, then substring contains.
+        exact = [c for c in self._all if c.lower().startswith(p)]
+        sub = [c for c in self._all if p in c.lower() and c not in exact]
+        return exact + sub
+
+    def refresh_for(self, value: str) -> None:
+        """Re-filter and show/hide based on the current input value."""
+        # If the user just accepted a command (Tab/Enter), the value now equals
+        # the chosen command. Don't reopen the menu for that exact value — it
+        # was set programmatically by accept(), not typed. Once the user edits
+        # further (value differs), normal filtering resumes.
+        if value == self._accepted_value:
+            return
+        self._accepted_value = None  # value changed -> clear the guard
+        if not value.startswith("/"):
+            self.remove_class("-visible")
+            return
+        matches = self._matches(value)
+        if not matches:
+            self.remove_class("-visible")
+            return
+        lv = self.query_one("#cmd-list", ListView)
+        lv.clear()
+        for c in matches:
+            lv.append(ListItem(Static(c), name=c))
+        self.add_class("-visible")
+        # auto-select the first (top) match so Enter is immediately meaningful
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+
+    def visible(self) -> bool:
+        return self.has_class("-visible")
+
+    def move(self, delta: int) -> None:
+        """Move the selection by delta (+1 down, -1 up); wraps around."""
+        if not self.visible():
+            return
+        lv = self.query_one("#cmd-list", ListView)
+        if not lv.children:
+            return
+        n = len(lv.children)
+        idx = lv.index or 0
+        lv.index = (idx + delta) % n
+
+    def accept(self) -> bool:
+        """Fill the selected command into the bound Input. Returns True if accepted."""
+        if not self.visible() or self._input is None:
+            return False
+        lv = self.query_one("#cmd-list", ListView)
+        if not lv.children or lv.index is None:
+            return False
+        chosen = lv.children[lv.index].name or ""
+        if not chosen:
+            return False
+        # Record the accepted value so the resulting on_input_changed doesn't
+        # reopen the menu (setting .value fires changed, value still starts "/").
+        self._accepted_value = chosen
+        self._input.value = chosen
+        self.remove_class("-visible")
+        self._input.focus()
+        return True
+
+    def hide(self) -> None:
+        self.remove_class("-visible")
+
+
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -112,6 +226,9 @@ class CoderioTUI(App):
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
+    /* Command menu sits above the input bar; input bar must allow overlay */
+    Screen { layers: base above; }
+    #input-bar { layer: base; }
     """
 
     BINDINGS = [
@@ -136,19 +253,15 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
+        from coderio.cli.commands import slash_completions
         yield VerticalScroll(id="history")
+        # The command menu (popup, hidden by default; shown when input starts "/").
+        # Layered above the input bar so it overlays the history pane.
+        yield CommandMenu(slash_completions())
         with Vertical(id="input-bar"):
-            # Autocomplete: when the user types "/", SuggestFromList offers the
-            # matching slash commands (and their argument forms, e.g.
-            # "/mode confirm"). Tab/Right accepts the suggestion. The completion
-            # list comes from commands.slash_completions() — the single source of
-            # truth shared with handle_slash and /help, so they can never drift.
-            from textual.suggester import SuggestFromList
-            from coderio.cli.commands import slash_completions
             yield Input(
                 placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
                 id="msg",
-                suggester=SuggestFromList(slash_completions(), case_sensitive=False),
             )
 
     def on_mount(self) -> None:
@@ -156,7 +269,35 @@ class CoderioTUI(App):
         self.sub_title = "skill-driven coding agent"
         if self._banner:
             self._add_static(Panel(self._banner, title="[bold magenta]coderio[/bold magenta]", border_style="magenta"))
-        self.query_one("#msg", Input).focus()
+        inp = self.query_one("#msg", Input)
+        # Wire the popup command menu to the input.
+        self.query_one(CommandMenu).bind_input(inp)
+        inp.focus()
+
+    # ----------------------------------------------------- command menu (autocomplete)
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Live-filter the command menu as the user types in the main input."""
+        if event.input.id != "msg":
+            return
+        self.query_one(CommandMenu).refresh_for(event.value)
+
+    def on_key(self, event) -> None:
+        """Handle command-menu navigation (↑↓/Tab/Enter/Esc) when it's visible."""
+        menu = self.query_one(CommandMenu)
+        if not menu.visible():
+            return
+        if event.key == "up":
+            menu.move(-1)
+            event.prevent_default()
+        elif event.key == "down":
+            menu.move(1)
+            event.prevent_default()
+        elif event.key in ("tab", "enter"):
+            if menu.accept():
+                event.prevent_default()
+        elif event.key == "escape":
+            menu.hide()
+            event.prevent_default()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         line = event.value.strip()
