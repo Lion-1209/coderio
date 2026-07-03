@@ -221,6 +221,10 @@ class CoderioTUI(App):
     CSS = """
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
+    #status-bar {
+        height: 1; dock: bottom; padding: 0 1;
+        background: $boost; color: $text-muted;
+    }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     /* Collapsible thinking blocks */
@@ -250,6 +254,14 @@ class CoderioTUI(App):
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._last_collapsible = None  # the most recent thinking Collapsible widget
+        # Live status-bar state machine (phase + elapsed timer). The StreamHandler
+        # callbacks (running on the agent's background thread) only WRITE these
+        # plain attributes — they never touch widgets. The main-thread _tick()
+        # (driven by set_interval) READS them and re-renders the status bar. This
+        # keeps the UI updating every 100ms without any thread-safety hazard.
+        self._phase: str = "idle"        # idle | thinking | tool | responding
+        self._phase_start: float = 0.0   # monotonic timestamp the phase began
+        self._tool_name: str = ""        # which tool is running (for the tool phase)
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -258,6 +270,9 @@ class CoderioTUI(App):
         # The command menu (popup, hidden by default; shown when input starts "/").
         # Layered above the input bar so it overlays the history pane.
         yield CommandMenu(slash_completions())
+        # Live status bar: shows the current phase (thinking/tool/responding) with
+        # a real-time elapsed timer. Docked just above the input bar.
+        yield Static("(就绪)", id="status-bar")
         with Vertical(id="input-bar"):
             yield Input(
                 placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
@@ -273,6 +288,55 @@ class CoderioTUI(App):
         # Wire the popup command menu to the input.
         self.query_one(CommandMenu).bind_input(inp)
         inp.focus()
+        # Heartbeat: refresh the status bar 10x/sec so the elapsed timer ticks in
+        # real time (covers network-wait, thinking, and tool-execution gaps — the
+        # three states where the screen previously looked frozen).
+        self.set_interval(0.1, self._tick)
+
+    # ----------------------------------------------------- status bar (live indicator)
+    def _tick(self) -> None:
+        """Main-thread heartbeat: re-render the status bar from current phase.
+
+        Runs on Textual's event loop (set_interval), so it's always thread-safe.
+        The StreamHandler callbacks on the agent thread only write plain attributes
+        (_phase/_phase_start/_tool_name); this reads them and updates the widget.
+        """
+        labels = {
+            "idle": "(就绪)",
+            "thinking": "思考中",
+            "responding": "输出中",
+            "tool": f"执行 {self._tool_name}" if self._tool_name else "执行工具",
+        }
+        if self._phase == "idle":
+            text = labels["idle"]
+        else:
+            elapsed = time.monotonic() - self._phase_start if self._phase_start else 0.0
+            text = f"⠋ {labels.get(self._phase, self._phase)} · {elapsed:.1f}s"
+        # Guard: when a ModalScreen (e.g. the resume picker) is pushed, the main
+        # screen's #status-bar isn't on app.screen — query_one would raise. Use a
+        # try-matches so the heartbeat never crashes the app mid-interaction.
+        try:
+            bar = self.query_one("#status-bar", Static)
+            bar.update(text)
+        except Exception:
+            pass
+
+    def _set_phase(self, phase: str, tool_name: str = "") -> None:
+        """Transition the status-bar state machine (called from agent thread).
+
+        Only mutates plain attributes — the widget itself is touched by _tick() on
+        the main thread. Also do an immediate refresh so the label flips without
+        waiting up to 100ms for the next tick.
+        """
+        self._phase = phase
+        self._phase_start = time.monotonic() if phase != "idle" else 0.0
+        self._tool_name = tool_name
+        # Immediate refresh so a phase change shows instantly, not on next tick.
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            self._tick()
+        else:
+            self.call_from_thread(self._tick)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -352,9 +416,15 @@ class CoderioTUI(App):
     # ----------------------------------------------------- StreamHandler protocol
     def on_step_start(self) -> None:
         self._flush_round_thinking()
+        # A new model call begins: show "thinking" immediately so the network-wait
+        # for the first token is visibly accounted for (was the silent-freeze bug).
+        self._set_phase("thinking")
 
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()
+        # First visible token: the thinking/generation phase is over, now streaming.
+        if self._phase != "responding":
+            self._set_phase("responding")
         self.buffer += text
 
     def on_thinking(self, text: str) -> None:
@@ -365,12 +435,19 @@ class CoderioTUI(App):
     def on_tool_start(self, name: str, args: dict[str, Any]) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
+        # Tool execution has its own phase so the timer reflects the tool, not a
+        # frozen "thinking" label (was the tool-execution freeze bug).
+        self._set_phase("tool", tool_name=name)
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"
         self._add_text(f"⏺ {name}({args_str})", style="green")
 
     def on_tool_end(self, name: str, result: str) -> None:
+        # Tool finished; the next model call (on_step_start) will re-enter thinking.
+        # Until then show responding-ish idle is wrong; go back to a brief thinking
+        # phase since the loop immediately calls the model again.
+        self._set_phase("thinking")
         if not self.show_tool_output:
             first = result.splitlines()[0][:60] if result.splitlines() else ""
             self._add_text(f"  → {first}{'…' if len(result) > 60 else ''}", style="dim")
@@ -398,6 +475,7 @@ class CoderioTUI(App):
     def on_finish(self) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
+        self._set_phase("idle")
 
     def add_usage(self, meta: dict[str, int]) -> None:
         for k in ("input_tokens", "output_tokens"):
