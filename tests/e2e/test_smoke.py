@@ -1,5 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock
+import subprocess
+import sys
 
 from langchain_core.messages import AIMessage
 
@@ -82,3 +84,43 @@ def test_e2e_confirm_gate_for_bash():
     assert g.asked == [("bash", {"command": "ls"})]
     # read_file is not destructive -> always allowed without asking
     assert g.check("read_file", {"path": "x"}) is True
+
+
+# ----------------------------------------------- CLI entry-point smoke tests
+# These spawn the REAL interpreter running coderio.cli.app as a subprocess — they
+# catch regressions that unit tests (which mock the model) structurally cannot:
+# a bad flag, a broken import, a typo in the typer wiring all surface here. This
+# is the layer that was missing when --tui was removed but kept erroring for the
+# user: no test actually invoked the entry point.
+
+def test_cli_help_exits_zero():
+    """`coderio --help` must succeed. Guards the whole import + typer wiring."""
+    r = subprocess.run(
+        [sys.executable, "-m", "coderio.cli.app", "--help"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0, f"--help failed:\n{r.stderr}"
+    assert "coderio" in r.stdout.lower()
+
+
+def test_cli_has_no_tui_flag():
+    """The TUI is the sole entry point; --tui/--no-tui must not exist as options.
+
+    Regression guard: removing the TUI-vs-REPL split once broke the user's launch
+    flow because the removed --tui flag still error'd at the entry point.
+    """
+    r = subprocess.run(
+        [sys.executable, "-m", "coderio.cli.app", "--help"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert "--tui" not in r.stdout
+    assert "--no-tui" not in r.stdout
+
+
+def test_cli_unknown_flag_errors():
+    """Sanity: an unknown flag must exit non-zero (typer rejects it)."""
+    r = subprocess.run(
+        [sys.executable, "-m", "coderio.cli.app", "--definitely-not-real"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode != 0
