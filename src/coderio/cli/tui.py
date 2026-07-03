@@ -428,6 +428,9 @@ def run_tui(
             )
             res = handle_slash(line, ctx)
             # /resume with no arg → open the interactive picker instead of printing.
+            # push_screen MUST run on the main thread (it touches the Textual
+            # event loop); on_input runs in the agent's background thread, so
+            # dispatch via call_from_thread — same pattern as _add_text.
             if res.message == "__OPEN_PICKER__":
                 summaries = Session.summaries(_P(rt["cfg"].session.save_dir).expanduser())
                 def _on_picked(sid):
@@ -435,12 +438,12 @@ def run_tui(
                     if sid is None:
                         return
                     _load_session(sid)
-                tui.push_screen(SessionPickerScreen(summaries), _on_picked)
+                tui.call_from_thread(tui.push_screen, SessionPickerScreen(summaries), _on_picked)
                 return
             if res.message:
                 tui._add_text(res.message)
             if not res.continue_loop:
-                tui.exit()
+                tui.call_from_thread(tui.exit)
                 return
             # /resume <explicit-id> path: load straight from the result.
             if res.new_session_id:
