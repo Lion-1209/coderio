@@ -37,24 +37,20 @@ def main(
     continue_last: bool = typer.Option(False, "--continue", help="Resume most recent session."),
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
-    no_tui: bool = typer.Option(False, "--no-tui", help="Use the plain Rich REPL instead of the Textual TUI (no autocomplete)."),
-    use_tui: bool = typer.Option(False, "--tui", help="(Deprecated) TUI is now the default; this flag is a no-op kept for backward compat."),
 ):
-    """coderio — start the TUI (default) or run a subcommand.
+    """coderio — start the interactive TUI or run a subcommand.
 
-    By default launches the interactive Textual TUI (foldable thinking, scrollable
-    history, slash-command autocomplete). Pass --no-tui for the simpler Rich REPL.
-    The --tui flag is accepted but ignored (TUI is already the default).
+    Launches the Textual TUI: foldable thinking (Ctrl+O), scrollable history,
+    slash-command autocomplete. This is the only interactive entry point.
     """
     if ctx.invoked_subcommand is not None:
         return
     ensure_user_dirs()
-    if no_tui:
-        from coderio.cli.repl import run_repl
-        run_repl(resume=resume, continue_last=continue_last, provider_override=provider, model_override=model)
-    else:
-        from coderio.cli.tui import run_tui
-        run_tui(provider_override=provider, model_override=model)
+    from coderio.cli.tui import run_tui
+    run_tui(
+        provider_override=provider, model_override=model,
+        resume=resume, continue_last=continue_last,
+    )
 
 
 @skills_app.command("list")

@@ -264,24 +264,50 @@ class CoderioTUI(App):
             pass
 
 
-def run_tui(provider_override: str | None = None, model_override: str | None = None) -> None:
+def run_tui(
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    resume: str | None = None,
+    continue_last: bool = False,
+) -> None:
     """Launch the Textual TUI, wired to coderio's agent runtime.
 
     Builds the same runtime as the Rich REPL (config, model, tools, skills,
     session), then runs the CoderioTUI app. Each user submission drives
     run_agent in a background thread; the TUI stays interactive (Ctrl+O, scroll).
+
+    ``resume`` / ``continue_last`` load a prior session into the conversation
+    history (same semantics as the REPL's --resume/--continue).
     """
     from pathlib import Path
-    from coderio.cli.repl import build_runtime
+    from coderio.cli.repl import build_runtime, _resolve_resume
+    from coderio.config import load_config
     from coderio.config.bootstrap import ensure_user_dirs
 
     ensure_user_dirs()
     search_from = "."
     creds_path = Path.home() / ".coderio" / "credentials"
+
+    # Resolve a session to resume BEFORE building the runtime (so build_runtime
+    # receives it instead of creating a fresh one).
+    session = None
+    if resume or continue_last:
+        cfg = load_config(search_from=search_from)
+        try:
+            session = _resolve_resume(cfg, resume, continue_last)
+        except SystemExit as e:
+            # _resolve_resume raises SystemExit on "no previous session"; surface
+            # it as a clean banner rather than a crash.
+            tui = CoderioTUI()
+            tui._banner = f"[red]{e}[/red]"
+            tui.run()
+            return
+
     try:
         cfg, store, model, tools, gate, session, active, _rich_stream = build_runtime(
             search_from=search_from, console=None, creds_path=creds_path,
             provider_override=provider_override, model_override=model_override,
+            session=session,
         )
     except Exception as e:
         tui = CoderioTUI()
