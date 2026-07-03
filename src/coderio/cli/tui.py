@@ -16,10 +16,12 @@ from typing import Any
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
+from rich.console import RenderableType
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Collapsible, Input, ListItem, ListView, Static
 
 
@@ -137,6 +139,66 @@ class CommandMenu(Vertical):
         self.remove_class("-visible")
 
 
+class StatusBar(Widget):
+    """Live status bar: shows the current agent phase + a real-time elapsed timer.
+
+    Owns its own set_interval heartbeat and overrides render() (not Static.update).
+    Using render() + refresh(layout=False) is more reliable in a real terminal
+    than Static.update (which forces a full layout recompute via layout=True) —
+    a layout recompute on every 100ms tick can stall when the history pane holds
+    many widgets, which is the suspected cause of the timer freezing in real use
+    while it worked fine in headless tests.
+
+    The phase/tool_name are plain attributes written by the agent thread (in
+    CoderioTUI's StreamHandler callbacks); this widget only READS them in render()
+    on the main thread — no locking needed (GIL + atomic reads of strs/floats).
+    """
+
+    DEFAULT_CSS = """
+    StatusBar {
+        height: 1; dock: bottom; padding: 0 1;
+        background: $boost; color: $text-muted;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Phase state is mirrored here from the App so render() can read it
+        # without querying the App (which may be mid-screen-swap).
+        self.phase: str = "idle"
+        self.phase_start: float = 0.0
+        self.tool_name: str = ""
+
+    def on_mount(self) -> None:
+        # Heartbeat: mark this widget dirty 10x/sec so render() reruns and the
+        # elapsed timer ticks. refresh(layout=False) only invalidates painting,
+        # not layout — cheap and can't stall the layout engine.
+        self.set_interval(0.1, self._heartbeat)
+
+    def _heartbeat(self) -> None:
+        self.refresh(layout=False)
+
+    def set_phase(self, phase: str, tool_name: str = "") -> None:
+        """Update the displayed phase (called from CoderioTUI, possibly off-main)."""
+        self.phase = phase
+        self.phase_start = time.monotonic() if phase != "idle" else 0.0
+        self.tool_name = tool_name
+        self.refresh(layout=False)
+
+    def render(self) -> RenderableType:
+        labels = {
+            "idle": "(就绪)",
+            "thinking": "思考中",
+            "responding": "输出中",
+            "tool": f"执行 {self.tool_name}" if self.tool_name else "执行工具",
+        }
+        if self.phase == "idle":
+            return Text(labels["idle"], style="dim")
+        elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
+        label = labels.get(self.phase, self.phase)
+        return Text(f"⠋ {label} · {elapsed:.1f}s")
+
+
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -221,10 +283,6 @@ class CoderioTUI(App):
     CSS = """
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
-    #status-bar {
-        height: 1; dock: bottom; padding: 0 1;
-        background: $boost; color: $text-muted;
-    }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     /* Collapsible thinking blocks */
@@ -254,14 +312,6 @@ class CoderioTUI(App):
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._last_collapsible = None  # the most recent thinking Collapsible widget
-        # Live status-bar state machine (phase + elapsed timer). The StreamHandler
-        # callbacks (running on the agent's background thread) only WRITE these
-        # plain attributes — they never touch widgets. The main-thread _tick()
-        # (driven by set_interval) READS them and re-renders the status bar. This
-        # keeps the UI updating every 100ms without any thread-safety hazard.
-        self._phase: str = "idle"        # idle | thinking | tool | responding
-        self._phase_start: float = 0.0   # monotonic timestamp the phase began
-        self._tool_name: str = ""        # which tool is running (for the tool phase)
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -271,8 +321,10 @@ class CoderioTUI(App):
         # Layered above the input bar so it overlays the history pane.
         yield CommandMenu(slash_completions())
         # Live status bar: shows the current phase (thinking/tool/responding) with
-        # a real-time elapsed timer. Docked just above the input bar.
-        yield Static("(就绪)", id="status-bar")
+        # a real-time elapsed timer. Docked just above the input bar. It owns its
+        # own render() + heartbeat (refresh layout=False) so the timer can't stall
+        # the layout engine even with a large history pane.
+        yield StatusBar()
         with Vertical(id="input-bar"):
             yield Input(
                 placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
@@ -288,55 +340,26 @@ class CoderioTUI(App):
         # Wire the popup command menu to the input.
         self.query_one(CommandMenu).bind_input(inp)
         inp.focus()
-        # Heartbeat: refresh the status bar 10x/sec so the elapsed timer ticks in
-        # real time (covers network-wait, thinking, and tool-execution gaps — the
-        # three states where the screen previously looked frozen).
-        self.set_interval(0.1, self._tick)
+        # The StatusBar widget owns its own heartbeat (set_interval + render()),
+        # so the App no longer drives the timer itself.
 
-    # ----------------------------------------------------- status bar (live indicator)
-    def _tick(self) -> None:
-        """Main-thread heartbeat: re-render the status bar from current phase.
-
-        Runs on Textual's event loop (set_interval), so it's always thread-safe.
-        The StreamHandler callbacks on the agent thread only write plain attributes
-        (_phase/_phase_start/_tool_name); this reads them and updates the widget.
-        """
-        labels = {
-            "idle": "(就绪)",
-            "thinking": "思考中",
-            "responding": "输出中",
-            "tool": f"执行 {self._tool_name}" if self._tool_name else "执行工具",
-        }
-        if self._phase == "idle":
-            text = labels["idle"]
-        else:
-            elapsed = time.monotonic() - self._phase_start if self._phase_start else 0.0
-            text = f"⠋ {labels.get(self._phase, self._phase)} · {elapsed:.1f}s"
-        # Guard: when a ModalScreen (e.g. the resume picker) is pushed, the main
-        # screen's #status-bar isn't on app.screen — query_one would raise. Use a
-        # try-matches so the heartbeat never crashes the app mid-interaction.
-        try:
-            bar = self.query_one("#status-bar", Static)
-            bar.update(text)
-        except Exception:
-            pass
-
+    # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "") -> None:
-        """Transition the status-bar state machine (called from agent thread).
+        """Forward a phase change to the StatusBar widget.
 
-        Only mutates plain attributes — the widget itself is touched by _tick() on
-        the main thread. Also do an immediate refresh so the label flips without
-        waiting up to 100ms for the next tick.
+        Called from the agent's background thread (StreamHandler callbacks). The
+        StatusBar.set_phase only writes plain attributes + refresh(layout=False),
+        which is safe to call off the main thread via call_from_thread.
         """
-        self._phase = phase
-        self._phase_start = time.monotonic() if phase != "idle" else 0.0
-        self._tool_name = tool_name
-        # Immediate refresh so a phase change shows instantly, not on next tick.
         import threading
+        try:
+            bar = self.query_one(StatusBar)
+        except Exception:
+            return  # not mounted yet / screen swapped — skip silently
         if threading.current_thread() is threading.main_thread():
-            self._tick()
+            bar.set_phase(phase, tool_name)
         else:
-            self.call_from_thread(self._tick)
+            self.call_from_thread(bar.set_phase, phase, tool_name)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -423,7 +446,11 @@ class CoderioTUI(App):
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()
         # First visible token: the thinking/generation phase is over, now streaming.
-        if self._phase != "responding":
+        try:
+            bar = self.query_one(StatusBar)
+        except Exception:
+            bar = None
+        if bar is None or bar.phase != "responding":
             self._set_phase("responding")
         self.buffer += text
 
