@@ -72,3 +72,51 @@ class Session:
         d = _resolve_save_dir(save_dir)
         files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         return [p.stem for p in files[:limit]]
+
+    @staticmethod
+    def summaries(save_dir: str | Path, limit: int = 20) -> list[dict]:
+        """Lightweight session previews for the resume picker (Claude-Code style).
+
+        Returns dicts: {id, first_user, message_count, mtime}. Reads only the
+        meta line + first user message + counts lines — does NOT load every
+        Message into memory (a session can have hundreds). The picker shows
+        `first_user` so the user recognizes a session by what they asked, not by
+        an opaque id like '20260703-093941-b9f7'.
+        """
+        from datetime import datetime
+
+        d = _resolve_save_dir(save_dir)
+        files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        out = []
+        for p in files[:limit]:
+            first_user = ""
+            count = 0
+            model = ""
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("type") == "meta":
+                        model = rec.get("model", "") or model
+                        continue
+                    count += 1  # every non-meta line is a message
+                    if rec.get("role") == "user" and not first_user:
+                        # content may be str or a multimodal block list
+                        c = rec.get("content", "")
+                        if isinstance(c, list):
+                            c = " ".join(b.get("text", "") for b in c
+                                         if isinstance(b, dict) and b.get("type") == "text")
+                        first_user = str(c).strip().replace("\n", " ")
+            out.append({
+                "id": p.stem,
+                "first_user": first_user[:80],  # cap for the picker row
+                "message_count": count,
+                "model": model,
+                "mtime": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+        return out

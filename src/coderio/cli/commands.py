@@ -33,6 +33,8 @@ SLASH_COMMANDS: list[SlashCommand] = [
                  ["/clear"]),
     SlashCommand("/config", "show current configuration", ["/config"]),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
+    SlashCommand("/resume", "resume a past session (opens an interactive picker)",
+                 ["/resume "]),
     SlashCommand("/mode", "change permission mode",
                  ["/mode confirm", "/mode plan", "/mode auto"]),
     SlashCommand("/model", "switch model at runtime", ["/model "]),
@@ -74,6 +76,7 @@ class CommandResult:
     continue_loop: bool = True
     reset_runtime: bool = False
     new_permission_mode: str = ""
+    new_session_id: str = ""  # for /resume: the session id to load ("" = none)
     message: str | None = None
 
 
@@ -129,6 +132,38 @@ def _cmd_sessions(ctx) -> CommandResult:
     return CommandResult(message="Recent sessions:\n" + "\n".join(lines))
 
 
+def _cmd_resume(ctx, arg: str) -> CommandResult:
+    """Resume a prior session.
+
+    Modeled on Claude Code's /resume: with no argument it opens an INTERACTIVE
+    picker (the caller — TUI — detects the __OPEN_PICKER__ signal and shows a
+    scrollable list with summaries, not bare ids). Nobody remembers a session id
+    like '20260703-093941-b9f7', so typing it is a fallback, not the main path.
+    """
+    arg = arg.strip()
+    if not arg:
+        if not ctx.recent_sessions:
+            return CommandResult(message="No sessions to resume. Run something first.")
+        # Signal the TUI to open its interactive picker.
+        return CommandResult(message="__OPEN_PICKER__")
+    # Explicit id fallback (rare; the picker is the intended path).
+    sid = next((s for s in ctx.recent_sessions if s == arg), None)
+    if sid is None:
+        matches = [s for s in ctx.recent_sessions if s.startswith(arg)]
+        if len(matches) == 1:
+            sid = matches[0]
+        elif len(matches) > 1:
+            return CommandResult(
+                message=f"id 前缀 {arg!r} 匹配多个会话:\n  "
+                + "\n  ".join(matches) + "\n请用更完整的前缀或直接 /resume 用选择器。")
+        else:
+            return CommandResult(message=f"找不到会话 {arg!r}。/resume 打开选择器挑选。")
+    return CommandResult(
+        new_session_id=sid,
+        message=f"已切到会话 {sid}。",
+    )
+
+
 def _cmd_mode(ctx, arg: str) -> CommandResult:
     mode = arg.strip()
     if mode not in {"confirm", "auto", "plan"}:
@@ -160,6 +195,8 @@ def handle_slash(line: str, ctx) -> CommandResult:
         return _cmd_config(ctx)
     if cmd == "/sessions":
         return _cmd_sessions(ctx)
+    if cmd == "/resume":
+        return _cmd_resume(ctx, arg)
     if cmd == "/mode":
         return _cmd_mode(ctx, arg)
     if cmd == "/clear":

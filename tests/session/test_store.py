@@ -55,3 +55,41 @@ def test_session_id_format():
     assert len(parts) == 3
     assert len(parts[0]) == 8
     assert len(parts[2]) == 4
+
+
+def test_summaries_returns_recognizable_preview(tmp_path):
+    """The resume picker needs a human-recognizable preview, not a bare id.
+    summaries() must surface the first user message + message count so the user
+    can tell sessions apart ('which one asked about the bug?')."""
+    s = Session.create(tmp_path, {"model": "glm-5.2"})
+    s.append(Message.user("帮我修一下登录 bug"))
+    s.append(Message.assistant("好的，我先看看代码"))
+    s.append(Message.user("在 auth.py 里"))
+    out = Session.summaries(tmp_path)
+    assert len(out) == 1
+    row = out[0]
+    assert row["id"] == s.id
+    assert "登录 bug" in row["first_user"]   # recognizable, not an id
+    assert row["message_count"] == 3          # counts user messages
+    assert row["model"] == "glm-5.2"
+    assert row["mtime"]  # non-empty time string
+
+
+def test_summaries_orders_recent_first(tmp_path):
+    a = Session.create(tmp_path, {"meta": "test"})
+    a.append(Message.user("first session"))
+    time.sleep(0.05)
+    b = Session.create(tmp_path, {"meta": "test"})
+    b.append(Message.user("second session"))
+    out = Session.summaries(tmp_path)
+    assert out[0]["first_user"] == "second session"  # newest first
+    assert out[1]["first_user"] == "first session"
+
+
+def test_summaries_handles_empty_session(tmp_path):
+    """A session with no messages yet must not crash the picker."""
+    Session.create(tmp_path, {"meta": "test"})
+    out = Session.summaries(tmp_path)
+    assert len(out) == 1
+    assert out[0]["first_user"] == ""
+    assert out[0]["message_count"] == 0

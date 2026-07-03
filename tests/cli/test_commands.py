@@ -149,3 +149,45 @@ def test_help_includes_subcommands_like_skills_install():
     """/skills install is a real subcommand; /help should surface it."""
     msg = (handle_slash("/help", _FakeCtx()).message or "")
     assert "skills" in msg.lower()
+
+
+# ----------------------------------------------- /resume (interactive picker)
+def test_resume_no_sessions_reports_none():
+    ctx = _FakeCtx()
+    ctx.recent_sessions = []
+    res = handle_slash("/resume", ctx)
+    assert "No sessions" in (res.message or "")
+
+
+def test_resume_no_arg_signals_picker():
+    """/resume with no arg must return __OPEN_PICKER__ so the TUI shows the
+    interactive list — NOT a bare id or a 'type an id' prompt (that was the
+    rejected design; nobody remembers session ids)."""
+    ctx = _FakeCtx()
+    ctx.recent_sessions = ["20260703-093941-b9f7", "20260702-164237-4xzk"]
+    res = handle_slash("/resume", ctx)
+    assert res.message == "__OPEN_PICKER__"
+
+
+def test_resume_explicit_id_loads_directly():
+    """/resume <full-id> is the fallback path (picker is primary)."""
+    ctx = _FakeCtx()
+    ctx.recent_sessions = ["20260703-093941-b9f7", "20260702-164237-4xzk"]
+    res = handle_slash("/resume 20260703-093941-b9f7", ctx)
+    assert res.new_session_id == "20260703-093941-b9f7"
+
+
+def test_resume_ambiguous_prefix_lists_matches():
+    ctx = _FakeCtx()
+    ctx.recent_sessions = ["20260703-093941-b9f7", "20260703-094012-aaaa"]
+    res = handle_slash("/resume 20260703", ctx)
+    assert res.new_session_id == ""  # not resolved
+    assert "多个会话" in (res.message or "")
+
+
+def test_resume_unknown_id_suggests_picker():
+    ctx = _FakeCtx()
+    ctx.recent_sessions = ["20260703-093941-b9f7"]
+    res = handle_slash("/resume nope", ctx)
+    assert "找不到" in (res.message or "")
+    assert "/resume" in (res.message or "")  # points back to the picker

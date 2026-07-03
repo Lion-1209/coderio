@@ -19,7 +19,86 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Collapsible, Input, Static
+from textual.screen import ModalScreen
+from textual.widgets import Collapsible, Input, ListItem, ListView, Static
+
+
+class SessionPickerScreen(ModalScreen[str | None]):
+    """Interactive session picker (Claude-Code-style /resume).
+
+    Shows recent sessions as a scrollable list — each row has the first user
+    message (so the user recognizes the conversation by what they asked, not by
+    an opaque id), the message count, and the time. ↑↓ navigates, Enter resumes,
+    Esc cancels. Typing filters the list by the summary text. Dismisses with the
+    chosen session id (string) or None (cancelled).
+    """
+
+    CSS = """
+    SessionPickerScreen {
+        align: center middle;
+    }
+    #picker-box {
+        width: 80%; height: 70%; border: thick $accent; background: $surface;
+        padding: 1 2;
+    }
+    #picker-title { text-align: center; color: $accent; margin-bottom: 1; }
+    #picker-filter {
+        dock: bottom; margin-top: 1; border: round $accent 50%;
+    }
+    #picker-filter:focus { border: round $accent; }
+    #picker-list { height: 1fr; border: none; }
+    .picker-row { padding: 0 1; }
+    .picker-row:first-child { margin-top: 0; }
+    .picker-summary { color: $text; }
+    .picker-meta { color: $text-muted; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "取消", show=True),
+    ]
+
+    def __init__(self, summaries: list[dict]) -> None:
+        super().__init__()
+        self._all = summaries  # full list; filtered view derived on typing
+        self._filter = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-box"):
+            yield Static("[bold]恢复会话[/bold]  ↑↓ 选择 · Enter 恢复 · Esc 取消 · 输入过滤",
+                         id="picker-title")
+            yield ListView(id="picker-list")
+            yield Input(placeholder="输入关键字过滤（首条消息 / 时间）", id="picker-filter")
+
+    def on_mount(self) -> None:
+        self._populate()
+        self.query_one("#picker-filter", Input).focus()
+
+    def _populate(self) -> None:
+        """Rebuild the list from the (filtered) summaries."""
+        lv = self.query_one("#picker-list", ListView)
+        lv.clear()
+        f = self._filter.lower()
+        for s in self._all:
+            label = s["first_user"] or "(空会话)"
+            if f and f not in label.lower() and f not in s["mtime"].lower() and f not in s["id"].lower():
+                continue
+            row = Static(
+                f"[{s['mtime']}] {label}\n"
+                f"  [dim]{s['message_count']} 条消息 · {s.get('model') or '?'} · {s['id']}[/dim]",
+                classes="picker-row")
+            lv.append(ListItem(row, name=s["id"]))
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "picker-filter":
+            self._filter = event.value
+            self._populate()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Enter on a row → resume that session."""
+        self.dismiss(event.item.name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class CoderioTUI(App):
@@ -327,8 +406,8 @@ def run_tui(
         "\n[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
     )
 
-    # Mutable runtime holder — /model and /mode rebuild parts of this in place.
-    rt = {"cfg": cfg, "model": model, "gate": gate}
+    # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
+    rt = {"cfg": cfg, "model": model, "gate": gate, "session": session}
 
     def on_input(line: str) -> None:
         if line.startswith("/"):
@@ -348,10 +427,24 @@ def run_tui(
                 stream=tui,
             )
             res = handle_slash(line, ctx)
+            # /resume with no arg → open the interactive picker instead of printing.
+            if res.message == "__OPEN_PICKER__":
+                summaries = Session.summaries(_P(rt["cfg"].session.save_dir).expanduser())
+                def _on_picked(sid):
+                    """Picker dismissed: sid is the chosen id, or None if cancelled."""
+                    if sid is None:
+                        return
+                    _load_session(sid)
+                tui.push_screen(SessionPickerScreen(summaries), _on_picked)
+                return
             if res.message:
                 tui._add_text(res.message)
             if not res.continue_loop:
                 tui.exit()
+                return
+            # /resume <explicit-id> path: load straight from the result.
+            if res.new_session_id:
+                _load_session(res.new_session_id)
                 return
             if res.reset_runtime:
                 from dataclasses import replace as _replace
@@ -378,11 +471,36 @@ def run_tui(
         user_content = build_user_content(line)
         run_agent(
             user_input=user_content, model=rt["model"], tools=tools, gate=rt["gate"],
-            skill_store=store, active_skills=active, session=session, stream=tui,
+            skill_store=store, active_skills=active, session=rt["session"], stream=tui,
             max_rounds=rt["cfg"].tools.max_tool_rounds,
             stage_auto_inject=rt["cfg"].skills.stage_auto_inject,
             harness_enabled=rt["cfg"].skills.harness,
         )
+
+    def _load_session(sid: str) -> None:
+        """Swap the active session to a loaded one, clear skills, render history.
+
+        Called after the picker picks a session (or /resume <id> is given). The
+        old session's jsonl stays on disk; we just point the runtime at the new
+        Session object so subsequent turns continue that conversation.
+        """
+        from coderio.session.store import Session
+        from pathlib import Path as _P
+        save_dir = _P(rt["cfg"].session.save_dir).expanduser()
+        rt["session"] = Session.load_by_id(save_dir, sid)
+        active.clear()
+        # Render the resumed conversation into the history pane so the user sees
+        # context they're continuing, not a blank screen.
+        tui._add_text(f"↩ 已恢复会话 {sid}（{len(rt['session'].messages)} 条历史消息）", style="bold green")
+        for m in rt["session"].messages:
+            if m.role == "user":
+                c = m.content
+                if isinstance(c, list):
+                    c = " ".join(b.get("text", "") for b in c
+                                 if isinstance(b, dict) and b.get("type") == "text")
+                tui._add_text(f"▸ you {c}", style="bold cyan")
+            elif m.role == "assistant":
+                tui._add_text(f"  {m.content[:200]}", style="blue")
 
     tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
     tui.run()

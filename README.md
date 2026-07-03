@@ -85,6 +85,7 @@ coderio skills install
 | `/cost` | 查看本次会话 token 用量 |
 | `/clear` | 重置上下文（新会话） |
 | `/sessions` | 列出最近会话 |
+| `/resume` | 恢复历史会话（↑↓ 选择、Enter 恢复、输入过滤） |
 
 直接输入自然语言即可对话或下达编码任务。
 
