@@ -168,6 +168,9 @@ class StatusBar(Widget):
         self.phase: str = "idle"
         self.phase_start: float = 0.0
         self.tool_name: str = ""
+        self.step: int = 0          # current ReAct round (1-based); 0 = none yet
+        self.tool_index: int = 0    # which tool in the current round's batch
+        self.tool_total: int = 0    # how many tools in this round's batch
         self._app = None  # set in on_mount; the heartbeat uses it to call_from_thread
 
     def on_mount(self) -> None:
@@ -204,7 +207,8 @@ class StatusBar(Widget):
     def on_unmount(self) -> None:
         self._beat_stop.set()
 
-    def set_phase(self, phase: str, tool_name: str = "") -> None:
+    def set_phase(self, phase: str, tool_name: str = "", step: int = 0,
+                  tool_index: int = 0, tool_total: int = 0) -> None:
         """Update the displayed phase.
 
         Safe to call from ANY thread: only mutates plain attributes (GIL-safe).
@@ -215,14 +219,30 @@ class StatusBar(Widget):
         """
         self.phase = phase
         self.phase_start = time.monotonic() if phase != "idle" else 0.0
-        self.tool_name = tool_name
+        if tool_name:
+            self.tool_name = tool_name
+        if step:
+            self.step = step
+        if tool_total:
+            self.tool_index = tool_index
+            self.tool_total = tool_total
 
     def render(self) -> RenderableType:
+        # Build a phase label that shows WHERE in the task the agent is, so the
+        # user can distinguish "still working, step 3" from "frozen". The step
+        # number + tool index give concrete progress, not just a vague spinner.
+        step_tag = f"步骤{self.step}" if self.step else ""
+        if self.phase == "tool" and self.tool_total > 1:
+            tool_tag = f"{self.tool_name}({self.tool_index+1}/{self.tool_total})"
+        elif self.phase == "tool":
+            tool_tag = self.tool_name or "工具"
+        else:
+            tool_tag = ""
         labels = {
             "idle": "(就绪)",
             "thinking": "思考中",
             "responding": "输出中",
-            "tool": f"执行 {self.tool_name}" if self.tool_name else "执行工具",
+            "tool": f"执行 {tool_tag}",
         }
         # Diagnostic log (only when CODERIO_DEBUG is set) — confirms render() is
         # being called and what phase it sees. Set CODERIO_DEBUG=1 and check
@@ -232,14 +252,20 @@ class StatusBar(Widget):
             try:
                 from pathlib import Path as _P
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"{time.monotonic():.2f} render phase={self.phase}\n")
+                    f.write(f"{time.monotonic():.2f} render phase={self.phase} step={self.step}\n")
             except Exception:
                 pass
         if self.phase == "idle":
             return Text(labels["idle"], style="dim")
         elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
         label = labels.get(self.phase, self.phase)
-        return Text(f"⠋ {label} · {elapsed:.1f}s")
+        # "⠋ 步骤2 · 思考中 · 3.1s" or "⠋ 步骤2 · 执行 read_file(1/3) · 0.4s"
+        parts = []
+        if step_tag:
+            parts.append(step_tag)
+        parts.append(label)
+        parts.append(f"{elapsed:.1f}s")
+        return Text("⠋ " + " · ".join(parts))
 
 
 class SessionPickerScreen(ModalScreen[str | None]):
@@ -402,7 +428,8 @@ class CoderioTUI(App):
         inp.focus()
 
     # ----------------------------------------------------- status bar (phase routing)
-    def _set_phase(self, phase: str, tool_name: str = "") -> None:
+    def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
+                   tool_index: int = 0, tool_total: int = 0) -> None:
         """Forward a phase change to the StatusBar widget.
 
         Called from the agent's BACKGROUND thread (StreamHandler callbacks). Do
@@ -415,7 +442,7 @@ class CoderioTUI(App):
         bar = self._status_bar
         if bar is None:
             return  # not mounted yet
-        bar.set_phase(phase, tool_name)
+        bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -493,11 +520,11 @@ class CoderioTUI(App):
         return None
 
     # ----------------------------------------------------- StreamHandler protocol
-    def on_step_start(self) -> None:
+    def on_step_start(self, step: int = 1) -> None:
         self._flush_round_thinking()
-        # A new model call begins: show "thinking" immediately so the network-wait
-        # for the first token is visibly accounted for (was the silent-freeze bug).
-        self._set_phase("thinking")
+        # A new model call begins: show "thinking" with the step number so the user
+        # sees concrete progress ("步骤 2 · 思考中") instead of a vague spinner.
+        self._set_phase("thinking", step=step)
 
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()
@@ -554,12 +581,15 @@ class CoderioTUI(App):
         if self._live_think_body is not None:
             self._live_think_body.update(Text(full_text))
 
-    def on_tool_start(self, name: str, args: dict[str, Any]) -> None:
+    def on_tool_start(self, name: str, args: dict[str, Any], step: int = 1,
+                      tool_index: int = 0, tool_total: int = 0) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
         # Tool execution has its own phase so the timer reflects the tool, not a
-        # frozen "thinking" label (was the tool-execution freeze bug).
-        self._set_phase("tool", tool_name=name)
+        # frozen "thinking" label. Pass step/tool_index/tool_total so the bar can
+        # show "执行 read_file(1/3)" when multiple tools run in one round.
+        self._set_phase("tool", tool_name=name, step=step,
+                        tool_index=tool_index, tool_total=tool_total)
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"

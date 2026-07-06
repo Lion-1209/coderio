@@ -70,6 +70,31 @@ async def test_status_bar_shows_tool_name():
 
 
 @pytest.mark.asyncio
+async def test_status_bar_shows_step_number():
+    """The bar must show the ReAct round number so the user sees iteration progress
+    ('步骤 2 · 思考中') instead of a vague spinner that looks frozen."""
+    app = CoderioTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.on_step_start(step=3)
+        await pilot.pause()
+        text = _render(app)
+        assert "步骤3" in text
+
+
+@pytest.mark.asyncio
+async def test_status_bar_shows_tool_index_in_batch():
+    """When a round issues multiple tools, the bar shows which one: read_file(2/3)."""
+    app = CoderioTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.on_tool_start("read_file", {"path": "b.py"}, step=1, tool_index=1, tool_total=3)
+        await pilot.pause()
+        text = _render(app)
+        assert "read_file(2/3)" in text
+
+
+@pytest.mark.asyncio
 async def test_status_bar_responding_on_first_token():
     app = CoderioTUI()
     async with app.run_test() as pilot:

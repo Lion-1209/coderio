@@ -108,7 +108,7 @@ class RichStream:
         return True
 
     # -------------------------------------------------------- StreamHandler protocol
-    def on_step_start(self) -> None:
+    def on_step_start(self, step: int = 1) -> None:
         self._stop_live()
         self._start_busy()
 
@@ -135,7 +135,8 @@ class RichStream:
         else:
             self._refresh_busy()
 
-    def on_tool_start(self, name: str, args: dict[str, Any]) -> None:
+    def on_tool_start(self, name: str, args: dict[str, Any], step: int = 1,
+                      tool_index: int = 0, tool_total: int = 0) -> None:
         # A tool call also ends the thinking phase.
         self._flush_round_thinking()
         self._stop_live()
