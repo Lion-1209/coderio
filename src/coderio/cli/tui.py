@@ -361,6 +361,14 @@ class CoderioTUI(App):
         # round's thinking is flushed/folded.
         self._live_think_body: Static | None = None
         self._live_think_chars = 0  # chars shown so far (to append only the delta)
+        # Cached StatusBar reference: query_one() is a DOM query that Textual
+        # requires on the main thread, but _set_phase is called from the agent's
+        # BACKGROUND thread (StreamHandler callbacks). Calling query_one there
+        # raised and was silently swallowed — so phase NEVER reached the widget
+        # (statusbar.log showed phase=idle for the entire run). Cache the widget
+        # once (on_mount, main thread) and use the plain attribute thereafter
+        # (GIL-safe read from any thread).
+        self._status_bar: StatusBar | None = None
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -388,23 +396,25 @@ class CoderioTUI(App):
         inp = self.query_one("#msg", Input)
         # Wire the popup command menu to the input.
         self.query_one(CommandMenu).bind_input(inp)
+        # Cache the StatusBar reference NOW (main thread) — _set_phase is called
+        # from the agent's background thread where query_one() can't run.
+        self._status_bar = self.query_one(StatusBar)
         inp.focus()
-        # The StatusBar widget owns its own heartbeat (set_interval + render()),
-        # so the App no longer drives the timer itself.
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "") -> None:
         """Forward a phase change to the StatusBar widget.
 
-        Safe from ANY thread: StatusBar.set_phase only mutates plain attributes
-        (phase/phase_start/tool_name) — it never touches widget state, so no
-        call_from_thread is needed. The StatusBar's own background heartbeat picks
-        up the change and repaints within 100ms.
+        Called from the agent's BACKGROUND thread (StreamHandler callbacks). Do
+        NOT use query_one here — it's a DOM query that Textual requires on the
+        main thread; calling it from the agent thread raised and was swallowed,
+        so phase never reached the widget (the statusbar.log showed phase=idle
+        for an entire run). Use the cached reference instead (plain attribute
+        read, GIL-safe). StatusBar.set_phase only writes plain attributes too.
         """
-        try:
-            bar = self.query_one(StatusBar)
-        except Exception:
-            return  # not mounted yet / screen swapped — skip silently
+        bar = self._status_bar
+        if bar is None:
+            return  # not mounted yet
         bar.set_phase(phase, tool_name)
 
     # ----------------------------------------------------- command menu (autocomplete)
@@ -492,10 +502,8 @@ class CoderioTUI(App):
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()
         # First visible token: the thinking/generation phase is over, now streaming.
-        try:
-            bar = self.query_one(StatusBar)
-        except Exception:
-            bar = None
+        # Use the cached StatusBar reference (query_one can't run from this thread).
+        bar = self._status_bar
         if bar is None or bar.phase != "responding":
             self._set_phase("responding")
         self.buffer += text
