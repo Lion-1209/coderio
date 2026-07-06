@@ -513,22 +513,46 @@ class CoderioTUI(App):
         # then append each subsequent chunk as it arrives. This fixes the core UX
         # bug where thinking was invisible until it finished — the user sees the
         # reasoning grow in real time, so they know the agent is working (not hung).
+        #
+        # Widget creation (Static/Collapsible) and .update() must run on the main
+        # thread. When called from the agent's background thread, dispatch via
+        # call_from_thread; when on the main thread (tests), call directly.
         if not self._round_thinking:
             self._round_think_start = time.monotonic()
-            # First chunk: mount an EXPANDED Collapsible with a live-updating body.
-            self._live_think_body = Static(Text(""))
-            col = Collapsible(self._live_think_body, title="💭 思考中…",
-                              collapsed=False, collapsed_symbol="▶", expanded_symbol="▼",
-                              classes="think-block")
-            self._last_collapsible = col
-            self._mount_widget(col)
         self._round_thinking += text
-        # Append only the new delta to the live body (efficient — don't re-render
-        # the whole text each chunk).
-        delta = self._round_thinking[self._live_think_chars:]
-        self._live_think_chars = len(self._round_thinking)
+        import threading
+        on_main = threading.current_thread() is threading.main_thread()
+        if self._live_think_body is None:
+            self._live_think_chars = len(self._round_thinking)
+            fn = self._mount_live_thinking
+            args = (self._round_thinking,)
+        else:
+            delta_len = len(self._round_thinking) - self._live_think_chars
+            if delta_len <= 0:
+                return
+            self._live_think_chars = len(self._round_thinking)
+            fn = self._update_live_thinking
+            args = (self._round_thinking,)
+        if on_main:
+            fn(*args)
+        else:
+            self.call_from_thread(fn, *args)
+
+    def _mount_live_thinking(self, full_text: str) -> None:
+        """MAIN THREAD: create + mount the live (expanded) thinking block. Called
+        via call_from_thread from on_thinking."""
+        self._live_think_body = Static(Text(full_text))
+        col = Collapsible(self._live_think_body, title="💭 思考中…",
+                          collapsed=False, collapsed_symbol="▶", expanded_symbol="▼",
+                          classes="think-block")
+        self._last_collapsible = col
+        self._mount_widget_main(col)
+
+    def _update_live_thinking(self, full_text: str) -> None:
+        """MAIN THREAD: update the live thinking body with accumulated text.
+        Called via call_from_thread from on_thinking."""
         if self._live_think_body is not None:
-            self._live_think_body.update(Text(self._round_thinking))
+            self._live_think_body.update(Text(full_text))
 
     def on_tool_start(self, name: str, args: dict[str, Any]) -> None:
         self._flush_round_thinking()
@@ -585,31 +609,48 @@ class CoderioTUI(App):
         """Fold the live (in-progress) thinking block: collapse it and finalize
         the title with the elapsed time + char count.
 
-        If thinking streamed live (on_thinking created _live_think_body), this
-        just collapses that widget and updates its title. If no live body exists
-        but there IS accumulated text (rare: flush called without prior streaming),
-        create a fresh collapsed Collapsible as a fallback.
+        Runs on the agent's BACKGROUND thread (called by on_token/on_tool_start/
+        on_finish). Widget operations (title/collapsed/mount) must be on the main
+        thread, so the actual widget work is dispatched via call_from_thread.
+        The plain-attribute state (snapshot of the accumulated text) is captured
+        HERE and passed to the main-thread helper.
         """
         if not self._round_thinking.strip():
             return
+        # Snapshot the state to pass to the main thread (the attributes get reset
+        # below; the helper needs the values, not the live attributes).
+        text = self._round_thinking
         secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
-        chars = len(self._round_thinking)
+        had_live = self._live_think_body is not None
+        # Reset accumulated state NOW (so the next round starts clean even though
+        # the widget update is async).
+        self._round_thinking = ""
+        self._round_think_start = 0.0
+        self._live_think_body = None
+        self._live_think_chars = 0
+        # Dispatch the widget work to the main thread.
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            self._flush_round_thinking_main(text, secs, had_live)
+        else:
+            self.call_from_thread(self._flush_round_thinking_main, text, secs, had_live)
+
+    def _flush_round_thinking_main(self, text: str, secs: float, had_live: bool) -> None:
+        """MAIN THREAD: fold/create the thinking Collapsible. Called via
+        call_from_thread from _flush_round_thinking."""
+        chars = len(text)
         title = f"💭 思考 · {secs:.1f}s · {chars} 字 · Ctrl+O / 点击展开"
-        if self._live_think_body is not None and self._last_collapsible is not None:
+        if had_live and self._last_collapsible is not None:
             # Live streaming happened: collapse the existing expanded block.
             self._last_collapsible.title = title
             self._last_collapsible.collapsed = True
         else:
             # Fallback: no live body (e.g. thinking arrived non-streamed).
-            body = Static(Text(self._round_thinking))
+            body = Static(Text(text))
             col = Collapsible(body, title=title, collapsed=True,
                               collapsed_symbol="▶", expanded_symbol="▼", classes="think-block")
             self._last_collapsible = col
-            self._mount_widget(col)
-        self._round_thinking = ""
-        self._round_think_start = 0.0
-        self._live_think_body = None
-        self._live_think_chars = 0
+            self._mount_widget_main(col)
 
     def show_last_thinking(self) -> bool:
         """Expand the most recent thinking (compat with /think command)."""
