@@ -168,22 +168,54 @@ class StatusBar(Widget):
         self.phase: str = "idle"
         self.phase_start: float = 0.0
         self.tool_name: str = ""
+        self._app = None  # set in on_mount; the heartbeat uses it to call_from_thread
 
     def on_mount(self) -> None:
-        # Heartbeat: mark this widget dirty 10x/sec so render() reruns and the
-        # elapsed timer ticks. refresh(layout=False) only invalidates painting,
-        # not layout — cheap and can't stall the layout engine.
-        self.set_interval(0.1, self._heartbeat)
+        self._app = self.app
+        # Heartbeat via a DEDICATED background thread, not Textual's set_interval.
+        # set_interval callbacks are dispatched by the main event loop, which can
+        # be delayed/batched when the loop is busy (e.g. processing a flood of
+        # stream tokens or mounting widgets) — that was the real cause of the timer
+        # freezing in a live terminal while headless tests passed. A plain thread
+        # sleeps and forces a refresh through call_from_thread, independent of the
+        # main loop's scheduling. This is the cross-thread pattern Textual's docs
+        # recommend for driving updates from outside the event loop.
+        import threading
+        self._beat_stop = threading.Event()
+        t = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        t.start()
 
-    def _heartbeat(self) -> None:
-        self.refresh(layout=False)
+    def _heartbeat_loop(self) -> None:
+        """Background thread: wake 10x/sec and mark the widget for repaint.
+
+        Runs entirely off the main thread; the only main-thread touch is the
+        call_from_thread(refresh) below, which Textual safely schedules. The
+        thread stops itself when the widget is unmounted or the app exits.
+        """
+        while not self._beat_stop.wait(0.1):
+            try:
+                if self._app is None or not self._app.is_running:
+                    break
+                self._app.call_from_thread(self.refresh, layout=False)
+            except Exception:
+                # App shutting down / not yet ready — stop the loop quietly.
+                break
+
+    def on_unmount(self) -> None:
+        self._beat_stop.set()
 
     def set_phase(self, phase: str, tool_name: str = "") -> None:
-        """Update the displayed phase (called from CoderioTUI, possibly off-main)."""
+        """Update the displayed phase.
+
+        Safe to call from ANY thread: only mutates plain attributes (GIL-safe).
+        Deliberately does NOT call refresh() here — that's a widget-state mutation
+        that Textual requires on the main thread. The background heartbeat picks
+        up the new phase within 100ms. (Calling refresh from the agent thread was
+        the previous bug — it raced Textual's internal dirty flags.)
+        """
         self.phase = phase
         self.phase_start = time.monotonic() if phase != "idle" else 0.0
         self.tool_name = tool_name
-        self.refresh(layout=False)
 
     def render(self) -> RenderableType:
         labels = {
@@ -192,6 +224,17 @@ class StatusBar(Widget):
             "responding": "输出中",
             "tool": f"执行 {self.tool_name}" if self.tool_name else "执行工具",
         }
+        # Diagnostic log (only when CODERIO_DEBUG is set) — confirms render() is
+        # being called and what phase it sees. Set CODERIO_DEBUG=1 and check
+        # ~/.coderio/statusbar.log to verify the heartbeat is alive.
+        import os
+        if os.environ.get("CODERIO_DEBUG"):
+            try:
+                from pathlib import Path as _P
+                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
+                    f.write(f"{time.monotonic():.2f} render phase={self.phase}\n")
+            except Exception:
+                pass
         if self.phase == "idle":
             return Text(labels["idle"], style="dim")
         elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
@@ -347,19 +390,16 @@ class CoderioTUI(App):
     def _set_phase(self, phase: str, tool_name: str = "") -> None:
         """Forward a phase change to the StatusBar widget.
 
-        Called from the agent's background thread (StreamHandler callbacks). The
-        StatusBar.set_phase only writes plain attributes + refresh(layout=False),
-        which is safe to call off the main thread via call_from_thread.
+        Safe from ANY thread: StatusBar.set_phase only mutates plain attributes
+        (phase/phase_start/tool_name) — it never touches widget state, so no
+        call_from_thread is needed. The StatusBar's own background heartbeat picks
+        up the change and repaints within 100ms.
         """
-        import threading
         try:
             bar = self.query_one(StatusBar)
         except Exception:
             return  # not mounted yet / screen swapped — skip silently
-        if threading.current_thread() is threading.main_thread():
-            bar.set_phase(phase, tool_name)
-        else:
-            self.call_from_thread(bar.set_phase, phase, tool_name)
+        bar.set_phase(phase, tool_name)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
