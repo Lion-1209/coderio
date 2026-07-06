@@ -247,6 +247,19 @@ def _execute_turn(
         tool_calls = list(getattr(ai, "tool_calls", []) or [])
         if not tool_calls:
             text = _content_to_text(getattr(ai, "content", ""))
+            # Empty response: the model returned NO text and NO tool_calls. This
+            # is a real failure mode (seen with step-3.7-flash: after several
+            # rounds of read_file tool_calls it returned a bare empty message).
+            # Treating it as "done" makes the turn end silently — the user sees
+            # the screen freeze with no output and no explanation. Instead, emit a
+            # visible notice (persisted to session + shown in UI) so the user knows
+            # the model produced nothing (vs. the UI being broken).
+            if not text.strip():
+                notice = ("(模型返回了空响应 — 既无文本也无工具调用。可能是上下文过长或模型提前结束。"
+                          "请重试，或用 /clear 清理上下文后继续。)")
+                stream.on_tool_start("_empty_response", {})
+                stream.on_tool_end("_empty_response", notice)
+                _emit(Message.tool_result(tool_call_id="_empty", name="_empty_response", content=notice))
             # --- Harness termination control (spec §3) ---
             # The model wants to stop, but the harness decides whether that's allowed.
             # Based on observed tool calls (ground truth), not the model's self-report.

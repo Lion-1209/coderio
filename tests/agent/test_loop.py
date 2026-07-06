@@ -465,3 +465,33 @@ def test_grounding_gate_no_op_for_pure_conversation(tmp_path):
     harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], "no file cited → no grounding interception"
     assert stream.warnings == []
+
+
+def test_empty_response_shows_notice_not_silent_hang(tmp_path):
+    """Regression: after several tool-call rounds, step-3.7-flash returned a bare
+    empty message (no text, no tool_calls). _execute_turn treated it as 'done'
+    and returned '' silently — the user saw the screen freeze with no output and
+    no explanation. Now an empty response emits a visible notice instead."""
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    model = _model_returning(
+        # round 1: tool calls (read a file)
+        _tool_call_msg("read_file", {"path": str(f)}),
+        # round 2: BARE EMPTY response — no text, no tool_calls (the hang bug)
+        AIMessage(content="", tool_calls=[]),
+    )
+    session = Session.create(tmp_path, {"meta": "test"})
+    stream = _RecStream()
+    final = run_agent(
+        user_input="分析这个文件", model=model, tools=build_default_tools(),
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=stream, max_rounds=10,
+        harness_enabled=False,  # isolate the empty-response path
+    )
+    # The turn must end (not hang), AND a visible notice was emitted so the user
+    # knows the model produced nothing (vs. a silent empty screen).
+    tool_notices = [m for m in session.messages
+                    if m.role == "tool" and m.name == "_empty_response"]
+    assert tool_notices, "empty response must emit a visible notice, not end silently"
+    assert "空响应" in tool_notices[0].content
