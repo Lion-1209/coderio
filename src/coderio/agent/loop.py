@@ -154,8 +154,25 @@ def run_step(
     bound = bound_cache.get(langchain_tools, (system_prompt,))
     lc_msgs = _to_langchain_messages(system_prompt, convo)
     aggregated = None  # AIMessageChunk accumulator; its tool_calls are complete at end.
+    # Diagnostic: log each chunk's structure when CODERIO_DEBUG is set. Helps
+    # diagnose cases where the model's post-thinking text (summary) never reaches
+    # on_token — e.g. a provider returning text/thinking in a structure that
+    # _content_to_text/_extract_thinking don't recognize.
+    import os as _os
+    _dbg = _os.environ.get("CODERIO_DEBUG")
     for event in bound.stream(lc_msgs):
         raw = getattr(event, "content", "")
+        if _dbg:
+            try:
+                from pathlib import Path as _P
+                with open(_P.home() / ".coderio" / "stream.log", "a", encoding="utf-8") as f:
+                    tcs = getattr(event, "tool_call_chunks", None) or []
+                    f.write(f"chunk: type={type(raw).__name__} "
+                            f"text={'Y' if _content_to_text(raw) else 'N'} "
+                            f"think={'Y' if _extract_thinking(raw) else 'N'} "
+                            f"toolcall_chunks={len(tcs)}\n")
+            except Exception:
+                pass
         # Forward visible text tokens (normalize blocks->text).
         token = _content_to_text(raw)
         if token:
