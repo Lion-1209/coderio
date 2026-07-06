@@ -156,7 +156,7 @@ class StatusBar(Widget):
 
     DEFAULT_CSS = """
     StatusBar {
-        height: 1; dock: bottom; padding: 0 1;
+        height: 1; padding: 0 1;
         background: $boost; color: $text-muted;
     }
     """
@@ -403,12 +403,12 @@ class CoderioTUI(App):
         # The command menu (popup, hidden by default; shown when input starts "/").
         # Layered above the input bar so it overlays the history pane.
         yield CommandMenu(slash_completions())
-        # Live status bar: shows the current phase (thinking/tool/responding) with
-        # a real-time elapsed timer. Docked just above the input bar. It owns its
-        # own render() + heartbeat (refresh layout=False) so the timer can't stall
-        # the layout engine even with a large history pane.
-        yield StatusBar()
+        # input-bar holds BOTH the StatusBar and the Input — StatusBar sits above
+        # the input inside the same docked container. (Previously StatusBar and
+        # input-bar BOTH docked to bottom independently, which made them overlap —
+        # the StatusBar was invisible behind the input bar.)
         with Vertical(id="input-bar"):
+            yield StatusBar()
             yield Input(
                 placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
                 id="msg",
