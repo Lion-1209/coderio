@@ -140,19 +140,22 @@ class CommandMenu(Vertical):
 
 
 class StatusBar(Widget):
-    """Live status bar: shows the current agent phase + a real-time elapsed timer.
+    """Live status bar: animated spinner + phase + step + elapsed timer.
 
-    Owns its own set_interval heartbeat and overrides render() (not Static.update).
-    Using render() + refresh(layout=False) is more reliable in a real terminal
-    than Static.update (which forces a full layout recompute via layout=True) —
-    a layout recompute on every 100ms tick can stall when the history pane holds
-    many widgets, which is the suspected cause of the timer freezing in real use
-    while it worked fine in headless tests.
+    Modeled on Claude Code's bottom indicator: a braille-dot spinner that
+    ANIMATES while the agent is working (cycling ⠋⠙⠹⠸⠼⠴⠦⠧ at ~12fps), followed by
+    a concrete phase label ("步骤1 · 执行 read_file(1/3)") and a live elapsed
+    timer. When idle the spinner stops and shows a static "(就绪)".
 
-    The phase/tool_name are plain attributes written by the agent thread (in
-    CoderioTUI's StreamHandler callbacks); this widget only READS them in render()
-    on the main thread — no locking needed (GIL + atomic reads of strs/floats).
+    Owns its own background-thread heartbeat (~80ms) that drives BOTH the spinner
+    animation and the timer refresh via call_from_thread(refresh, layout=False).
+    The phase/tool/step attributes are written by the agent thread (plain
+    attribute writes, GIL-safe); render() reads them on the main thread.
     """
+
+    # Claude Code's spinner frames (reverse-engineered, ~80ms each).
+    _SPINNER = "⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏".split()
+    _BEAT_MS = 0.08  # ~12.5fps — smooth animation, matches Claude Code
 
     DEFAULT_CSS = """
     StatusBar {
@@ -163,45 +166,35 @@ class StatusBar(Widget):
 
     def __init__(self) -> None:
         super().__init__()
-        # Phase state is mirrored here from the App so render() can read it
-        # without querying the App (which may be mid-screen-swap).
         self.phase: str = "idle"
         self.phase_start: float = 0.0
         self.tool_name: str = ""
-        self.step: int = 0          # current ReAct round (1-based); 0 = none yet
-        self.tool_index: int = 0    # which tool in the current round's batch
-        self.tool_total: int = 0    # how many tools in this round's batch
-        self._app = None  # set in on_mount; the heartbeat uses it to call_from_thread
+        self.step: int = 0
+        self.tool_index: int = 0
+        self.tool_total: int = 0
+        self._app = None
+        self._spin_frame = 0  # cycles through _SPINNER each heartbeat while active
 
     def on_mount(self) -> None:
         self._app = self.app
-        # Heartbeat via a DEDICATED background thread, not Textual's set_interval.
-        # set_interval callbacks are dispatched by the main event loop, which can
-        # be delayed/batched when the loop is busy (e.g. processing a flood of
-        # stream tokens or mounting widgets) — that was the real cause of the timer
-        # freezing in a live terminal while headless tests passed. A plain thread
-        # sleeps and forces a refresh through call_from_thread, independent of the
-        # main loop's scheduling. This is the cross-thread pattern Textual's docs
-        # recommend for driving updates from outside the event loop.
         import threading
         self._beat_stop = threading.Event()
         t = threading.Thread(target=self._heartbeat_loop, daemon=True)
         t.start()
 
     def _heartbeat_loop(self) -> None:
-        """Background thread: wake 10x/sec and mark the widget for repaint.
-
-        Runs entirely off the main thread; the only main-thread touch is the
-        call_from_thread(refresh) below, which Textual safely schedules. The
-        thread stops itself when the widget is unmounted or the app exits.
-        """
-        while not self._beat_stop.wait(0.1):
+        """Background thread: wake ~12x/sec, advance the spinner frame, and force
+        a repaint. This drives the ANIMATION (the spinner visibly cycles) and the
+        elapsed timer — both update in lockstep. Runs off the main thread; the
+        only main-thread touch is call_from_thread(refresh)."""
+        while not self._beat_stop.wait(self._BEAT_MS):
             try:
                 if self._app is None or not self._app.is_running:
                     break
+                if self.phase != "idle":
+                    self._spin_frame = (self._spin_frame + 1) % len(self._SPINNER)
                 self._app.call_from_thread(self.refresh, layout=False)
             except Exception:
-                # App shutting down / not yet ready — stop the loop quietly.
                 break
 
     def on_unmount(self) -> None:
@@ -259,13 +252,16 @@ class StatusBar(Widget):
             return Text(labels["idle"], style="dim")
         elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
         label = labels.get(self.phase, self.phase)
-        # "⠋ 步骤2 · 思考中 · 3.1s" or "⠋ 步骤2 · 执行 read_file(1/3) · 0.4s"
+        # The spinner ANIMATES: each heartbeat advances _spin_frame, so this char
+        # cycles ⠋⠙⠹⠸⠼⠴⠦⠧ visibly while working (Claude Code's behavior).
+        spin = self._SPINNER[self._spin_frame]
+        # "⠹ 步骤2 · 思考中 · 3.1s" or "⠼ 步骤2 · 执行 read_file(1/3) · 0.4s"
         parts = []
         if step_tag:
             parts.append(step_tag)
         parts.append(label)
         parts.append(f"{elapsed:.1f}s")
-        return Text("⠋ " + " · ".join(parts))
+        return Text(f"{spin} " + " · ".join(parts))
 
 
 class SessionPickerScreen(ModalScreen[str | None]):
