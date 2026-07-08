@@ -237,12 +237,12 @@ def _execute_turn(
             on_message(msg)
 
     active_prompt = system_prompt
-    for _ in range(max_rounds):
-        # Signal the UI to start its busy indicator BEFORE the model call. This
-        # covers the whole wait (thinking + generation + any tool-result gap) so
-        # the screen never looks frozen between turns. Guarded for back-compat.
+    for step_num in range(1, max_rounds + 1):
+        # Signal the UI to start its busy indicator BEFORE the model call. The
+        # step number lets the UI show progress ("步骤 2") so the user knows the
+        # agent is iterating, not frozen.
         if hasattr(stream, "on_step_start"):
-            stream.on_step_start()
+            stream.on_step_start(step_num)
         ai = run_step(bound_cache, langchain_tools, active_prompt, convo, stream)
         tool_calls = list(getattr(ai, "tool_calls", []) or [])
         if not tool_calls:
@@ -284,10 +284,10 @@ def _execute_turn(
             tool_calls=[ToolCall(id=tc["id"], name=tc["name"], args=dict(tc.get("args", {})))
                         for tc in tool_calls],
         ))
-        for tc in tool_calls:
+        for tool_index, tc in enumerate(tool_calls):
             name = tc["name"]
             args = dict(tc.get("args", {}))
-            stream.on_tool_start(name, args)
+            stream.on_tool_start(name, args, step=step_num, tool_index=tool_index, tool_total=len(tool_calls))
             if not gate.check(name, args):
                 result = f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
             else:

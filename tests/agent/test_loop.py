@@ -189,7 +189,7 @@ class _RecStream(NullStream):
     def on_harness_warn(self, message):
         self.warnings.append(message)
 
-    def on_step_start(self):
+    def on_step_start(self, step: int = 1):
         self.step_starts += 1
 
 
