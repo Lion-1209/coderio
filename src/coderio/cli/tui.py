@@ -624,9 +624,38 @@ class CoderioTUI(App):
             title="⚠ harness 警告", border_style="red"))
 
     def on_finish(self) -> None:
-        self._flush_round_thinking()
-        self._flush_buffer()
-        self._set_phase("idle")
+        # Capture the final output NOW (on the agent thread) and dispatch ALL the
+        # remaining rendering as ONE main-thread callback. Previously _flush_round_
+        # thinking and _flush_buffer each dispatched separately via call_from_thread
+        # — two async queue entries that could race or stall, and the final text
+        # Panel sometimes didn't appear until the user's NEXT input drained the
+        # queue. Bundling into one callback guarantees it all lands atomically.
+        import threading
+        think_text = self._round_thinking
+        think_start = self._round_think_start
+        had_live = self._live_think_body is not None
+        buf = self.buffer
+        # Reset accumulated state immediately (so a next round starts clean).
+        self._round_thinking = ""
+        self._round_think_start = 0.0
+        self._live_think_body = None
+        self._live_think_chars = 0
+        self.buffer = ""
+
+        def _finalize():
+            """MAIN THREAD: fold thinking + mount the final answer Panel."""
+            if think_text.strip():
+                self._flush_round_thinking_main(think_text,
+                                                time.monotonic() - think_start if think_start else 0.0,
+                                                had_live)
+            if buf.strip():
+                self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
+            self._status_bar.set_phase("idle") if self._status_bar else None
+
+        if threading.current_thread() is threading.main_thread():
+            _finalize()
+        else:
+            self.call_from_thread(_finalize)
 
     def add_usage(self, meta: dict[str, int]) -> None:
         for k in ("input_tokens", "output_tokens"):
