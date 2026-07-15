@@ -390,6 +390,14 @@ class CoderioTUI(App):
         # round's thinking is flushed/folded.
         self._live_think_body: Static | None = None
         self._live_think_chars = 0  # chars shown so far (to append only the delta)
+        # Live output: the Static widget for IN-PROGRESS visible text. While
+        # non-None, on_token appends to it in real time (user sees the answer grow
+        # as it streams, like ChatGPT/Claude). Previously tokens accumulated in
+        # self.buffer with NO rendering until on_finish, then a giant Markdown
+        # Panel was mounted at once — long outputs (2000+ chars) truncated or
+        # failed to scroll into view. Streaming into a live widget avoids both.
+        self._live_output: Static | None = None
+        self._live_output_chars = 0
         # Cached StatusBar reference: query_one() is a DOM query that Textual
         # requires on the main thread, but _set_phase is called from the agent's
         # BACKGROUND thread (StreamHandler callbacks). Calling query_one there
@@ -531,12 +539,29 @@ class CoderioTUI(App):
 
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()
-        # First visible token: the thinking/generation phase is over, now streaming.
-        # Use the cached StatusBar reference (query_one can't run from this thread).
         bar = self._status_bar
         if bar is None or bar.phase != "responding":
             self._set_phase("responding")
+        # STREAM OUTPUT LIVE: create a Static widget on the first token, then
+        # append each subsequent token. This replaces the old buffer-then-render-
+        # at-once approach that caused long outputs to truncate or not scroll into
+        # view. The user now sees text grow in real time (like ChatGPT/Claude).
         self.buffer += text
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            self._update_live_output(self.buffer)
+        else:
+            self.call_from_thread(self._update_live_output, self.buffer)
+
+    def _update_live_output(self, full_text: str) -> None:
+        """MAIN THREAD: create or update the live output widget."""
+        if self._live_output is None:
+            self._live_output = Static(Text(full_text))
+            self._live_output_chars = len(full_text)
+            self._mount_widget_main(self._live_output)
+        else:
+            self._live_output.update(Text(full_text))
+            self._live_output_chars = len(full_text)
 
     def on_thinking(self, text: str) -> None:
         # Stream thinking LIVE: create an expanded Collapsible on the first chunk,
@@ -645,6 +670,10 @@ class CoderioTUI(App):
         self._live_think_body = None
         self._live_think_chars = 0
         self.buffer = ""
+        # Capture the live output widget so we can remove it in the finalize callback
+        live_out = self._live_output
+        self._live_output = None
+        self._live_output_chars = 0
 
         def _finalize():
             """MAIN THREAD: fold thinking + mount the final answer Panel."""
@@ -653,6 +682,12 @@ class CoderioTUI(App):
                                                 time.monotonic() - think_start if think_start else 0.0,
                                                 had_live)
             if buf.strip():
+                # Remove the live raw-text widget (it was streaming); replace with Panel.
+                if live_out is not None:
+                    try:
+                        live_out.remove()
+                    except Exception:
+                        pass
                 self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
             self._status_bar.set_phase("idle") if self._status_bar else None
 
@@ -724,9 +759,31 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- helpers: add content to history
     def _flush_buffer(self) -> None:
+        # The output was streamed live into _live_output; now finalize it by
+        # replacing the raw-text Static with a formatted Markdown Panel.
         if self.buffer.strip():
-            self._add_static(Panel(Markdown(self.buffer), border_style="blue", title="coderio"))
+            self._finalize_live_output()
         self.buffer = ""
+
+    def _finalize_live_output(self) -> None:
+        """MAIN THREAD (via callers): replace the live raw-text Static with a
+        Markdown Panel, or mount one if there was no live widget."""
+        import threading
+        text = self.buffer
+        def _do():
+            # Remove the live raw-text widget if present (it'll be replaced by Panel)
+            if self._live_output is not None:
+                try:
+                    self._live_output.remove()
+                except Exception:
+                    pass
+                self._live_output = None
+                self._live_output_chars = 0
+            self._add_static_main(Panel(Markdown(text), border_style="blue", title="coderio"))
+        if threading.current_thread() is threading.main_thread():
+            _do()
+        else:
+            self.call_from_thread(_do)
 
     def _add_text(self, text: str, style: str = "") -> None:
         """Thread-safe: add a styled text line to the history."""
