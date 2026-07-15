@@ -740,7 +740,7 @@ class CoderioTUI(App):
         try:
             history = self.query_one("#history", VerticalScroll)
             history.mount(Static(Text(text, style=style) if style else Text(text)))
-            history.scroll_end(animate=False)
+            history.call_after_refresh(history.scroll_end, animate=False)
         except Exception:
             pass
 
@@ -755,8 +755,15 @@ class CoderioTUI(App):
     def _add_static_main(self, renderable) -> None:
         try:
             history = self.query_one("#history", VerticalScroll)
-            history.mount(Static(renderable))
-            history.scroll_end(animate=False)
+            widget = Static(renderable)
+            history.mount(widget)
+            # Scroll to end AFTER the mount + layout settle. Calling scroll_end
+            # synchronously right after mount races the layout: the new widget's
+            # height hasn't been computed yet, so scroll_end lands above the true
+            # bottom — for long outputs (3000+ chars) the tail ends up below the
+            # viewport and looks like 'missing content'. call_after_refresh defers
+            # the scroll until Textual has finished the layout pass.
+            history.call_after_refresh(history.scroll_end, animate=False)
         except Exception:
             pass
 
@@ -772,7 +779,7 @@ class CoderioTUI(App):
         try:
             history = self.query_one("#history", VerticalScroll)
             history.mount(widget)
-            history.scroll_end(animate=False)
+            history.call_after_refresh(history.scroll_end, animate=False)
         except Exception:
             pass
 
