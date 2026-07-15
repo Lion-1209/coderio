@@ -488,7 +488,14 @@ class CoderioTUI(App):
         event.input.value = ""
         self._add_text(f"▸ you {line}", style="bold cyan")
         if self._on_input:
-            import threading
+            # Use a Textual WORKER (thread=True), not a raw threading.Thread.
+            # The core bug: raw daemon threads are invisible to Textual's event
+            # loop. When the agent thread finishes, call_from_thread callbacks it
+            # queued (final output Panel, thinking fold, etc.) sit UNPROCESSED in
+            # the loop's queue — they only get drained on the next user input
+            # (the 'content appears on next message' bug). A worker is managed by
+            # Textual: the main loop stays alive and processes the queue while the
+            # worker runs AND after it completes, so pending UI updates land.
             def _run():
                 try:
                     self._on_input(line)
@@ -497,7 +504,8 @@ class CoderioTUI(App):
                 except Exception as e:
                     self.call_from_thread(self._add_text,
                                           f"运行错误: {type(e).__name__}: {e}", style="red")
-            threading.Thread(target=_run, daemon=True).start()
+            self.run_worker(_run, thread=True, exclusive=True,
+                            name="agent_turn", exit_on_error=False)
 
     # ----------------------------------------------------- binding: Ctrl+O
     def action_toggle_thinking(self) -> None:
