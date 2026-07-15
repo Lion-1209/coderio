@@ -407,6 +407,17 @@ class CoderioTUI(App):
         # once (on_mount, main thread) and use the plain attribute thereafter
         # (GIL-safe read from any thread).
         self._status_bar: StatusBar | None = None
+        # RENDER QUEUE: the agent's background thread pushes render instructions
+        # here (thread-safe deque append/popleft). A main-thread set_interval
+        # timer drains the queue and executes the instructions on the main thread.
+        # This REPLACES call_from_thread entirely — which was unreliable in a real
+        # terminal (callbacks queued by on_token/on_finish never executed, verified
+        # via diagnostic logging: streamed=1228 chars but live_output/finalize had
+        # ZERO log entries). The deque + timer pattern is the same proven approach
+        # used by the StatusBar heartbeat (statusbar.log: 85k+ reliable renders).
+        import collections
+        self._render_q: collections.deque = collections.deque()
+        self._live_out_widget: Static | None = None  # the live output Static (main thread)
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -438,6 +449,93 @@ class CoderioTUI(App):
         # from the agent's background thread where query_one() can't run.
         self._status_bar = self.query_one(StatusBar)
         inp.focus()
+        # Render-queue drain timer: runs on the MAIN thread (set_interval), pops
+        # all queued render instructions and executes them. This is the ONLY path
+        # from background-thread data to main-thread widgets — no call_from_thread.
+        self.set_interval(0.06, self._drain_render_queue)
+
+    def _drain_render_queue(self) -> None:
+        """MAIN THREAD (set_interval): drain the render queue and execute all
+        pending instructions. Each instruction is a tuple (action_name, *args)."""
+        while self._render_q:
+            action, *args = self._render_q.popleft()
+            try:
+                if action == "text":
+                    # ("text", full_buffer) — update live output widget
+                    self._render_live_output(args[0])
+                elif action == "finalize":
+                    # ("finalize", buf, think_text, secs, had_live) — fold thinking + mount Panel
+                    self._render_finalize(*args)
+                elif action == "think_start":
+                    # ("think_start", full_text) — mount live thinking block
+                    self._render_think_start(args[0])
+                elif action == "think_update":
+                    # ("think_update", full_text) — update live thinking body
+                    self._render_think_update(args[0])
+                elif action == "think_fold":
+                    # ("think_fold", text, secs, had_live)
+                    self._render_think_fold(*args)
+                elif action == "static":
+                    # ("static", text, style) — add a text line
+                    self._add_text_main(args[0], args[1] if len(args) > 1 else "")
+                elif action == "panel":
+                    # ("panel", renderable) — mount a Panel
+                    self._add_static_main(args[0])
+                elif action == "exit":
+                    self.exit()
+            except Exception:
+                pass
+
+    # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
+    def _render_live_output(self, full_text: str) -> None:
+        """MAIN THREAD: create or update the live streaming output widget."""
+        if self._live_out_widget is None:
+            self._live_out_widget = Static(Text(full_text))
+            self._mount_widget_main(self._live_out_widget)
+        else:
+            self._live_out_widget.update(Text(full_text))
+
+    def _render_think_start(self, full_text: str) -> None:
+        """MAIN THREAD: mount the live (expanded) thinking block."""
+        self._live_think_body = Static(Text(full_text))
+        col = Collapsible(self._live_think_body, title="💭 思考中…",
+                          collapsed=False, collapsed_symbol="▶", expanded_symbol="▼",
+                          classes="think-block")
+        self._last_collapsible = col
+        self._mount_widget_main(col)
+
+    def _render_think_update(self, full_text: str) -> None:
+        """MAIN THREAD: update the live thinking body."""
+        if self._live_think_body is not None:
+            self._live_think_body.update(Text(full_text))
+
+    def _render_think_fold(self, text: str, secs: float, had_live: bool) -> None:
+        """MAIN THREAD: fold the thinking Collapsible."""
+        chars = len(text)
+        title = f"💭 思考 · {secs:.1f}s · {chars} 字 · Ctrl+O / 点击展开"
+        if had_live and self._last_collapsible is not None:
+            self._last_collapsible.title = title
+            self._last_collapsible.collapsed = True
+        else:
+            body = Static(Text(text))
+            col = Collapsible(body, title=title, collapsed=True,
+                              collapsed_symbol="▶", expanded_symbol="▼", classes="think-block")
+            self._last_collapsible = col
+            self._mount_widget_main(col)
+
+    def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
+        """MAIN THREAD: fold thinking + replace live output with final Markdown Panel."""
+        if think_text.strip():
+            self._render_think_fold(think_text, secs, had_live)
+        if buf.strip():
+            # Remove the live raw-text widget, mount a Markdown Panel.
+            if self._live_out_widget is not None:
+                try:
+                    self._live_out_widget.remove()
+                except Exception:
+                    pass
+                self._live_out_widget = None
+            self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
@@ -500,10 +598,9 @@ class CoderioTUI(App):
                 try:
                     self._on_input(line)
                 except SystemExit:
-                    self.call_from_thread(self.exit)
+                    self._render_q.append(("exit",))
                 except Exception as e:
-                    self.call_from_thread(self._add_text,
-                                          f"运行错误: {type(e).__name__}: {e}", style="red")
+                    self._render_q.append(("static", f"运行错误: {type(e).__name__}: {e}", "red"))
             self.run_worker(_run, thread=True, exclusive=True,
                             name="agent_turn", exit_on_error=False)
 
@@ -540,10 +637,12 @@ class CoderioTUI(App):
         return None
 
     # ----------------------------------------------------- StreamHandler protocol
+    # ALL callbacks run on the agent's BACKGROUND thread. They ONLY push render
+    # instructions to self._render_q (a thread-safe deque). The main-thread timer
+    # _drain_render_queue (set_interval 60ms) pops and executes them. NO
+    # call_from_thread anywhere — it was the root cause of content not rendering.
     def on_step_start(self, step: int = 1) -> None:
         self._flush_round_thinking()
-        # A new model call begins: show "thinking" with the step number so the user
-        # sees concrete progress ("步骤 2 · 思考中") instead of a vague spinner.
         self._set_phase("thinking", step=step)
 
     def on_token(self, text: str) -> None:
@@ -551,182 +650,86 @@ class CoderioTUI(App):
         bar = self._status_bar
         if bar is None or bar.phase != "responding":
             self._set_phase("responding")
-        # STREAM OUTPUT LIVE — but THROTTLED. Calling call_from_thread on EVERY
-        # token (thousands per response) flooded the main event loop's callback
-        # queue — _update_live_output never got to run, and the output appeared
-        # to truncate. Now: accumulate in self.buffer on the agent thread, and
-        # only dispatch a UI update at most once per ~80ms. The final on_finish
-        # flush captures whatever buffer remains, so no content is lost between
-        # throttle ticks.
+        # Accumulate in buffer (agent thread). Push a "text" render instruction
+        # with the FULL buffer so the main thread can update the live widget.
+        # Throttle: only push at most once per ~60ms to avoid flooding the queue.
         self.buffer += text
         now = time.monotonic()
-        is_first = self._live_output is None
-        if is_first or (now - self._live_output_last_flush) >= 0.08:
+        if self._live_output_last_flush == 0.0 or (now - self._live_output_last_flush) >= 0.06:
             self._live_output_last_flush = now
-            import threading
-            if threading.current_thread() is threading.main_thread():
-                self._update_live_output(self.buffer)
-            else:
-                self.call_from_thread(self._update_live_output, self.buffer)
-
-    def _update_live_output(self, full_text: str) -> None:
-        """MAIN THREAD: create or update the live output widget."""
-        import os
-        if os.environ.get("CODERIO_DEBUG"):
-            try:
-                from pathlib import Path as _P
-                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"{time.monotonic():.2f} live_output update chars={len(full_text)}\n")
-            except Exception:
-                pass
-        if self._live_output is None:
-            self._live_output = Static(Text(full_text))
-            self._live_output_chars = len(full_text)
-            self._mount_widget_main(self._live_output)
-        else:
-            self._live_output.update(Text(full_text))
-            self._live_output_chars = len(full_text)
+            self._render_q.append(("text", self.buffer))
 
     def on_thinking(self, text: str) -> None:
-        # Stream thinking LIVE: create an expanded Collapsible on the first chunk,
-        # then append each subsequent chunk as it arrives. This fixes the core UX
-        # bug where thinking was invisible until it finished — the user sees the
-        # reasoning grow in real time, so they know the agent is working (not hung).
-        #
-        # Widget creation (Static/Collapsible) and .update() must run on the main
-        # thread. When called from the agent's background thread, dispatch via
-        # call_from_thread; when on the main thread (tests), call directly.
         if not self._round_thinking:
             self._round_think_start = time.monotonic()
         self._round_thinking += text
-        import threading
-        on_main = threading.current_thread() is threading.main_thread()
+        now = time.monotonic()
         if self._live_think_body is None:
+            # First chunk: push a think_start
             self._live_think_chars = len(self._round_thinking)
-            fn = self._mount_live_thinking
-            args = (self._round_thinking,)
+            self._render_q.append(("think_start", self._round_thinking))
+            self._live_output_last_flush = now  # reuse throttle timer for thinking
         else:
             delta_len = len(self._round_thinking) - self._live_think_chars
-            if delta_len <= 0:
-                return
-            self._live_think_chars = len(self._round_thinking)
-            fn = self._update_live_thinking
-            args = (self._round_thinking,)
-        if on_main:
-            fn(*args)
-        else:
-            self.call_from_thread(fn, *args)
-
-    def _mount_live_thinking(self, full_text: str) -> None:
-        """MAIN THREAD: create + mount the live (expanded) thinking block. Called
-        via call_from_thread from on_thinking."""
-        self._live_think_body = Static(Text(full_text))
-        col = Collapsible(self._live_think_body, title="💭 思考中…",
-                          collapsed=False, collapsed_symbol="▶", expanded_symbol="▼",
-                          classes="think-block")
-        self._last_collapsible = col
-        self._mount_widget_main(col)
-
-    def _update_live_thinking(self, full_text: str) -> None:
-        """MAIN THREAD: update the live thinking body with accumulated text.
-        Called via call_from_thread from on_thinking."""
-        if self._live_think_body is not None:
-            self._live_think_body.update(Text(full_text))
+            if delta_len > 0 and (now - self._live_output_last_flush) >= 0.06:
+                self._live_think_chars = len(self._round_thinking)
+                self._live_output_last_flush = now
+                self._render_q.append(("think_update", self._round_thinking))
 
     def on_tool_start(self, name: str, args: dict[str, Any], step: int = 1,
                       tool_index: int = 0, tool_total: int = 0) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
-        # Tool execution has its own phase so the timer reflects the tool, not a
-        # frozen "thinking" label. Pass step/tool_index/tool_total so the bar can
-        # show "执行 read_file(1/3)" when multiple tools run in one round.
         self._set_phase("tool", tool_name=name, step=step,
                         tool_index=tool_index, tool_total=tool_total)
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"
-        self._add_text(f"⏺ {name}({args_str})", style="green")
+        self._render_q.append(("static", f"⏺ {name}({args_str})", "green"))
 
     def on_tool_end(self, name: str, result: str) -> None:
-        # Tool finished; the next model call (on_step_start) will re-enter thinking.
-        # Until then show responding-ish idle is wrong; go back to a brief thinking
-        # phase since the loop immediately calls the model again.
         self._set_phase("thinking")
         if not self.show_tool_output:
             first = result.splitlines()[0][:60] if result.splitlines() else ""
-            self._add_text(f"  → {first}{'…' if len(result) > 60 else ''}", style="dim")
+            self._render_q.append(("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim"))
             return
         lines = result.splitlines()
         shown = "\n".join(lines[:3])
         if len(lines) > 3:
             shown += f"\n…({len(lines) - 3} more lines)"
-        self._add_text(shown, style="dim")
+        self._render_q.append(("static", shown, "dim"))
 
     def on_truncated(self, stop_reason: str) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
-        self._add_static(Panel(
+        self._render_q.append(("panel", Panel(
             f"⚠ 输出被截断 (stop_reason: {stop_reason})。",
-            title="截断警告", border_style="yellow"))
+            title="截断警告", border_style="yellow")))
 
     def on_harness_warn(self, message: str) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
-        self._add_static(Panel(
+        self._render_q.append(("panel", Panel(
             f"⚠ {message}\n\n产出可能未经验证，请人工复核。",
-            title="⚠ harness 警告", border_style="red"))
+            title="⚠ harness 警告", border_style="red")))
 
     def on_finish(self) -> None:
-        # Capture the final output NOW (on the agent thread) and dispatch ALL the
-        # remaining rendering as ONE main-thread callback. Previously _flush_round_
-        # thinking and _flush_buffer each dispatched separately via call_from_thread
-        # — two async queue entries that could race or stall, and the final text
-        # Panel sometimes didn't appear until the user's NEXT input drained the
-        # queue. Bundling into one callback guarantees it all lands atomically.
-        import threading
+        # Capture everything remaining and push ONE finalize instruction.
+        # The main-thread drain will fold thinking + mount the final Markdown Panel.
         think_text = self._round_thinking
-        think_start = self._round_think_start
+        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
         had_live = self._live_think_body is not None
         buf = self.buffer
-        # Reset accumulated state immediately (so a next round starts clean).
+        # Reset accumulated state.
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._live_think_body = None
         self._live_think_chars = 0
         self.buffer = ""
-        # Capture the live output widget so we can remove it in the finalize callback
-        live_out = self._live_output
-        self._live_output = None
-        self._live_output_chars = 0
-
-        def _finalize():
-            """MAIN THREAD: fold thinking + mount the final answer Panel."""
-            import os
-            if os.environ.get("CODERIO_DEBUG"):
-                try:
-                    from pathlib import Path as _P
-                    with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                        f.write(f"{time.monotonic():.2f} finalize buf_chars={len(buf)} live_out={live_out is not None}\n")
-                except Exception:
-                    pass
-            if think_text.strip():
-                self._flush_round_thinking_main(think_text,
-                                                time.monotonic() - think_start if think_start else 0.0,
-                                                had_live)
-            if buf.strip():
-                # Remove the live raw-text widget (it was streaming); replace with Panel.
-                if live_out is not None:
-                    try:
-                        live_out.remove()
-                    except Exception:
-                        pass
-                self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
-            self._status_bar.set_phase("idle") if self._status_bar else None
-
-        if threading.current_thread() is threading.main_thread():
-            _finalize()
-        else:
-            self.call_from_thread(_finalize)
+        self._live_output_last_flush = 0.0
+        self._render_q.append(("finalize", buf, think_text, secs, had_live))
+        if self._status_bar:
+            self._status_bar.set_phase("idle")
 
     def add_usage(self, meta: dict[str, int]) -> None:
         for k in ("input_tokens", "output_tokens"):
@@ -735,51 +738,17 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- thinking fold (true fold/unfold)
     def _flush_round_thinking(self) -> None:
-        """Fold the live (in-progress) thinking block: collapse it and finalize
-        the title with the elapsed time + char count.
-
-        Runs on the agent's BACKGROUND thread (called by on_token/on_tool_start/
-        on_finish). Widget operations (title/collapsed/mount) must be on the main
-        thread, so the actual widget work is dispatched via call_from_thread.
-        The plain-attribute state (snapshot of the accumulated text) is captured
-        HERE and passed to the main-thread helper.
-        """
+        """Push a think_fold instruction to the render queue (agent thread)."""
         if not self._round_thinking.strip():
             return
-        # Snapshot the state to pass to the main thread (the attributes get reset
-        # below; the helper needs the values, not the live attributes).
         text = self._round_thinking
         secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
         had_live = self._live_think_body is not None
-        # Reset accumulated state NOW (so the next round starts clean even though
-        # the widget update is async).
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._live_think_body = None
         self._live_think_chars = 0
-        # Dispatch the widget work to the main thread.
-        import threading
-        if threading.current_thread() is threading.main_thread():
-            self._flush_round_thinking_main(text, secs, had_live)
-        else:
-            self.call_from_thread(self._flush_round_thinking_main, text, secs, had_live)
-
-    def _flush_round_thinking_main(self, text: str, secs: float, had_live: bool) -> None:
-        """MAIN THREAD: fold/create the thinking Collapsible. Called via
-        call_from_thread from _flush_round_thinking."""
-        chars = len(text)
-        title = f"💭 思考 · {secs:.1f}s · {chars} 字 · Ctrl+O / 点击展开"
-        if had_live and self._last_collapsible is not None:
-            # Live streaming happened: collapse the existing expanded block.
-            self._last_collapsible.title = title
-            self._last_collapsible.collapsed = True
-        else:
-            # Fallback: no live body (e.g. thinking arrived non-streamed).
-            body = Static(Text(text))
-            col = Collapsible(body, title=title, collapsed=True,
-                              collapsed_symbol="▶", expanded_symbol="▼", classes="think-block")
-            self._last_collapsible = col
-            self._mount_widget_main(col)
+        self._render_q.append(("think_fold", text, secs, had_live))
 
     def show_last_thinking(self) -> bool:
         """Expand the most recent thinking (compat with /think command)."""
@@ -791,39 +760,14 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- helpers: add content to history
     def _flush_buffer(self) -> None:
-        # The output was streamed live into _live_output; now finalize it by
-        # replacing the raw-text Static with a formatted Markdown Panel.
+        """Push the accumulated output to the render queue as a Panel instruction."""
         if self.buffer.strip():
-            self._finalize_live_output()
+            self._render_q.append(("panel", Panel(Markdown(self.buffer), border_style="blue", title="coderio")))
         self.buffer = ""
 
-    def _finalize_live_output(self) -> None:
-        """MAIN THREAD (via callers): replace the live raw-text Static with a
-        Markdown Panel, or mount one if there was no live widget."""
-        import threading
-        text = self.buffer
-        def _do():
-            # Remove the live raw-text widget if present (it'll be replaced by Panel)
-            if self._live_output is not None:
-                try:
-                    self._live_output.remove()
-                except Exception:
-                    pass
-                self._live_output = None
-                self._live_output_chars = 0
-            self._add_static_main(Panel(Markdown(text), border_style="blue", title="coderio"))
-        if threading.current_thread() is threading.main_thread():
-            _do()
-        else:
-            self.call_from_thread(_do)
-
     def _add_text(self, text: str, style: str = "") -> None:
-        """Thread-safe: add a styled text line to the history."""
-        import threading
-        if threading.current_thread() is not threading.main_thread():
-            self.call_from_thread(self._add_text_main, text, style)
-        else:
-            self._add_text_main(text, style)
+        """Push a text line to the render queue."""
+        self._render_q.append(("static", text, style))
 
     def _add_text_main(self, text: str, style: str = "") -> None:
         try:

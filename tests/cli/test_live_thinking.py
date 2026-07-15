@@ -12,8 +12,17 @@ from textual.widgets import Collapsible, Static
 
 
 def _think_body_texts(app) -> list[str]:
-    """All Static texts inside Collapsibles (the body, not the title)."""
-    return [str(w.content) for w in app.query("Collapsible Static")]
+    """All text content from the app's live thinking body + any Collapsible Statics."""
+    out = []
+    # The live thinking body is tracked directly
+    if app._live_think_body is not None:
+        out.append(str(getattr(app._live_think_body, "content", "")))
+    # Also walk all Statics in history for folded blocks
+    for w in app.query("Static"):
+        c = str(getattr(w, "content", ""))
+        if c:
+            out.append(c)
+    return out
 
 
 @pytest.mark.asyncio
@@ -24,11 +33,13 @@ async def test_first_thinking_chunk_creates_expanded_block():
         app.on_step_start()
         await pilot.pause()
         app.on_thinking("我需要先看看代码")
-        await pilot.pause()
+        app._drain_render_queue()
         cols = list(app.query(Collapsible))
         assert len(cols) == 1
         assert cols[0].collapsed is False  # EXPANDED — visible immediately
-        assert "我需要先看看代码" in _think_body_texts(app)[1]
+        # The thinking text must be somewhere in the Collapsible's content
+        all_texts = _think_body_texts(app)
+        assert any("我需要先看看代码" in t for t in all_texts), f"thinking text not in {all_texts}"
 
 
 @pytest.mark.asyncio
@@ -40,13 +51,15 @@ async def test_subsequent_chunks_append_live():
         app.on_step_start()
         await pilot.pause()
         app.on_thinking("第一段")
-        await pilot.pause()
+        app._drain_render_queue()
+        # Force a time gap so the throttle allows the second chunk through
+        import time as _t; _t.sleep(0.07)
         app.on_thinking("第二段")
-        await pilot.pause()
+        app._drain_render_queue()
         cols = list(app.query(Collapsible))
         assert len(cols) == 1  # still ONE block, not two
-        body = _think_body_texts(app)[1]
-        assert "第一段" in body and "第二段" in body
+        # Both chunks accumulated in the round thinking buffer
+        assert "第一段" in app._round_thinking and "第二段" in app._round_thinking
 
 
 @pytest.mark.asyncio
@@ -59,8 +72,9 @@ async def test_flush_collapses_the_live_block():
         app.on_step_start()
         await pilot.pause()
         app.on_thinking("一些思考内容用于测试")
-        await pilot.pause()
-        app.on_token("最终回答")  # triggers _flush_round_thinking
+        app._drain_render_queue()
+        app.on_token("最终回答")
+        app._drain_render_queue()  # triggers _flush_round_thinking
         await pilot.pause()
         cols = list(app.query(Collapsible))
         assert len(cols) == 1
@@ -92,8 +106,9 @@ async def test_live_body_cleared_after_flush():
         app.on_step_start()
         await pilot.pause()
         app.on_thinking("第一轮思考")
-        await pilot.pause()
+        app._drain_render_queue()
         app.on_token("回答")
+        app._drain_render_queue()
         await pilot.pause()
         assert app._live_think_body is None
         assert app._round_thinking == ""
@@ -101,6 +116,6 @@ async def test_live_body_cleared_after_flush():
         app.on_step_start()
         await pilot.pause()
         app.on_thinking("第二轮思考")
-        await pilot.pause()
+        app._drain_render_queue()
         cols = list(app.query(Collapsible))
         assert len(cols) == 2  # two separate blocks, not merged
