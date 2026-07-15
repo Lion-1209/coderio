@@ -555,6 +555,14 @@ class CoderioTUI(App):
 
     def _update_live_output(self, full_text: str) -> None:
         """MAIN THREAD: create or update the live output widget."""
+        import os
+        if os.environ.get("CODERIO_DEBUG"):
+            try:
+                from pathlib import Path as _P
+                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
+                    f.write(f"{time.monotonic():.2f} live_output update chars={len(full_text)}\n")
+            except Exception:
+                pass
         if self._live_output is None:
             self._live_output = Static(Text(full_text))
             self._live_output_chars = len(full_text)
@@ -677,6 +685,14 @@ class CoderioTUI(App):
 
         def _finalize():
             """MAIN THREAD: fold thinking + mount the final answer Panel."""
+            import os
+            if os.environ.get("CODERIO_DEBUG"):
+                try:
+                    from pathlib import Path as _P
+                    with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
+                        f.write(f"{time.monotonic():.2f} finalize buf_chars={len(buf)} live_out={live_out is not None}\n")
+                except Exception:
+                    pass
             if think_text.strip():
                 self._flush_round_thinking_main(think_text,
                                                 time.monotonic() - think_start if think_start else 0.0,
