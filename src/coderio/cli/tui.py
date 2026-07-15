@@ -464,33 +464,45 @@ class CoderioTUI(App):
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
-        pending instructions. Each instruction is a tuple (action_name, *args)."""
+        pending instructions, then scroll to bottom ONCE after all are done."""
+        did_render = False
         while self._render_q:
             action, *args = self._render_q.popleft()
             try:
                 if action == "text":
-                    # ("text", full_buffer) — update live output widget
                     self._render_live_output(args[0])
+                    did_render = True
                 elif action == "finalize":
-                    # ("finalize", buf, think_text, secs, had_live) — fold thinking + mount Panel
                     self._render_finalize(*args)
+                    did_render = True
                 elif action == "think_start":
-                    # ("think_start", full_text) — mount live thinking block
                     self._render_think_start(args[0])
+                    did_render = True
                 elif action == "think_update":
-                    # ("think_update", full_text) — update live thinking body
                     self._render_think_update(args[0])
+                    did_render = True
                 elif action == "think_fold":
-                    # ("think_fold", text, secs, had_live)
                     self._render_think_fold(*args)
+                    did_render = True
                 elif action == "static":
-                    # ("static", text, style) — add a text line
                     self._add_text_main(args[0], args[1] if len(args) > 1 else "")
+                    did_render = True
                 elif action == "panel":
-                    # ("panel", renderable) — mount a Panel
                     self._add_static_main(args[0])
+                    did_render = True
                 elif action == "exit":
                     self.exit()
+            except Exception:
+                pass
+        # After draining ALL queued items, scroll to the bottom — but DEFERRED via
+        # call_after_refresh so it runs AFTER Textual finishes the layout pass
+        # triggered by the mounts/updates above. Synchronous scroll_end here would
+        # read the OLD virtual_size (before the new widget's height is computed)
+        # and land above the true bottom — the 'truncated bottom border' bug.
+        if did_render:
+            try:
+                h = self.query_one("#history", VerticalScroll)
+                h.call_after_refresh(h.scroll_end, animate=False)
             except Exception:
                 pass
 
@@ -511,8 +523,6 @@ class CoderioTUI(App):
             self._mount_widget_main(self._live_out_widget)
         else:
             self._live_out_widget.update(Text(full_text))
-        # After updating (content grew taller), scroll to show the new tail.
-        self.call_after_refresh(self._scroll_history_end)
 
     def _render_think_start(self, full_text: str) -> None:
         """MAIN THREAD: mount the live (expanded) thinking block."""
@@ -527,7 +537,6 @@ class CoderioTUI(App):
         """MAIN THREAD: update the live thinking body."""
         if self._live_think_body is not None:
             self._live_think_body.update(Text(full_text))
-            self.call_after_refresh(self._scroll_history_end)
 
     def _render_think_fold(self, text: str, secs: float, had_live: bool) -> None:
         """MAIN THREAD: fold the thinking Collapsible."""
@@ -556,7 +565,6 @@ class CoderioTUI(App):
                     pass
                 self._live_out_widget = None
             self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
-            self.call_after_refresh(self._scroll_history_end)
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
