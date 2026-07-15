@@ -355,6 +355,14 @@ class CoderioTUI(App):
     CSS = """
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
+    /* Static widgets inside history MUST be height:auto — without this, Textual
+       defaults them to the viewport height (~15-24 rows), truncating any content
+       longer than the screen. This was the root cause of ALL output truncocation:
+       the data was complete (1228 chars confirmed via diagnostics), the render
+       queue worked (834 live_output entries), but the Static widget only painted
+       the first viewport-height worth of lines. height:auto makes it grow to fit
+       its full content so VerticalScroll can scroll through everything. */
+    #history Static { height: auto; }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     /* Collapsible thinking blocks */
