@@ -495,6 +495,15 @@ class CoderioTUI(App):
                 pass
 
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
+    def _scroll_history_end(self) -> None:
+        """Scroll the history pane to the bottom. Called after every content update
+        so the latest output is always visible."""
+        try:
+            h = self.query_one("#history", VerticalScroll)
+            h.scroll_end(animate=False)
+        except Exception:
+            pass
+
     def _render_live_output(self, full_text: str) -> None:
         """MAIN THREAD: create or update the live streaming output widget."""
         if self._live_out_widget is None:
@@ -502,6 +511,8 @@ class CoderioTUI(App):
             self._mount_widget_main(self._live_out_widget)
         else:
             self._live_out_widget.update(Text(full_text))
+        # After updating (content grew taller), scroll to show the new tail.
+        self.call_after_refresh(self._scroll_history_end)
 
     def _render_think_start(self, full_text: str) -> None:
         """MAIN THREAD: mount the live (expanded) thinking block."""
@@ -516,6 +527,7 @@ class CoderioTUI(App):
         """MAIN THREAD: update the live thinking body."""
         if self._live_think_body is not None:
             self._live_think_body.update(Text(full_text))
+            self.call_after_refresh(self._scroll_history_end)
 
     def _render_think_fold(self, text: str, secs: float, had_live: bool) -> None:
         """MAIN THREAD: fold the thinking Collapsible."""
@@ -544,6 +556,7 @@ class CoderioTUI(App):
                     pass
                 self._live_out_widget = None
             self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
+            self.call_after_refresh(self._scroll_history_end)
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
