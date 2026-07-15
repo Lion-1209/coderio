@@ -252,19 +252,23 @@ class StatusBar(Widget):
             return Text(labels["idle"], style="dim")
         elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
         label = labels.get(self.phase, self.phase)
-        # The spinner ANIMATES: each heartbeat advances _spin_frame, so this char
-        # cycles ⠋⠙⠹⠸⠼⠴⠦⠧ visibly while working (Claude Code's behavior).
+        # The spinner ANIMATES: each heartbeat advances _spin_frame.
         spin = self._SPINNER[self._spin_frame]
-        # "⠹ 步骤2 · 思考中 · 3.1s" or "⠼ 步骤2 · 执行 read_file(1/3) · 0.4s"
-        # no_wrap=True: the status line is 1 row; without this, Textual may wrap
-        # mid-string on rapid re-renders (the spinner frame changes every 80ms),
-        # which showed up as the leading '步' character intermittently vanishing.
+        # Build the Text by APPENDING separate spans. The braille spinner char and
+        # the CJK text are in different segments so Textual computes cell widths
+        # independently — mixing them in one f-string caused the terminal to
+        # miscalculate width (braille + CJK adjacency), intermittently eating the
+        # '步' character. Separate spans + overflow='ellipsis' + no_wrap fixes it.
         parts = []
         if step_tag:
             parts.append(step_tag)
         parts.append(label)
         parts.append(f"{elapsed:.1f}s")
-        return Text(f"{spin} " + " · ".join(parts), no_wrap=True)
+        body = " · ".join(parts)
+        t = Text(no_wrap=True, overflow="ellipsis")
+        t.append(spin + " ", style="bold cyan")
+        t.append(body)
+        return t
 
 
 class SessionPickerScreen(ModalScreen[str | None]):
