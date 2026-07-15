@@ -398,6 +398,7 @@ class CoderioTUI(App):
         # failed to scroll into view. Streaming into a live widget avoids both.
         self._live_output: Static | None = None
         self._live_output_chars = 0
+        self._live_output_last_flush: float = 0.0  # throttle: only flush >=80ms apart
         # Cached StatusBar reference: query_one() is a DOM query that Textual
         # requires on the main thread, but _set_phase is called from the agent's
         # BACKGROUND thread (StreamHandler callbacks). Calling query_one there
@@ -542,16 +543,23 @@ class CoderioTUI(App):
         bar = self._status_bar
         if bar is None or bar.phase != "responding":
             self._set_phase("responding")
-        # STREAM OUTPUT LIVE: create a Static widget on the first token, then
-        # append each subsequent token. This replaces the old buffer-then-render-
-        # at-once approach that caused long outputs to truncate or not scroll into
-        # view. The user now sees text grow in real time (like ChatGPT/Claude).
+        # STREAM OUTPUT LIVE — but THROTTLED. Calling call_from_thread on EVERY
+        # token (thousands per response) flooded the main event loop's callback
+        # queue — _update_live_output never got to run, and the output appeared
+        # to truncate. Now: accumulate in self.buffer on the agent thread, and
+        # only dispatch a UI update at most once per ~80ms. The final on_finish
+        # flush captures whatever buffer remains, so no content is lost between
+        # throttle ticks.
         self.buffer += text
-        import threading
-        if threading.current_thread() is threading.main_thread():
-            self._update_live_output(self.buffer)
-        else:
-            self.call_from_thread(self._update_live_output, self.buffer)
+        now = time.monotonic()
+        is_first = self._live_output is None
+        if is_first or (now - self._live_output_last_flush) >= 0.08:
+            self._live_output_last_flush = now
+            import threading
+            if threading.current_thread() is threading.main_thread():
+                self._update_live_output(self.buffer)
+            else:
+                self.call_from_thread(self._update_live_output, self.buffer)
 
     def _update_live_output(self, full_text: str) -> None:
         """MAIN THREAD: create or update the live output widget."""
