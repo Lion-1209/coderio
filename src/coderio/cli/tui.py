@@ -513,11 +513,15 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
     def _scroll_history_end(self) -> None:
-        """Scroll the history pane to the bottom. Called after every content update
-        so the latest output is always visible."""
+        """Scroll the history pane to the bottom."""
+        import os
         try:
             h = self.query_one("#history", VerticalScroll)
             h.scroll_end(animate=False)
+            if os.environ.get("CODERIO_DEBUG"):
+                from pathlib import Path as _P
+                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
+                    f.write(f"scroll_end: scroll_y={h.scroll_y:.0f} virtual={h.virtual_size.height} content={h.content_size.height}\n")
         except Exception:
             pass
 
