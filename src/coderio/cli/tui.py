@@ -625,9 +625,37 @@ class CoderioTUI(App):
             self.set_timer(0.15, self._scroll_history_end)
             self.set_timer(0.3, self._scroll_history_end)
             self.set_timer(0.5, self._scroll_history_end)
+            if os.environ.get("CODERIO_DEBUG"):
+                # Capture the compositor screen AFTER scroll settles, so we can
+                # see exactly what Textual believes is on screen vs what the user
+                # sees. This is the decisive diagnostic.
+                self.set_timer(0.7, lambda: self._debug_screen(widget))
 
         # Defer setting content until after the empty widget's layout settles.
         self.call_after_refresh(_set_content)
+
+    def _debug_screen(self, widget) -> None:
+        import os
+        if not os.environ.get("CODERIO_DEBUG"):
+            return
+        try:
+            from pathlib import Path as _P
+            from textual.geometry import Size
+            h = self.query_one("#history", VerticalScroll)
+            strips = self.screen._compositor.render_strips(
+                Size(self.size.width, self.size.height))
+            screen = "\n".join("".join(seg.text for seg in st).rstrip() for st in strips)
+            # Also extract what the Static itself renders at its full height
+            # (all rows, not just the viewport) to compare.
+            header = (f"widget_vh={widget.virtual_size.height} widget_w={widget.size.width} "
+                      f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f} "
+                      f"history_vh={h.virtual_size.height} ch={h.content_size.height}\n")
+            with open(_P.home() / ".coderio" / "screen_capture.txt", "w",
+                      encoding="utf-8") as f:
+                f.write(header + "=== COMPOSITOR SCREEN (what Textual thinks user sees) ===\n"
+                        + screen)
+        except Exception:
+            pass
 
     def _debug_panel_height(self, widget) -> None:
         import os
