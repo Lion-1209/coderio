@@ -596,10 +596,15 @@ class CoderioTUI(App):
         history = self.query_one("#history")
         widget = Static(panel)
         history.mount(widget)
+        # Force a full screen refresh — without this, Textual may not repaint
+        # after the worker ends (idle state), leaving the Panel's bottom
+        # invisible until the next user input triggers a refresh.
+        self.refresh()
         if os.environ.get("CODERIO_DEBUG"):
             self.set_timer(0.2, lambda: self._debug_panel_height(widget))
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
+        self.set_timer(0.5, self._scroll_history_end)
 
     def _debug_panel_height(self, widget) -> None:
         import os
