@@ -40,7 +40,6 @@ class CommandMenu(Vertical):
         display: none;          /* hidden until input starts with "/" */
         dock: bottom;
         height: auto; max-height: 12;
-        layer: above;
         background: $surface;
         border: round $accent;
         padding: 0;
@@ -356,19 +355,16 @@ class CoderioTUI(App):
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
     #history Static { height: auto; }
-    /* The final output Panel's border is drawn via CSS (not a Rich Panel wrapper).
-       Rich's Panel(Markdown) has a measurement/render row-count mismatch for CJK
-       content that clips the bottom border. A CSS border is drawn by Textual's
-       layout engine outside the content, so it always renders correctly. */
-    .final-panel { border: round blue; padding: 0 1; }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
-    /* Command menu sits above the input bar; input bar must allow overlay */
-    Screen { layers: base above; }
-    #input-bar { layer: base; }
+    /* NOTE: do NOT define `Screen { layers }` here. Defining layers changes how
+       Textual computes the scrollable region's rendering — the bottom rows of
+       scrolled content stop rendering when layers are active (the long-output
+       truncation bug). The CommandMenu popup uses display:none/block for
+       show/hide and dock:bottom for positioning, so it does NOT need layers. */
     """
 
     BINDINGS = [
@@ -592,82 +588,24 @@ class CoderioTUI(App):
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
-        """MAIN THREAD: mount the final Markdown output with a CSS border.
+        """MAIN THREAD: mount the final Markdown Panel and scroll to the bottom.
 
-        THE ROOT CAUSE (final, confirmed via headless compositor capture):
-        Rich's Panel(Markdown) wrapper has a measurement/render discrepancy —
-        Panel.get_height() reports MORE rows than the Panel actually renders at
-        certain widths (especially for CJK content). Static measures N rows but
-        the Panel only renders N-k rows, so the bottom k rows (incl. the Panel's
-        bottom border `╰╯` and the final content lines) are blank/missing.
-        scroll_end lands within virtual_size but shows blank space — looks like
-        truncation at ~95-99%. No amount of height-pinning fixes this because the
-        RENDERED strips are short regardless of the declared height.
-
-        THE FIX: do NOT wrap Markdown in a Rich Panel. Render Markdown directly
-        in a Static with a CSS border (`.final-panel { border: round blue }`).
-        CSS borders are drawn by Textual's layout engine OUTSIDE the content area
-        — they don't participate in Rich's row counting, so there's no
-        measurement/render mismatch. The border always renders correctly and the
-        full Markdown content renders at its natural line count.
+        Simple and correct: mount Static(Panel(Markdown(buf))). The long-output
+        truncation bug (bottom rows not rendering after scroll) was NOT caused by
+        the Panel, by height measurement, or by Conpty — it was caused by the
+        `Screen { layers: base above }` CSS definition, which changes how Textual
+        computes the scrollable region's rendering: with layers active, the
+        bottom rows of scrolled-to-the-end content stop rendering (they render
+        as blank). Removing the layers definition fixes it completely. Verified:
+        sentinel text + Panel bottom border both visible after scroll_end, on
+        both narrow (80) and wide (214) terminals.
         """
-        import os
         history = self.query_one("#history")
-        widget = Static("")
-        widget.add_class("final-panel")
+        widget = Static(Panel(Markdown(buf), border_style="blue", title="coderio"))
         history.mount(widget)
-
-        def _set_content():
-            # widget.size.width is now the REAL container width (settled).
-            # Markdown WITHOUT a Panel wrapper — the border comes from CSS.
-            widget.update(Markdown(buf))
-            if os.environ.get("CODERIO_DEBUG"):
-                self.set_timer(0.2, lambda: self._debug_panel_height(widget))
-            self.set_timer(0.15, self._scroll_history_end)
-            self.set_timer(0.3, self._scroll_history_end)
-            self.set_timer(0.5, self._scroll_history_end)
-            if os.environ.get("CODERIO_DEBUG"):
-                self.set_timer(0.7, lambda: self._debug_screen(widget))
-
-        # Defer setting content until the empty widget's width has settled.
-        self.call_after_refresh(_set_content)
-
-    def _debug_screen(self, widget) -> None:
-        import os
-        if not os.environ.get("CODERIO_DEBUG"):
-            return
-        try:
-            from pathlib import Path as _P
-            from textual.geometry import Size
-            h = self.query_one("#history", VerticalScroll)
-            strips = self.screen._compositor.render_strips(
-                Size(self.size.width, self.size.height))
-            screen = "\n".join("".join(seg.text for seg in st).rstrip() for st in strips)
-            # Also extract what the Static itself renders at its full height
-            # (all rows, not just the viewport) to compare.
-            header = (f"widget_vh={widget.virtual_size.height} widget_w={widget.size.width} "
-                      f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f} "
-                      f"history_vh={h.virtual_size.height} ch={h.content_size.height}\n")
-            with open(_P.home() / ".coderio" / "screen_capture.txt", "w",
-                      encoding="utf-8") as f:
-                f.write(header + "=== COMPOSITOR SCREEN (what Textual thinks user sees) ===\n"
-                        + screen)
-        except Exception:
-            pass
-
-    def _debug_panel_height(self, widget) -> None:
-        import os
-        if os.environ.get("CODERIO_DEBUG"):
-            try:
-                from pathlib import Path as _P
-                h = self.query_one("#history")
-                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"panel_check: widget_vh={widget.virtual_size.height} "
-                            f"widget_w={widget.size.width} "
-                            f"history_vh={h.virtual_size.height} history_ch={h.content_size.height} "
-                            f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f}\n")
-            except Exception:
-                pass
+        self.set_timer(0.15, self._scroll_history_end)
+        self.set_timer(0.3, self._scroll_history_end)
+        self.set_timer(0.5, self._scroll_history_end)
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
