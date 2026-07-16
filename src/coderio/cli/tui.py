@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Collapsible, Input, ListItem, ListView, Static
+from textual.widgets import Collapsible, Input, ListItem, ListView, RichLog, Static
 
 
 class CommandMenu(Vertical):
@@ -392,12 +392,12 @@ class CoderioTUI(App):
         # round's thinking is flushed/folded.
         self._live_think_body: Static | None = None
         self._live_think_chars = 0  # chars shown so far (to append only the delta)
-        # Live output: the Static widget for IN-PROGRESS visible text. While
-        # non-None, on_token appends to it in real time (user sees the answer grow
-        # as it streams, like ChatGPT/Claude). Previously tokens accumulated in
-        # self.buffer with NO rendering until on_finish, then a giant Markdown
-        # Panel was mounted at once — long outputs (2000+ chars) truncated or
-        # failed to scroll into view. Streaming into a live widget avoids both.
+        # Live output: a RichLog widget for streaming the answer as it arrives.
+        # RichLog is append-only — each token chunk is written once, without the
+        # full-widget layout recompute that Static.update(Text(full_buffer))
+        # triggers every 60ms. That recompute was the source of the streaming
+        # jitter/flicker (the whole history re-laid-out on every token batch).
+        # On finish, the RichLog is replaced by the final Markdown Panel.
         self._live_output: Static | None = None
         self._live_output_chars = 0
         self._live_output_last_flush: float = 0.0  # throttle: only flush >=80ms apart
@@ -419,7 +419,8 @@ class CoderioTUI(App):
         # used by the StatusBar heartbeat (statusbar.log: 85k+ reliable renders).
         import collections
         self._render_q: collections.deque = collections.deque()
-        self._live_out_widget: Static | None = None  # the live output Static (main thread)
+        self._live_out_widget: RichLog | None = None  # streaming output RichLog (main thread)
+        self._live_rendered_len: int = 0  # chars already written to the RichLog
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -495,6 +496,14 @@ class CoderioTUI(App):
                 elif action == "panel":
                     self._add_static_main(args[0])
                     did_final = True
+                elif action == "clear_live":
+                    if self._live_out_widget is not None:
+                        try:
+                            self._live_out_widget.remove()
+                        except Exception:
+                            pass
+                        self._live_out_widget = None
+                        self._live_rendered_len = 0
                 elif action == "exit":
                     self.exit()
             except Exception:
@@ -534,18 +543,22 @@ class CoderioTUI(App):
             pass
 
     def _render_live_output(self, full_text: str) -> None:
-        """MAIN THREAD: create or update the live streaming output widget.
+        """MAIN THREAD: append the NEW part of the streaming text to a RichLog.
 
-        Uses layout=True on update (the text grows, so the widget's height must
-        recompute for new lines to show). The jitter fix is NOT here — it's in
-        _drain_render_queue, which now uses a single immediate scroll for
-        streaming updates instead of 3 delayed timers that piled up and caused
-        scroll→relayout→scroll flicker."""
+        RichLog is append-only: each call writes just the delta (the new
+        characters since the last write), NOT the full buffer re-rendered. This
+        avoids the layout recompute that Static.update(Text(full_buffer))
+        triggered every 60ms — that recompute re-laid-out the entire history
+        and caused the visible streaming jitter/flicker."""
         if self._live_out_widget is None:
-            self._live_out_widget = Static(Text(full_text))
+            self._live_out_widget = RichLog(wrap=True, markup=False, auto_scroll=True)
             self._mount_widget_main(self._live_out_widget)
-        else:
-            self._live_out_widget.update(Text(full_text))
+            self._live_rendered_len = 0
+        # Write only the delta (new chars since last write).
+        delta = full_text[self._live_rendered_len:]
+        if delta:
+            self._live_rendered_len = len(full_text)
+            self._live_out_widget.write(delta)
 
     def _render_think_start(self, full_text: str) -> None:
         """MAIN THREAD: mount the live (expanded) thinking block."""
@@ -594,14 +607,14 @@ class CoderioTUI(App):
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
         if buf.strip():
-            # Step 1: remove the live raw-text widget (this tick)
+            # Remove the streaming RichLog and replace with the final Markdown Panel.
             if self._live_out_widget is not None:
                 try:
                     self._live_out_widget.remove()
                 except Exception:
                     pass
                 self._live_out_widget = None
-            # Step 2: mount in the NEXT layout cycle (after removal processed).
+                self._live_rendered_len = 0
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
@@ -847,7 +860,10 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- helpers: add content to history
     def _flush_buffer(self) -> None:
-        """Push the accumulated output to the render queue as a Panel instruction."""
+        """Push the accumulated output to the render queue, replacing the live
+        streaming RichLog with a final Markdown Panel (mid-turn tool calls)."""
+        # Remove the live streaming widget first (if present).
+        self._render_q.append(("clear_live",))
         if self.buffer.strip():
             self._render_q.append(("panel", Panel(Markdown(self.buffer), border_style="blue", title="coderio")))
         self.buffer = ""
