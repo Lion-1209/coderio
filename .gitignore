@@ -20,6 +20,19 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+*.egg-info/
+build/
+dist/
+
+# Testing / linting
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# coderio user data (project-local layer)
+.coderio/
 
 # Misc
 *.log
