@@ -594,50 +594,40 @@ class CoderioTUI(App):
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
-        """MAIN THREAD: pre-render the final Markdown to a styled Rich Text at the
-        history's inner width, then mount as Static(Text).
+        """MAIN THREAD: mount the final Markdown Panel, ensuring its height is
+        measured at the CORRECT (final) container width.
 
-        Mounting a pre-rendered Text (not a deferred Panel(Markdown) renderable)
-        makes Static's height auto-measure EXACTLY the rendered line count — no
-        phantom height inflation. Color is preserved by capturing the raw ANSI
-        output and re-parsing it with Text.from_ansi()."""
-        import io
+        THE BUG (root cause of all truncation): Static's height auto-measurement
+        runs during an early layout pass. If the container width isn't settled
+        yet (still the default ~76 cols, or 0), CJK-heavy content wraps to ~2x
+        as many lines as at the final width. That inflated height is cached and
+        never recomputed — virtual_size says 122 rows but only 61 are rendered,
+        so scroll_end lands in a phantom empty region and the bottom is blank.
+
+        THE FIX: mount the Static EMPTY first. After one layout pass its width
+        has settled to the real container width. THEN set the Panel(Markdown)
+        content via update() — height:auto now measures at the correct width, so
+        virtual_size matches the rendered line count. No manual pre-rendering,
+        no width guessing, no pinned height that can drift.
+        """
         import os
-        from rich.console import Console
-        from rich.text import Text
         history = self.query_one("#history")
-        # Render the Panel at the REAL available width (history content width).
-        # Using a fixed width here (not Textual's deferred width) is the fix: the
-        # height Textual measures will match the lines we render, byte for byte.
-        inner_w = max(20, history.content_size.width or 76)
-        out = io.StringIO()
-        console = Console(
-            width=inner_w, force_terminal=True, color_system="256",
-            file=out, legacy_windows=False, safe_box=True, soft_wrap=False,
-        )
-        console.print(Panel(Markdown(buf), border_style="blue", title="coderio"))
-        # from_ansi parses the raw ANSI escapes back into styled Text spans, so
-        # color is preserved while the height is just len(plain.splitlines()).
-        rendered = Text.from_ansi(out.getvalue().rstrip("\n"))
-        widget = Static(rendered)
-        # THE FIX: set an explicit pixel-exact height instead of relying on
-        # Static's deferred get_height auto-measurement. That auto-measure is
-        # computed during an early layout pass at a NARROW (default) container
-        # width, where CJK-heavy content wraps to ~2x as many lines. The result
-        # is cached and NOT recomputed when the container reaches its full width
-        # — so the widget's virtual_size says e.g. 122 rows while it only renders
-        # 61. scroll_end then lands in the phantom empty region (rows 62-122),
-        # showing nothing where the Panel's bottom border + tail should be.
-        # Counting lines ourselves and pinning styles.height forces virtual_size
-        # to exactly match the rendered content, byte for byte.
-        n_lines = rendered.plain.count("\n") + 1
-        widget.styles.height = n_lines
+        widget = Static("")
         history.mount(widget)
-        if os.environ.get("CODERIO_DEBUG"):
-            self.set_timer(0.2, lambda: self._debug_panel_height(widget))
-        self.set_timer(0.15, self._scroll_history_end)
-        self.set_timer(0.3, self._scroll_history_end)
-        self.set_timer(0.5, self._scroll_history_end)
+
+        def _set_content():
+            # By now the widget has been through a layout pass and its width is
+            # the real container width. Setting content here makes height:auto
+            # measure correctly.
+            widget.update(Panel(Markdown(buf), border_style="blue", title="coderio"))
+            if os.environ.get("CODERIO_DEBUG"):
+                self.set_timer(0.2, lambda: self._debug_panel_height(widget))
+            self.set_timer(0.15, self._scroll_history_end)
+            self.set_timer(0.3, self._scroll_history_end)
+            self.set_timer(0.5, self._scroll_history_end)
+
+        # Defer setting content until after the empty widget's layout settles.
+        self.call_after_refresh(_set_content)
 
     def _debug_panel_height(self, widget) -> None:
         import os
@@ -647,9 +637,9 @@ class CoderioTUI(App):
                 h = self.query_one("#history")
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
                     f.write(f"panel_check: widget_vh={widget.virtual_size.height} "
-                            f"plain_lines={widget.content.plain.count(chr(10)) + 1 if hasattr(widget.content, 'plain') else '?'} "
+                            f"widget_w={widget.size.width} "
                             f"history_vh={h.virtual_size.height} history_ch={h.content_size.height} "
-                            f"scroll_y={h.scroll_y:.0f} max_scroll={h.max_scroll_y:.0f}\n")
+                            f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f}\n")
             except Exception:
                 pass
 
