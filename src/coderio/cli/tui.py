@@ -354,7 +354,7 @@ class CoderioTUI(App):
 
     CSS = """
     Screen { layout: vertical; }
-    #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
+    #history { border: none; height: 1fr; min-height: 10; padding: 0 1; }
     /* Static widgets inside history MUST be height:auto — without this, Textual
        defaults them to the viewport height (~15-24 rows), truncating any content
        longer than the screen. This was the root cause of ALL output truncocation:
