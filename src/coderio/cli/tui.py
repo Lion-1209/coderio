@@ -500,13 +500,14 @@ class CoderioTUI(App):
         # read the OLD virtual_size (before the new widget's height is computed)
         # and land above the true bottom — the 'truncated bottom border' bug.
         if did_render:
-            # Defer scroll by 150ms (set_timer, not call_after_refresh) to give
-            # Textual enough time to complete the FULL layout pass for newly
-            # mounted large Panels. call_after_refresh fires after ONE refresh
-            # cycle, but a big Markdown Panel may need multiple passes to settle
-            # its final height — scrolling too early lands above the true bottom.
+            # Multi-stage scroll: large Markdown Panels need multiple layout passes
+            # to reach their final height. A single scroll_end (even deferred) may
+            # fire before the height settles, leaving the bottom 5-10% below the
+            # viewport. Scroll 3 times at increasing delays to converge.
             try:
-                self.set_timer(0.15, self._scroll_history_end)
+                self.set_timer(0.1, self._scroll_history_end)
+                self.set_timer(0.25, self._scroll_history_end)
+                self.set_timer(0.5, self._scroll_history_end)
             except Exception:
                 pass
 
@@ -557,18 +558,51 @@ class CoderioTUI(App):
             self._mount_widget_main(col)
 
     def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
-        """MAIN THREAD: fold thinking + replace live output with final Markdown Panel."""
+        """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
+
+        Two-step process to avoid Textual's layout bug: remove() + mount() in the
+        SAME tick clamps the new widget's height to viewport (Static.update() also
+        fails to recompute height). Instead: remove the live widget now, then
+        mount the fresh Panel via call_after_refresh (next tick) so the layout
+        engine processes the removal before computing the new widget's height.
+        """
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
         if buf.strip():
-            # Remove the live raw-text widget, mount a Markdown Panel.
+            panel = Panel(Markdown(buf), border_style="blue", title="coderio")
+            # Step 1: remove the live raw-text widget (this tick)
             if self._live_out_widget is not None:
                 try:
                     self._live_out_widget.remove()
                 except Exception:
                     pass
                 self._live_out_widget = None
-            self._add_static_main(Panel(Markdown(buf), border_style="blue", title="coderio"))
+            # Step 2: mount the Panel in the NEXT layout cycle so height:auto
+            # is computed fresh (not inherited from the removed widget's height).
+            self.call_after_refresh(self._mount_final_panel, panel)
+
+    def _mount_final_panel(self, panel) -> None:
+        """MAIN THREAD: mount the final output Panel (called via call_after_refresh
+        from _render_finalize, so the removal has been processed first). Then
+        schedule scrolling AFTER the mount settles."""
+        import os
+        history = self.query_one("#history")
+        widget = Static(panel)
+        history.mount(widget)
+        if os.environ.get("CODERIO_DEBUG"):
+            self.set_timer(0.2, lambda: self._debug_panel_height(widget))
+        self.set_timer(0.15, self._scroll_history_end)
+        self.set_timer(0.3, self._scroll_history_end)
+
+    def _debug_panel_height(self, widget) -> None:
+        import os
+        if os.environ.get("CODERIO_DEBUG"):
+            try:
+                from pathlib import Path as _P
+                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
+                    f.write(f"panel_height_check: virtual_h={widget.virtual_size.height} styles_height={widget.styles.height}\n")
+            except Exception:
+                pass
 
     # ----------------------------------------------------- status bar (phase routing)
     def _set_phase(self, phase: str, tool_name: str = "", step: int = 0,
