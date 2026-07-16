@@ -1,13 +1,13 @@
-"""Deepagents-backed agent entry point (parallel to agent/loop.run_agent).
+"""EXPERIMENTAL: Deepagents-backed agent entry point (parallel to agent/loop.run_agent).
 
 This provides run_deep_agent: an alternative engine built on deepagents'
 create_deep_agent (which gives us context management, planning tool, and
 subagent capability for free) while preserving coderio's harness as a
 middleware (the "wrote code but never verified → block done" hard constraint).
 
-Coexists with run_agent (the ReAct loop). The CLI selects between them via the
-`engine` config. run_agent remains the default; deepagent is opt-in until it
-proves stable.
+Status: experimental. Not wired into the CLI by default (run_agent / ReAct is
+the production engine). deepagents is an optional dependency
+(`pip install coderio[deepagent]`). Only used by scripts/verify_deepagent_live.py.
 
 Tool-name note: deepagents' FilesystemMiddleware provides its own read_file/
 write_file/edit_file/glob/grep/ls/execute/task tools, which collide with

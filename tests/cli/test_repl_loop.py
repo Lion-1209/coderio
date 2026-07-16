@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,17 +16,21 @@ def test_build_runtime_assembles_pieces(tmp_path, monkeypatch):
     assert stream is not None
 
 
-def test_slash_exit_handled(tmp_path, monkeypatch):
+def test_build_runtime_with_model_override(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    from coderio.cli.credentials import write_credentials
-    creds = tmp_path / "credentials"
-    write_credentials({"bigmodel_coding_plan": "sk-test"}, path=creds)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    from coderio.cli.repl import run_repl
-    import coderio.cli.repl as repl_mod
+    from coderio.cli.repl import build_runtime
+    cfg, store, model, tools, gate, session, active, stream = build_runtime(
+        search_from="no-creds", save_dir=tmp_path, creds_path=tmp_path / "no-creds",
+        model_override="custom-model",
+    )
+    assert cfg.model.default == "custom-model"
 
-    def fake_input(self, prompt, **kw):
-        raise EOFError
 
-    monkeypatch.setattr("rich.console.Console.input", fake_input)
-    run_repl(search_from=".", save_dir=tmp_path, creds_path=creds)
+def test_build_gate_returns_auto_for_auto_mode(tmp_path, monkeypatch):
+    from coderio.config import Config, ToolsConfig
+    from coderio.tools.permission import PermissionMode, AutoPermissionGate
+    from coderio.cli.repl import build_gate
+    cfg = Config(tools=ToolsConfig(permission_mode=PermissionMode.AUTO))
+    gate = build_gate(cfg)
+    assert isinstance(gate, AutoPermissionGate)

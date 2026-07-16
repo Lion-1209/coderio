@@ -14,7 +14,6 @@ dependencies = [
     "langchain-openai>=0.2",
     "langchain>=0.3",
     "langgraph>=0.2",
-    "deepagents>=0.6",
     "pydantic>=2",
     "rich>=13",
     "textual>=0.40",
@@ -24,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+deepagent = ["deepagents>=0.6"]
 
 [project.scripts]
 coderio = "coderio.cli.app:main_entry"

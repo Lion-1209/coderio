@@ -1,4 +1,4 @@
-"""Harness as a deepagents AgentMiddleware.
+"""EXPERIMENTAL: Harness as a deepagents AgentMiddleware.
 
 This ports coderio's structural harness (the "wrote code but never verified →
 block done" hard constraint) into deepagents' middleware layer. The existing
