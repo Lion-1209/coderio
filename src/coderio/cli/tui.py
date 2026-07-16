@@ -614,15 +614,62 @@ class CoderioTUI(App):
         self.set_timer(0.6, self._conpty_repaint_nudge)
 
     def _conpty_repaint_nudge(self) -> None:
-        """Force a single layout+repaint of the history scroll area, then
-        re-assert the bottom scroll position. Runs once, 0.6s after the final
-        Panel mounted — after every scroll timer has fired — so it does not race
-        the layout passes (which is what broke short outputs when refresh() was
-        called at mount time)."""
+        """Force a full-screen repaint, then re-assert the bottom scroll position.
+
+        Diagnosis confirmed this is the only reliable fix for the long-output
+        truncation on VSCode's integrated terminal (Conpty + xterm.js):
+          - Textual's internal state is CORRECT (statusbar.log: scroll_y reaches
+            max_scroll, virtual_size is the full content height).
+          - Textual -> driver bytes are CORRECT (captured diff contains the
+            Panel's bottom border '╰╯' and the truncated text).
+          - Yet the physical screen doesn't show the bottom rows until the next
+            input. This is Conpty/xterm.js dropping the cursor-based diff writes
+            for the newly-scrolled-in bottom region.
+
+        The proven workaround: mark the ENTIRE SCREEN region dirty (not just
+        #history). Textual's render_update then emits every row as a fresh write
+        (a full repaint, not a partial diff), so Conpty cannot miss the bottom —
+        every row is explicitly re-sent. A scoped #history refresh (the previous
+        attempt) only re-emits the scroll area and Conpty still dropped it.
+
+        Runs once, 0.6s after the final Panel mounted — after every scroll timer
+        (0.15/0.3/0.5s) has fired — so it does not race the layout passes (which
+        is what corrupted short outputs when a refresh ran at mount time).
+        """
         try:
+            from textual.geometry import Region
             history = self.query_one("#history", VerticalScroll)
-            history.refresh(layout=True)
+            # Mark the whole screen dirty: forces render_update to emit ALL rows.
+            full_screen = Region(0, 0, self.size.width, self.size.height)
+            self.screen.refresh(full_screen, layout=True)
             history.scroll_end(animate=False)
+            # Diagnostic: capture what Textual's compositor believes is on screen
+            # RIGHT AFTER the full repaint. If this shows the bottom border but the
+            # user's terminal doesn't, the bug is confirmed Conpty-side and we have
+            # proof Textual did its job.
+            import os as _os
+            if _os.environ.get("CODERIO_DEBUG"):
+                self.set_timer(0.15, self._debug_screen_capture)
+        except Exception:
+            pass
+
+    def _debug_screen_capture(self) -> None:
+        """Capture the compositor's final screen state to a file for diagnosis."""
+        import os
+        if not os.environ.get("CODERIO_DEBUG"):
+            return
+        try:
+            from pathlib import Path as _P
+            from textual.geometry import Size
+            strips = self.screen._compositor.render_strips(
+                Size(self.size.width, self.size.height))
+            lines = []
+            for st in strips:
+                lines.append("".join(seg.text for seg in st))
+            out = "\n".join(lines)
+            with open(_P.home() / ".coderio" / "screen_capture.txt", "w",
+                      encoding="utf-8") as f:
+                f.write(out)
         except Exception:
             pass
 
