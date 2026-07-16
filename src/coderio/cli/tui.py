@@ -355,14 +355,12 @@ class CoderioTUI(App):
     CSS = """
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
-    /* Static widgets inside history MUST be height:auto — without this, Textual
-       defaults them to the viewport height (~15-24 rows), truncating any content
-       longer than the screen. This was the root cause of ALL output truncocation:
-       the data was complete (1228 chars confirmed via diagnostics), the render
-       queue worked (834 live_output entries), but the Static widget only painted
-       the first viewport-height worth of lines. height:auto makes it grow to fit
-       its full content so VerticalScroll can scroll through everything. */
     #history Static { height: auto; }
+    /* The final output Panel's border is drawn via CSS (not a Rich Panel wrapper).
+       Rich's Panel(Markdown) has a measurement/render row-count mismatch for CJK
+       content that clips the bottom border. A CSS border is drawn by Textual's
+       layout engine outside the content, so it always renders correctly. */
+    .final-panel { border: round blue; padding: 0 1; }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     /* Collapsible thinking blocks */
@@ -594,44 +592,44 @@ class CoderioTUI(App):
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
-        """MAIN THREAD: mount the final Markdown Panel, ensuring its height is
-        measured at the CORRECT (final) container width.
+        """MAIN THREAD: mount the final Markdown output with a CSS border.
 
-        THE BUG (root cause of all truncation): Static's height auto-measurement
-        runs during an early layout pass. If the container width isn't settled
-        yet (still the default ~76 cols, or 0), CJK-heavy content wraps to ~2x
-        as many lines as at the final width. That inflated height is cached and
-        never recomputed — virtual_size says 122 rows but only 61 are rendered,
-        so scroll_end lands in a phantom empty region and the bottom is blank.
+        THE ROOT CAUSE (final, confirmed via headless compositor capture):
+        Rich's Panel(Markdown) wrapper has a measurement/render discrepancy —
+        Panel.get_height() reports MORE rows than the Panel actually renders at
+        certain widths (especially for CJK content). Static measures N rows but
+        the Panel only renders N-k rows, so the bottom k rows (incl. the Panel's
+        bottom border `╰╯` and the final content lines) are blank/missing.
+        scroll_end lands within virtual_size but shows blank space — looks like
+        truncation at ~95-99%. No amount of height-pinning fixes this because the
+        RENDERED strips are short regardless of the declared height.
 
-        THE FIX: mount the Static EMPTY first. After one layout pass its width
-        has settled to the real container width. THEN set the Panel(Markdown)
-        content via update() — height:auto now measures at the correct width, so
-        virtual_size matches the rendered line count. No manual pre-rendering,
-        no width guessing, no pinned height that can drift.
+        THE FIX: do NOT wrap Markdown in a Rich Panel. Render Markdown directly
+        in a Static with a CSS border (`.final-panel { border: round blue }`).
+        CSS borders are drawn by Textual's layout engine OUTSIDE the content area
+        — they don't participate in Rich's row counting, so there's no
+        measurement/render mismatch. The border always renders correctly and the
+        full Markdown content renders at its natural line count.
         """
         import os
         history = self.query_one("#history")
         widget = Static("")
+        widget.add_class("final-panel")
         history.mount(widget)
 
         def _set_content():
-            # By now the widget has been through a layout pass and its width is
-            # the real container width. Setting content here makes height:auto
-            # measure correctly.
-            widget.update(Panel(Markdown(buf), border_style="blue", title="coderio"))
+            # widget.size.width is now the REAL container width (settled).
+            # Markdown WITHOUT a Panel wrapper — the border comes from CSS.
+            widget.update(Markdown(buf))
             if os.environ.get("CODERIO_DEBUG"):
                 self.set_timer(0.2, lambda: self._debug_panel_height(widget))
             self.set_timer(0.15, self._scroll_history_end)
             self.set_timer(0.3, self._scroll_history_end)
             self.set_timer(0.5, self._scroll_history_end)
             if os.environ.get("CODERIO_DEBUG"):
-                # Capture the compositor screen AFTER scroll settles, so we can
-                # see exactly what Textual believes is on screen vs what the user
-                # sees. This is the decisive diagnostic.
                 self.set_timer(0.7, lambda: self._debug_screen(widget))
 
-        # Defer setting content until after the empty widget's layout settles.
+        # Defer setting content until the empty widget's width has settled.
         self.call_after_refresh(_set_content)
 
     def _debug_screen(self, widget) -> None:

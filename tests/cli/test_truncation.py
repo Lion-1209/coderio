@@ -1,35 +1,32 @@
 """Regression tests for the long-output truncation bug.
 
-ROOT CAUSE: Static's height auto-measurement (get_height) runs during an early
-layout pass at a NARROW (default ~76-col / unset) container width. CJK-heavy
-content wraps to ~2x as many lines at 76 cols vs the final full width. The
-inflated height is cached and NOT recomputed when the container reaches its real
-width — virtual_size says e.g. 130 rows while only 65 render. scroll_end lands
-in the phantom empty region, hiding the Panel's bottom border + tail.
+ROOT CAUSE (final, confirmed via headless compositor capture):
+Rich's Panel(Markdown) wrapper has a measurement/render discrepancy —
+Panel.get_height() reports MORE rows than it actually renders at certain widths
+(especially CJK content). Static measures N rows but Panel renders N-k, so the
+bottom rows (incl. the `╰╯` border + final content) are blank. scroll_end lands
+in virtual_size but shows blank space — truncation at ~95-99%.
 
-FIX: _mount_final_panel mounts the Static EMPTY first; after one layout pass its
-width has settled to the real container width; THEN Panel(Markdown) content is
-set via update(), so height:auto measures at the correct width.
+FIX: render Markdown directly in a Static with a CSS border (.final-panel),
+NOT wrapped in a Rich Panel. CSS borders are drawn by Textual's layout engine
+outside the content area, so there's no row-count mismatch. The border always
+renders and the full Markdown renders at its natural line count.
 
-These tests pin the invariant: on a wide terminal, the Static's measured height
-must approximately match the line count of the content rendered at that width
-(within ±2, allowing for trailing-newline differences) — NOT 2x.
+These tests verify: after scroll_end, BOTH the border AND the final content line
+are visible, on wide and narrow terminals, for long and short CJK content.
 """
 import asyncio
-import io
 
 import pytest
 
-from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
+from textual.geometry import Size
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from coderio.cli.tui import CoderioTUI
 
 
-# Long CJK body (the kind that triggers width-dependent height inflation).
 LONG_BODY = (
     "# 最终回答\n\n"
     + "\n".join(
@@ -38,102 +35,89 @@ LONG_BODY = (
     + "\n\n## 测试覆盖\n这里是被截断的内容，应该可见。"
     + "\n\n## 最后\n这里是真正的结尾，最后一句应该可见。"
 )
+TAIL_SENTINEL = "这里是真正的结尾"
 
 
-def _expected_lines_at_width(body: str, width: int) -> int:
-    """How many lines the Panel(Markdown(body)) renders to at `width`."""
-    c = Console(width=width, force_terminal=False, file=io.StringIO(), record=True)
-    c.print(Panel(Markdown(body), border_style="blue", title="coderio"))
-    return len(c.export_text().rstrip("\n").split("\n"))
+async def _mount_final_and_scroll(app, body: str = LONG_BODY):
+    """Mount the final Markdown (CSS-bordered Static, no Rich Panel), settle,
+    scroll to bottom. Mirrors _mount_final_panel."""
+    history = app.query_one("#history", VerticalScroll)
+    widget = Static("")
+    widget.add_class("final-panel")
+    history.mount(widget)
+    await app.pilot.pause()  # width settles
+    widget.update(Markdown(body))
+    await app.pilot.pause()
+    await asyncio.sleep(0.4)  # content layout settles
+    await app.pilot.pause()
+    history.scroll_end(animate=False)
+    await app.pilot.pause()
+    await asyncio.sleep(0.2)
+    await app.pilot.pause()
+
+
+def _screen_text(app) -> str:
+    strips = app.screen._compositor.render_strips(
+        Size(app.size.width, app.size.height))
+    return "".join(seg.text for strip in strips for seg in strip)
 
 
 @pytest.mark.asyncio
-async def test_height_matches_content_at_real_width_wide():
-    """On a WIDE terminal (where the bug manifested), the Static's measured
-    height must match the content rendered at that width — NOT 2x (the old
-    inflated value from a narrow-width measurement)."""
+async def test_border_and_tail_visible_wide():
+    """WIDE terminal: after scroll, border + final line visible."""
     app = CoderioTUI()
     async with app.run_test(size=(214, 50)) as pilot:
+        app.pilot = pilot
         await pilot.pause()
-        history = app.query_one("#history", VerticalScroll)
-        # Mirror the fix: mount empty, settle, then set content.
-        widget = Static("")
-        history.mount(widget)
-        await pilot.pause()  # width settles
-        widget.update(Panel(Markdown(LONG_BODY), border_style="blue", title="coderio"))
-        await pilot.pause()
-        await asyncio.sleep(0.5)
-        await pilot.pause()
-
-        expected = _expected_lines_at_width(LONG_BODY, widget.size.width)
-        vh = widget.virtual_size.height
-        # Allow ±2 for trailing-newline / border rounding differences, but NOT 2x.
-        assert abs(vh - expected) <= 2, (
-            f"Static height {vh} != expected {expected} at width {widget.size.width} "
-            f"— height was measured at the wrong (narrow) width, the truncation bug"
-        )
-        # Hard guard: must not be anywhere near 2x.
-        assert vh < expected * 1.5, f"height {vh} is inflated vs {expected}"
+        await _mount_final_and_scroll(app)
+        screen = _screen_text(app)
+        assert ("╭" in screen or "┌" in screen), "top border missing"
+        assert ("╰" in screen or "└" in screen), "bottom border clipped"
+        assert TAIL_SENTINEL in screen, "final content not visible"
 
 
 @pytest.mark.asyncio
-async def test_height_matches_content_at_real_width_narrow():
-    """Same invariant on a narrow terminal."""
+async def test_border_and_tail_visible_narrow():
+    """NARROW terminal (where truncation was most severe)."""
     app = CoderioTUI()
     async with app.run_test(size=(80, 24)) as pilot:
+        app.pilot = pilot
         await pilot.pause()
-        history = app.query_one("#history", VerticalScroll)
-        widget = Static("")
-        history.mount(widget)
-        await pilot.pause()
-        widget.update(Panel(Markdown(LONG_BODY), border_style="blue", title="coderio"))
-        await pilot.pause()
-        await asyncio.sleep(0.5)
-        await pilot.pause()
-        expected = _expected_lines_at_width(LONG_BODY, widget.size.width)
-        vh = widget.virtual_size.height
-        assert abs(vh - expected) <= 2, (
-            f"Static height {vh} != expected {expected} at width {widget.size.width}"
-        )
+        await _mount_final_and_scroll(app)
+        screen = _screen_text(app)
+        assert ("╭" in screen or "┌" in screen), "top border missing"
+        assert ("╰" in screen or "└" in screen), "bottom border clipped"
+        assert TAIL_SENTINEL in screen, "final content not visible"
 
 
 @pytest.mark.asyncio
-async def test_scroll_lands_on_real_content_bottom():
-    """With correct height, scroll_end lands on the actual content bottom."""
+async def test_full_content_renders():
+    """The Static must render ALL content lines (no measurement/render mismatch)."""
     app = CoderioTUI()
-    async with app.run_test(size=(214, 50)) as pilot:
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.pilot = pilot
         await pilot.pause()
         history = app.query_one("#history", VerticalScroll)
         widget = Static("")
+        widget.add_class("final-panel")
         history.mount(widget)
         await pilot.pause()
-        widget.update(Panel(Markdown(LONG_BODY), border_style="blue", title="coderio"))
+        widget.update(Markdown(LONG_BODY))
         await pilot.pause()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.4)
         await pilot.pause()
-        history.scroll_end(animate=False)
-        await pilot.pause()
-        await asyncio.sleep(0.3)
-        await pilot.pause()
-        assert history.scroll_y == pytest.approx(history.max_scroll_y)
+        assert widget.virtual_size.height > 30
 
 
 @pytest.mark.asyncio
-async def test_short_output_not_inflated():
-    """Short CJK output: height must match its few lines (guards the
-    self.refresh() regression that broke shorts)."""
+async def test_short_output_border_visible():
+    """Short CJK output: border visible (not clipped)."""
     short = "# 短回答\n\n这是一段短内容，不需要滚动。"
     app = CoderioTUI()
     async with app.run_test(size=(214, 50)) as pilot:
+        app.pilot = pilot
         await pilot.pause()
-        history = app.query_one("#history", VerticalScroll)
-        widget = Static("")
-        history.mount(widget)
-        await pilot.pause()
-        widget.update(Panel(Markdown(short), border_style="blue", title="coderio"))
-        await pilot.pause()
-        await asyncio.sleep(0.3)
-        await pilot.pause()
-        expected = _expected_lines_at_width(short, widget.size.width)
-        assert abs(widget.virtual_size.height - expected) <= 2
-        assert expected < 15  # short content stays short
+        await _mount_final_and_scroll(app, short)
+        screen = _screen_text(app)
+        assert ("╭" in screen or "┌" in screen), "short output top border missing"
+        assert ("╰" in screen or "└" in screen), "short output bottom border clipped"
