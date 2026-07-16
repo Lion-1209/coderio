@@ -458,50 +458,61 @@ class CoderioTUI(App):
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
-        pending instructions, then scroll to bottom ONCE after all are done."""
-        did_render = False
+        pending instructions, then scroll to bottom.
+
+        Two scroll strategies depending on what was rendered:
+          - STREAMING updates (text/think_update): fire ONE immediate scroll_end
+            via call_after_refresh. These fire every ~60ms during output; scheduling
+            3 delayed scroll timers per update caused timer pile-up and the
+            visible jitter/flicker (scroll → relayout → scroll repeating).
+          - FINAL render (finalize/static/panel/think_fold): these mount new widgets
+            whose height needs multiple layout passes to settle, so use the
+            multi-stage delayed scroll (0.15/0.3/0.5s).
+        """
+        did_streaming = False
+        did_final = False
         while self._render_q:
             action, *args = self._render_q.popleft()
             try:
                 if action == "text":
                     self._render_live_output(args[0])
-                    did_render = True
+                    did_streaming = True
                 elif action == "finalize":
                     self._render_finalize(*args)
-                    did_render = True
+                    did_final = True
                 elif action == "think_start":
                     self._render_think_start(args[0])
-                    did_render = True
+                    did_streaming = True
                 elif action == "think_update":
                     self._render_think_update(args[0])
-                    did_render = True
+                    did_streaming = True
                 elif action == "think_fold":
                     self._render_think_fold(*args)
-                    did_render = True
+                    did_final = True
                 elif action == "static":
                     self._add_text_main(args[0], args[1] if len(args) > 1 else "")
-                    did_render = True
+                    did_final = True
                 elif action == "panel":
                     self._add_static_main(args[0])
-                    did_render = True
+                    did_final = True
                 elif action == "exit":
                     self.exit()
             except Exception:
                 pass
-        # After draining ALL queued items, scroll to the bottom — but DEFERRED via
-        # call_after_refresh so it runs AFTER Textual finishes the layout pass
-        # triggered by the mounts/updates above. Synchronous scroll_end here would
-        # read the OLD virtual_size (before the new widget's height is computed)
-        # and land above the true bottom — the 'truncated bottom border' bug.
-        if did_render:
-            # Multi-stage scroll: large Markdown Panels need multiple layout passes
-            # to reach their final height. A single scroll_end (even deferred) may
-            # fire before the height settles, leaving the bottom 5-10% below the
-            # viewport. Scroll 3 times at increasing delays to converge.
+        # Scroll strategy: streaming = single immediate scroll (no timer pile-up);
+        # final = multi-stage delayed scroll (large Panels need layout passes).
+        if did_final:
             try:
-                self.set_timer(0.1, self._scroll_history_end)
-                self.set_timer(0.25, self._scroll_history_end)
+                self.set_timer(0.15, self._scroll_history_end)
+                self.set_timer(0.3, self._scroll_history_end)
                 self.set_timer(0.5, self._scroll_history_end)
+            except Exception:
+                pass
+        elif did_streaming:
+            try:
+                # Single deferred scroll — runs after this tick's layout settles,
+                # but doesn't pile up like 3 delayed timers would over 60ms cycles.
+                self.call_after_refresh(self._scroll_history_end)
             except Exception:
                 pass
 
@@ -523,7 +534,13 @@ class CoderioTUI(App):
             pass
 
     def _render_live_output(self, full_text: str) -> None:
-        """MAIN THREAD: create or update the live streaming output widget."""
+        """MAIN THREAD: create or update the live streaming output widget.
+
+        Uses layout=True on update (the text grows, so the widget's height must
+        recompute for new lines to show). The jitter fix is NOT here — it's in
+        _drain_render_queue, which now uses a single immediate scroll for
+        streaming updates instead of 3 delayed timers that piled up and caused
+        scroll→relayout→scroll flicker."""
         if self._live_out_widget is None:
             self._live_out_widget = Static(Text(full_text))
             self._mount_widget_main(self._live_out_widget)

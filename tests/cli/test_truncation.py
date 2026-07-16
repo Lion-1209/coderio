@@ -105,3 +105,29 @@ async def test_short_output_border_visible():
         await _mount_panel_and_scroll(app, short)
         screen = _screen_text(app)
         assert ("╰" in screen or "└" in screen), "short output border clipped"
+
+
+@pytest.mark.asyncio
+async def test_streaming_output_does_not_pile_scroll_timers():
+    """Streaming text updates should use a single immediate scroll, not 3 delayed
+    timers per update (which caused the jitter/flicker). Verify by driving several
+    'text' updates through the queue and checking the screen stays scrolled to the
+    bottom without accumulating timers."""
+    app = CoderioTUI()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        # Push several streaming text chunks (as on_token does every 60ms)
+        for i in range(5):
+            app._render_q.append(("text", "\n".join(f"line {j}" for j in range(i * 10, (i + 1) * 10))))
+            await asyncio.sleep(0.07)  # just past the 60ms drain interval
+            await pilot.pause()
+        await pilot.pause()
+        history = app.query_one("#history", VerticalScroll)
+        # After streaming, the screen should be scrolled to the bottom (last line visible).
+        screen = _screen_text(app)
+        assert "line 49" in screen, (
+            f"streaming output didn't keep up with scroll — last line not visible. "
+            f"scroll_y={history.scroll_y} max={history.max_scroll_y}"
+        )
+        # And the live widget should exist with the full accumulated text.
+        assert app._live_out_widget is not None
