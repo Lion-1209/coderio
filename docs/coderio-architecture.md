@@ -1,8 +1,8 @@
 # coderio 架构设计文档
 
 - **文档版本**：2026-07-02（基于实际代码库，非早期 spec）
-- **代码规模**：~3600 行 Python（src/coderio），238 测试全绿
-- **技术栈**：Python 3.11 + langchain 1.x + Rich + Typer，Windows 优先
+- **代码规模**：~3600 行 Python（src/coderio），327 测试全绿
+- **技术栈**：Python 3.11 + langchain + langgraph + Textual + Rich + Typer，Windows 优先
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
 
 > 本文档描述的是**当前代码库的实际状态**。S0/S1/S2 早期设计 spec 见 `docs/superpowers/specs/`，本文是它们实现后的整合视图。
@@ -429,22 +429,23 @@ _execute_turn(harness=h)  循环：
 
 诚实记录，待后续处理：
 
-1. **`config.harness` 未接入 TOML loader**：`SkillsConfig.harness` 字段存在且默认 True，但 `loader._from_dict` 没读它——所以无法通过 config.toml 关闭 harness（只能改代码或传参）。harness 当前只能通过 `run_agent(harness_enabled=False)` 或环境层关闭。
+1. **子模块状态**：Lion-Skills 作为目录拷贝存在于 `src/coderio/skills/lion-skills/`，是 vendored 拷贝而非 git submodule，更新需手动同步。用户可通过 `coderio skills install` 从上游 repo 拉取最新版到用户目录。
 
-2. **子模块状态**：Lion-Skills 作为目录拷贝存在于 `src/coderio/skills/lion-skills/`，但 `.gitmodules` 已不在工作树（恢复时丢失）。当前是 vendored 拷贝而非真子模块，更新需手动同步。
+2. **代码注释/docstring 为重建近似**：部分文件从 `.pyc` 反编译重建（见 git log `d4b24e2`），行为正确（327 测试验证），但注释措辞非原始逐字。
 
-3. **代码注释/docstring 为重建近似**：部分文件从 `.pyc` 反编译重建（见 git log `d4b24e2`），行为正确（238 测试验证），但注释措辞非原始逐字。
+3. **harness 的 `harness_enabled` 只有 run_agent 入口**：crew 路径硬编码 `harness=None`，未来若想让 crew 单个 role 也享受 harness 需 per-role 传入。
 
-4. **harness 的 `harness_enabled` 只有 run_agent 入口**：crew 路径硬编码 `harness=None`，未来若想让 crew 单个 role 也享受 harness 需 per-role 传入。
+4. **deepagents engine 实验性**：`deep_loop.py` + `harness_middleware.py` 实现了 deepagents 引擎（harness 作为 middleware），但未接入 CLI（默认用 ReAct）。deepagents 已改为可选依赖（`pip install coderio[deepagent]`）。
 
 ---
 
 ## 10. 测试与验证体系
 
-- **238 单元/集成测试**（pytest），覆盖所有模块
+- **327 单元/集成测试**（pytest），覆盖所有模块
 - **Live 验证脚本**（`scripts/verify_*_live.py`）：连真实智谱/阶跃端点验证
   - `verify_harness_live.py`：4 场景（验证门触发/通过/禁用/工具错误韧性）
-  - `verify_s0/s1/s2_live.py`：各子系统真实验证
+  - `verify_crew_live.py`：crew 流水线真实验证
+  - `verify_deepagent_live.py`：deepagents engine 验证（实验性）
 - **VS Code tasks**（`.vscode/tasks.json`）：REPL 启动、测试、live 验证一键运行
 
 测试设计原则：mock 只 mock 模型，工具是真的（避免"mock 通过但真实 provider 翻车"——这是项目历史教训）。
