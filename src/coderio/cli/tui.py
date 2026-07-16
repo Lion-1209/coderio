@@ -576,7 +576,17 @@ class CoderioTUI(App):
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
         if buf.strip():
-            panel = Panel(Markdown(buf), border_style="blue", title="coderio")
+            # Use Markdown rendered to a Console at the widget's actual width,
+            # then wrap in a Panel. Plain Panel(Markdown(buf)) causes Textual's
+            # Static to mismeasure height (73 vs 93 actual lines) because the
+            # internal width used for height calc differs from the render width.
+            # Pre-rendering avoids the mismatch.
+            from rich.console import Console as _Console, Group
+            _c = _Console(width=74, force_terminal=False)
+            with _c.capture() as _cap:
+                _c.print(Markdown(buf))
+            _md_text = _cap.get()
+            panel = Panel(_md_text, border_style="blue", title="coderio")
             # Step 1: remove the live raw-text widget (this tick)
             if self._live_out_widget is not None:
                 try:
