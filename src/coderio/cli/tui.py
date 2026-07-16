@@ -567,16 +567,22 @@ class CoderioTUI(App):
     def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
         """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
 
-        Two-step process to avoid Textual's layout bug: remove() + mount() in the
-        SAME tick clamps the new widget's height to viewport (Static.update() also
-        fails to recompute height). Instead: remove the live widget now, then
-        mount the fresh Panel via call_after_refresh (next tick) so the layout
-        engine processes the removal before computing the new widget's height.
+        The final answer is PRE-RENDERED to plain text at the history container's
+        inner width, then mounted as a Static string — NOT as Static(Panel(Markdown)).
+
+        Why: the previous Static(Panel(Markdown(buf))) path relied on Textual's
+        deferred RichVisual height calc (get_height), which on the user's wide
+        VSCode terminal measured the widget at ~2x its true rendered height
+        (widget_vh=122 while the rendered content was ~61 rows). The layout then
+        thought the widget was 122 rows tall, scrolled to y=200, and showed the
+        EMPTY region (rows 61-122) instead of the content — the bottom border and
+        tail were 'below' a phantom empty area. Pre-rendering to text at a known
+        width makes the Static's measured height EXACTLY match its rendered lines,
+        so scroll_end lands on the real content bottom.
         """
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
         if buf.strip():
-            panel = Panel(Markdown(buf), border_style="blue", title="coderio")
             # Step 1: remove the live raw-text widget (this tick)
             if self._live_out_widget is not None:
                 try:
@@ -584,137 +590,66 @@ class CoderioTUI(App):
                 except Exception:
                     pass
                 self._live_out_widget = None
-            # Step 2: mount the Panel in the NEXT layout cycle so height:auto
-            # is computed fresh (not inherited from the removed widget's height).
-            self.call_after_refresh(self._mount_final_panel, panel)
+            # Step 2: mount in the NEXT layout cycle (after removal processed).
+            self.call_after_refresh(self._mount_final_panel, buf)
 
-    def _mount_final_panel(self, panel) -> None:
-        """MAIN THREAD: mount the final output Panel (called via call_after_refresh
-        from _render_finalize, so the removal has been processed first). Then
-        schedule scrolling AFTER the mount settles."""
+    def _mount_final_panel(self, buf: str) -> None:
+        """MAIN THREAD: pre-render the final Markdown to a styled Rich Text at the
+        history's inner width, then mount as Static(Text).
+
+        Mounting a pre-rendered Text (not a deferred Panel(Markdown) renderable)
+        makes Static's height auto-measure EXACTLY the rendered line count — no
+        phantom height inflation. Color is preserved by capturing the raw ANSI
+        output and re-parsing it with Text.from_ansi()."""
+        import io
         import os
+        from rich.console import Console
+        from rich.text import Text
         history = self.query_one("#history")
-        widget = Static(panel)
+        # Render the Panel at the REAL available width (history content width).
+        # Using a fixed width here (not Textual's deferred width) is the fix: the
+        # height Textual measures will match the lines we render, byte for byte.
+        inner_w = max(20, history.content_size.width or 76)
+        out = io.StringIO()
+        console = Console(
+            width=inner_w, force_terminal=True, color_system="256",
+            file=out, legacy_windows=False, safe_box=True, soft_wrap=False,
+        )
+        console.print(Panel(Markdown(buf), border_style="blue", title="coderio"))
+        # from_ansi parses the raw ANSI escapes back into styled Text spans, so
+        # color is preserved while the height is just len(plain.splitlines()).
+        rendered = Text.from_ansi(out.getvalue().rstrip("\n"))
+        widget = Static(rendered)
+        # THE FIX: set an explicit pixel-exact height instead of relying on
+        # Static's deferred get_height auto-measurement. That auto-measure is
+        # computed during an early layout pass at a NARROW (default) container
+        # width, where CJK-heavy content wraps to ~2x as many lines. The result
+        # is cached and NOT recomputed when the container reaches its full width
+        # — so the widget's virtual_size says e.g. 122 rows while it only renders
+        # 61. scroll_end then lands in the phantom empty region (rows 62-122),
+        # showing nothing where the Panel's bottom border + tail should be.
+        # Counting lines ourselves and pinning styles.height forces virtual_size
+        # to exactly match the rendered content, byte for byte.
+        n_lines = rendered.plain.count("\n") + 1
+        widget.styles.height = n_lines
         history.mount(widget)
         if os.environ.get("CODERIO_DEBUG"):
             self.set_timer(0.2, lambda: self._debug_panel_height(widget))
-            # Capture the widget's measured height + the buf length, so we can
-            # tell whether the Static measured the Panel at its FULL height or
-            # got clamped. This is the key diagnostic for the truncation bug.
-            self._debug_last_panel_widget = widget
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
         self.set_timer(0.5, self._scroll_history_end)
-        # Conpty repaint nudge (VSCode integrated terminal / Windows Terminal):
-        # After the agent worker ends the app goes idle. Conpty's dirty-line
-        # tracking can miss the bottom rows newly scrolled into view (the Panel's
-        # lower border + tail) — they only repaint on the NEXT input event, which
-        # is the 'content appears on the next message' symptom. The scroll timers
-        # above run BEFORE layout fully settles, so nudging there races and can
-        # corrupt short outputs. This fires LAST (0.6s, after every scroll has
-        # completed), scoped to #history only, with layout=True so Conpty gets a
-        # fresh full-region repaint of the scroll area. Verified in test that
-        # scroll_y/max_scroll and widget height stay correct after this call.
-        self.set_timer(0.6, self._conpty_repaint_nudge)
-
-    def _conpty_repaint_nudge(self) -> None:
-        """Force a full-screen repaint, then re-assert the bottom scroll position.
-
-        Diagnosis confirmed this is the only reliable fix for the long-output
-        truncation on VSCode's integrated terminal (Conpty + xterm.js):
-          - Textual's internal state is CORRECT (statusbar.log: scroll_y reaches
-            max_scroll, virtual_size is the full content height).
-          - Textual -> driver bytes are CORRECT (captured diff contains the
-            Panel's bottom border '╰╯' and the truncated text).
-          - Yet the physical screen doesn't show the bottom rows until the next
-            input. This is Conpty/xterm.js dropping the cursor-based diff writes
-            for the newly-scrolled-in bottom region.
-
-        The proven workaround: mark the ENTIRE SCREEN region dirty (not just
-        #history). Textual's render_update then emits every row as a fresh write
-        (a full repaint, not a partial diff), so Conpty cannot miss the bottom —
-        every row is explicitly re-sent. A scoped #history refresh (the previous
-        attempt) only re-emits the scroll area and Conpty still dropped it.
-
-        Runs once, 0.6s after the final Panel mounted — after every scroll timer
-        (0.15/0.3/0.5s) has fired — so it does not race the layout passes (which
-        is what corrupted short outputs when a refresh ran at mount time).
-        """
-        try:
-            from textual.geometry import Region
-            history = self.query_one("#history", VerticalScroll)
-            # Mark the whole screen dirty: forces render_update to emit ALL rows.
-            full_screen = Region(0, 0, self.size.width, self.size.height)
-            self.screen.refresh(full_screen, layout=True)
-            history.scroll_end(animate=False)
-            # Diagnostic: capture what Textual's compositor believes is on screen
-            # RIGHT AFTER the full repaint. If this shows the bottom border but the
-            # user's terminal doesn't, the bug is confirmed Conpty-side and we have
-            # proof Textual did its job.
-            import os as _os
-            if _os.environ.get("CODERIO_DEBUG"):
-                self.set_timer(0.15, self._debug_screen_capture)
-        except Exception:
-            pass
-
-    def _debug_screen_capture(self) -> None:
-        """Capture the compositor's final screen state to a file for diagnosis."""
-        import os
-        if not os.environ.get("CODERIO_DEBUG"):
-            return
-        try:
-            from pathlib import Path as _P
-            from textual.geometry import Size
-            history = self.query_one("#history", VerticalScroll)
-            header_lines = [
-                f"=== TRUNCATION DIAGNOSTIC ===",
-                f"terminal size: {self.size.width}x{self.size.height}",
-                f"history virtual_size: {history.virtual_size}",
-                f"history content_size: {history.content_size}",
-                f"scroll_y: {history.scroll_y}  max_scroll: {history.max_scroll_y}",
-                f"children count: {len(history.children)}",
-            ]
-            w = getattr(self, "_debug_last_panel_widget", None)
-            if w is not None:
-                header_lines.append(
-                    f"LAST PANEL Static virtual_size: {w.virtual_size} "
-                    f"content_size: {w.content_size}")
-            strips = self.screen._compositor.render_strips(
-                Size(self.size.width, self.size.height))
-            screen_lines = ["".join(seg.text for seg in st) for st in strips]
-            # Mark which screen rows fall inside the last Panel (for readability)
-            out = "\n".join(header_lines) + "\n=== SCREEN ===\n" + "\n".join(screen_lines)
-            with open(_P.home() / ".coderio" / "screen_capture.txt", "w",
-                      encoding="utf-8") as f:
-                f.write(out)
-        except Exception:
-            pass
 
     def _debug_panel_height(self, widget) -> None:
         import os
         if os.environ.get("CODERIO_DEBUG"):
             try:
                 from pathlib import Path as _P
-                from textual.geometry import Size
                 h = self.query_one("#history")
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
                     f.write(f"panel_check: widget_vh={widget.virtual_size.height} "
+                            f"plain_lines={widget.content.plain.count(chr(10)) + 1 if hasattr(widget.content, 'plain') else '?'} "
                             f"history_vh={h.virtual_size.height} history_ch={h.content_size.height} "
-                            f"scroll_y={h.scroll_y:.0f} max_scroll={h.virtual_size.height - h.content_size.height}\n")
-                # Also snapshot what the compositor ACTUALLY rendered at this
-                # moment (0.2s after mount) — alongside the widget_vh measurement.
-                # If widget_vh=7 but the screen only shows 2 rows of that panel,
-                # the bug is Textual's render (not our code, not Conpty).
-                strips = self.screen._compositor.render_strips(
-                    Size(self.size.width, self.size.height))
-                screen = "\n".join("".join(seg.text for seg in st) for st in strips)
-                # show just the tail (last 12 rows) to find the panel bottom
-                tail = "\n".join(screen.split("\n")[-12:])
-                with open(_P.home() / ".coderio" / "screen_at_panel_check.txt", "w",
-                          encoding="utf-8") as f:
-                    f.write(f"widget_vh={widget.virtual_size.height} "
-                            f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f}\n"
-                            f"=== LAST 12 SCREEN ROWS ===\n{tail}\n")
+                            f"scroll_y={h.scroll_y:.0f} max_scroll={h.max_scroll_y:.0f}\n")
             except Exception:
                 pass
 
