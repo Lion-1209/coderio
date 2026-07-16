@@ -598,6 +598,10 @@ class CoderioTUI(App):
         history.mount(widget)
         if os.environ.get("CODERIO_DEBUG"):
             self.set_timer(0.2, lambda: self._debug_panel_height(widget))
+            # Capture the widget's measured height + the buf length, so we can
+            # tell whether the Static measured the Panel at its FULL height or
+            # got clamped. This is the key diagnostic for the truncation bug.
+            self._debug_last_panel_widget = widget
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
         self.set_timer(0.5, self._scroll_history_end)
@@ -661,12 +665,25 @@ class CoderioTUI(App):
         try:
             from pathlib import Path as _P
             from textual.geometry import Size
+            history = self.query_one("#history", VerticalScroll)
+            header_lines = [
+                f"=== TRUNCATION DIAGNOSTIC ===",
+                f"terminal size: {self.size.width}x{self.size.height}",
+                f"history virtual_size: {history.virtual_size}",
+                f"history content_size: {history.content_size}",
+                f"scroll_y: {history.scroll_y}  max_scroll: {history.max_scroll_y}",
+                f"children count: {len(history.children)}",
+            ]
+            w = getattr(self, "_debug_last_panel_widget", None)
+            if w is not None:
+                header_lines.append(
+                    f"LAST PANEL Static virtual_size: {w.virtual_size} "
+                    f"content_size: {w.content_size}")
             strips = self.screen._compositor.render_strips(
                 Size(self.size.width, self.size.height))
-            lines = []
-            for st in strips:
-                lines.append("".join(seg.text for seg in st))
-            out = "\n".join(lines)
+            screen_lines = ["".join(seg.text for seg in st) for st in strips]
+            # Mark which screen rows fall inside the last Panel (for readability)
+            out = "\n".join(header_lines) + "\n=== SCREEN ===\n" + "\n".join(screen_lines)
             with open(_P.home() / ".coderio" / "screen_capture.txt", "w",
                       encoding="utf-8") as f:
                 f.write(out)
@@ -678,11 +695,26 @@ class CoderioTUI(App):
         if os.environ.get("CODERIO_DEBUG"):
             try:
                 from pathlib import Path as _P
+                from textual.geometry import Size
                 h = self.query_one("#history")
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
                     f.write(f"panel_check: widget_vh={widget.virtual_size.height} "
                             f"history_vh={h.virtual_size.height} history_ch={h.content_size.height} "
                             f"scroll_y={h.scroll_y:.0f} max_scroll={h.virtual_size.height - h.content_size.height}\n")
+                # Also snapshot what the compositor ACTUALLY rendered at this
+                # moment (0.2s after mount) — alongside the widget_vh measurement.
+                # If widget_vh=7 but the screen only shows 2 rows of that panel,
+                # the bug is Textual's render (not our code, not Conpty).
+                strips = self.screen._compositor.render_strips(
+                    Size(self.size.width, self.size.height))
+                screen = "\n".join("".join(seg.text for seg in st) for st in strips)
+                # show just the tail (last 12 rows) to find the panel bottom
+                tail = "\n".join(screen.split("\n")[-12:])
+                with open(_P.home() / ".coderio" / "screen_at_panel_check.txt", "w",
+                          encoding="utf-8") as f:
+                    f.write(f"widget_vh={widget.virtual_size.height} "
+                            f"scroll_y={h.scroll_y:.0f} max={h.max_scroll_y:.0f}\n"
+                            f"=== LAST 12 SCREEN ROWS ===\n{tail}\n")
             except Exception:
                 pass
 
