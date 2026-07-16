@@ -43,9 +43,13 @@ if _PROVIDER == "stepfun":
     BASE = os.environ.get("CODERIO_BASE_URL", "https://api.stepfun.com/step_plan")
     MODEL_NAME = os.environ.get("CODERIO_MODEL", "step-3.7-flash")
 else:
-    KEY = os.environ.get("ANTHROPIC_API_KEY") or "REDACTED_API_KEY"
+    KEY = os.environ.get("ANTHROPIC_API_KEY") or ""
     BASE = os.environ.get("CODERIO_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
     MODEL_NAME = os.environ.get("CODERIO_MODEL", "GLM-5.2")
+
+if not KEY:
+    print("Error: set ANTHROPIC_API_KEY (or STEP_KEY for stepfun provider) env var.")
+    raise SystemExit(1)
 
 MODEL = ChatAnthropic(model=MODEL_NAME, base_url=BASE, api_key=KEY)
 print(f"[provider] {_PROVIDER} | model={MODEL_NAME} | base={BASE}")

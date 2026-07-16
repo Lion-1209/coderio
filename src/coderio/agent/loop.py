@@ -154,40 +154,11 @@ def run_step(
     bound = bound_cache.get(langchain_tools, (system_prompt,))
     lc_msgs = _to_langchain_messages(system_prompt, convo)
     aggregated = None  # AIMessageChunk accumulator; its tool_calls are complete at end.
-    # Diagnostic: log each chunk's structure when CODERIO_DEBUG is set. Helps
-    # diagnose cases where the model's post-thinking text (summary) never reaches
-    # on_token — e.g. a provider returning text/thinking in a structure that
-    # _content_to_text/_extract_thinking don't recognize.
-    import os as _os
-    _dbg = _os.environ.get("CODERIO_DEBUG")
-    _token_total = [0]  # mutable holder for total chars streamed via on_token
     for event in bound.stream(lc_msgs):
         raw = getattr(event, "content", "")
-        if _dbg:
-            try:
-                from pathlib import Path as _P
-                with open(_P.home() / ".coderio" / "stream.log", "a", encoding="utf-8") as f:
-                    tcs = getattr(event, "tool_call_chunks", None) or []
-                    f.write(f"chunk: type={type(raw).__name__} "
-                            f"text={'Y' if _content_to_text(raw) else 'N'} "
-                            f"think={'Y' if _extract_thinking(raw) else 'N'} "
-                            f"toolcall_chunks={len(tcs)}\n")
-            except Exception:
-                pass
         # Forward visible text tokens (normalize blocks->text).
         token = _content_to_text(raw)
         if token:
-            # Diagnostic: track total chars streamed to on_token vs final content.
-            # If these diverge, the streaming path lost tokens that the aggregated
-            # message has — the root cause of the 'truncated display' bug.
-            _token_total[0] += len(token)
-            if _dbg:
-                try:
-                    from pathlib import Path as _P
-                    with open(_P.home() / ".coderio" / "stream.log", "a", encoding="utf-8") as f:
-                        f.write(f"on_token chunk_len={len(token)} total_so_far={_token_total[0]}\n")
-                except Exception:
-                    pass
             stream.on_token(token)
         # Forward 'thinking' content so the UI can show a 'is thinking' indicator
         # (otherwise the screen is frozen during the thinking stage -> looks hung).
@@ -198,19 +169,6 @@ def run_step(
         # into full tool_calls. This handles both providers that stream incrementally
         # and providers that emit a single complete AIMessage.
         aggregated = event if aggregated is None else (aggregated + event)
-    # Diagnostic: compare total chars streamed via on_token vs the aggregated
-    # message's final text length. If streamed < final, the streaming path LOST
-    # tokens (they appear in the session via the aggregated message but never
-    # reached the live UI display). This pinpoints the truncation.
-    if _dbg and aggregated is not None:
-        final_text = _content_to_text(getattr(aggregated, "content", ""))
-        try:
-            from pathlib import Path as _P
-            with open(_P.home() / ".coderio" / "stream.log", "a", encoding="utf-8") as f:
-                f.write(f"COMPARE streamed_via_on_token={_token_total[0]} "
-                        f"final_aggregated_text={len(final_text)} match={_token_total[0] == len(final_text)}\n")
-        except Exception:
-            pass
     usage = getattr(aggregated, "usage_metadata", None) or {}
     if usage and hasattr(stream, "add_usage"):
         stream.add_usage(usage)

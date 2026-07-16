@@ -19,7 +19,8 @@ class ActivateSkillTool:
     """
     name = "activate_skill"
     description = (
-        "Activate a skill by name to load its full playbook into context. Use when a task"
+        "Activate a skill by name to load its full playbook into context. "
+        "Use when a task matches a skill's domain and you need its detailed playbook."
     )
     args_schema = ActivateSkillArgs
 

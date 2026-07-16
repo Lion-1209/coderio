@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel

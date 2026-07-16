@@ -1,7 +1,5 @@
 """coderio tools."""
 
-from typing import Any
-
 from coderio.tools.base import (
     Tool,
     to_langchain_tool,

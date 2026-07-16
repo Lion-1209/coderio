@@ -33,7 +33,7 @@ class WebFetchTool:
         try:
             resp = httpx.get(
                 url,
-                timeout,
+                timeout=timeout,
                 follow_redirects=True,
                 headers={"User-Agent": "coderio/0.1"},
             )

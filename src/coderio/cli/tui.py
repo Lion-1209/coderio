@@ -6,7 +6,8 @@ Collapsible widget — collapsed by default, expandable via Ctrl+O (toggles the
 most recent) or mouse click on the title. This gives true fold/unfold, which
 RichLog (append-only) could not.
 
-The agent runs in a background thread; UI updates dispatch via call_from_thread.
+The agent runs in a background thread; UI updates flow through a thread-safe
+render queue drained by a main-thread timer (see _drain_render_queue).
 """
 from __future__ import annotations
 
@@ -201,13 +202,11 @@ class StatusBar(Widget):
 
     def set_phase(self, phase: str, tool_name: str = "", step: int = 0,
                   tool_index: int = 0, tool_total: int = 0) -> None:
-        """Update the displayed phase.
+        """Update the displayed phase (safe to call from ANY thread).
 
-        Safe to call from ANY thread: only mutates plain attributes (GIL-safe).
-        Deliberately does NOT call refresh() here — that's a widget-state mutation
-        that Textual requires on the main thread. The background heartbeat picks
-        up the new phase within 100ms. (Calling refresh from the agent thread was
-        the previous bug — it raced Textual's internal dirty flags.)
+        Only mutates plain attributes (GIL-safe). Does NOT call refresh() — that
+        is widget-state mutation requiring the main thread. The background
+        heartbeat picks up the new phase within ~100ms and repaints.
         """
         self.phase = phase
         self.phase_start = time.monotonic() if phase != "idle" else 0.0
@@ -236,28 +235,16 @@ class StatusBar(Widget):
             "responding": "输出中",
             "tool": f"执行 {tool_tag}",
         }
-        # Diagnostic log (only when CODERIO_DEBUG is set) — confirms render() is
-        # being called and what phase it sees. Set CODERIO_DEBUG=1 and check
-        # ~/.coderio/statusbar.log to verify the heartbeat is alive.
-        import os
-        if os.environ.get("CODERIO_DEBUG"):
-            try:
-                from pathlib import Path as _P
-                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"{time.monotonic():.2f} render phase={self.phase} step={self.step}\n")
-            except Exception:
-                pass
         if self.phase == "idle":
             return Text(labels["idle"], style="dim")
         elapsed = time.monotonic() - self.phase_start if self.phase_start else 0.0
         label = labels.get(self.phase, self.phase)
         # The spinner ANIMATES: each heartbeat advances _spin_frame.
         spin = self._SPINNER[self._spin_frame]
-        # Build the Text by APPENDING separate spans. The braille spinner char and
-        # the CJK text are in different segments so Textual computes cell widths
-        # independently — mixing them in one f-string caused the terminal to
-        # miscalculate width (braille + CJK adjacency), intermittently eating the
-        # '步' character. Separate spans + overflow='ellipsis' + no_wrap fixes it.
+        # Build the Text by APPENDING separate spans. The braille spinner and the
+        # CJK text are in different segments so Textual computes cell widths
+        # independently (mixing them in one f-string miscalculates width and can
+        # eat the adjacent CJK char). Separate spans + overflow='ellipsis' + no_wrap.
         parts = []
         if step_tag:
             parts.append(step_tag)
@@ -360,11 +347,10 @@ class CoderioTUI(App):
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
-    /* NOTE: do NOT define `Screen { layers }` here. Defining layers changes how
-       Textual computes the scrollable region's rendering — the bottom rows of
-       scrolled content stop rendering when layers are active (the long-output
-       truncation bug). The CommandMenu popup uses display:none/block for
-       show/hide and dock:bottom for positioning, so it does NOT need layers. */
+    /* NOTE: do NOT define `Screen { layers }` here — it changes how Textual
+       renders the scrollable region (bottom rows of scrolled content stop
+       rendering). The CommandMenu popup uses display:none/block for show/hide
+       and dock:bottom for positioning, so it does NOT need layers. */
     """
 
     BINDINGS = [
@@ -393,30 +379,24 @@ class CoderioTUI(App):
         self._live_think_body: Static | None = None
         self._live_think_chars = 0  # chars shown so far (to append only the delta)
         # Live output: a RichLog widget for streaming the answer as it arrives.
-        # RichLog is append-only — each token chunk is written once, without the
-        # full-widget layout recompute that Static.update(Text(full_buffer))
-        # triggers every 60ms. That recompute was the source of the streaming
-        # jitter/flicker (the whole history re-laid-out on every token batch).
-        # On finish, the RichLog is replaced by the final Markdown Panel.
+        # RichLog is append-only — each token chunk is written once, avoiding the
+        # full-widget layout recompute that Static.update(Text(full_buffer)) would
+        # trigger on every batch. On finish, the RichLog is replaced by the final
+        # Markdown Panel.
         self._live_output: Static | None = None
         self._live_output_chars = 0
         self._live_output_last_flush: float = 0.0  # throttle: only flush >=80ms apart
-        # Cached StatusBar reference: query_one() is a DOM query that Textual
-        # requires on the main thread, but _set_phase is called from the agent's
-        # BACKGROUND thread (StreamHandler callbacks). Calling query_one there
-        # raised and was silently swallowed — so phase NEVER reached the widget
-        # (statusbar.log showed phase=idle for the entire run). Cache the widget
-        # once (on_mount, main thread) and use the plain attribute thereafter
-        # (GIL-safe read from any thread).
+        # Cached StatusBar reference: query_one() is a main-thread DOM query, but
+        # _set_phase runs on the agent's BACKGROUND thread. Cache the widget once
+        # (on_mount, main thread) and read the plain attribute thereafter
+        # (GIL-safe from any thread).
         self._status_bar: StatusBar | None = None
         # RENDER QUEUE: the agent's background thread pushes render instructions
         # here (thread-safe deque append/popleft). A main-thread set_interval
         # timer drains the queue and executes the instructions on the main thread.
-        # This REPLACES call_from_thread entirely — which was unreliable in a real
-        # terminal (callbacks queued by on_token/on_finish never executed, verified
-        # via diagnostic logging: streamed=1228 chars but live_output/finalize had
-        # ZERO log entries). The deque + timer pattern is the same proven approach
-        # used by the StatusBar heartbeat (statusbar.log: 85k+ reliable renders).
+        # This avoids call_from_thread, whose callbacks are not reliably delivered
+        # in a real terminal. The deque + timer pattern matches the StatusBar
+        # heartbeat approach.
         import collections
         self._render_q: collections.deque = collections.deque()
         self._live_out_widget: RichLog | None = None  # streaming output RichLog (main thread)
@@ -430,9 +410,8 @@ class CoderioTUI(App):
         # Layered above the input bar so it overlays the history pane.
         yield CommandMenu(slash_completions())
         # input-bar holds BOTH the StatusBar and the Input — StatusBar sits above
-        # the input inside the same docked container. (Previously StatusBar and
-        # input-bar BOTH docked to bottom independently, which made them overlap —
-        # the StatusBar was invisible behind the input bar.)
+        # the input inside the same docked container, so they stack instead of
+        # overlapping at the dock:bottom edge.
         with Vertical(id="input-bar"):
             yield StatusBar()
             yield Input(
@@ -448,13 +427,13 @@ class CoderioTUI(App):
         inp = self.query_one("#msg", Input)
         # Wire the popup command menu to the input.
         self.query_one(CommandMenu).bind_input(inp)
-        # Cache the StatusBar reference NOW (main thread) — _set_phase is called
-        # from the agent's background thread where query_one() can't run.
+        # Cache the StatusBar reference NOW (main thread) — _set_phase runs on
+        # the agent's background thread where query_one() can't run.
         self._status_bar = self.query_one(StatusBar)
         inp.focus()
         # Render-queue drain timer: runs on the MAIN thread (set_interval), pops
-        # all queued render instructions and executes them. This is the ONLY path
-        # from background-thread data to main-thread widgets — no call_from_thread.
+        # all queued render instructions and executes them. This is the only path
+        # from background-thread data to main-thread widgets.
         self.set_interval(0.06, self._drain_render_queue)
 
     def _drain_render_queue(self) -> None:
@@ -463,9 +442,8 @@ class CoderioTUI(App):
 
         Two scroll strategies depending on what was rendered:
           - STREAMING updates (text/think_update): fire ONE immediate scroll_end
-            via call_after_refresh. These fire every ~60ms during output; scheduling
-            3 delayed scroll timers per update caused timer pile-up and the
-            visible jitter/flicker (scroll → relayout → scroll repeating).
+            via call_after_refresh. These fire every ~60ms during output, so a
+            single deferred scroll avoids timer pile-up.
           - FINAL render (finalize/static/panel/think_fold): these mount new widgets
             whose height needs multiple layout passes to settle, so use the
             multi-stage delayed scroll (0.15/0.3/0.5s).
@@ -508,8 +486,8 @@ class CoderioTUI(App):
                     self.exit()
             except Exception:
                 pass
-        # Scroll strategy: streaming = single immediate scroll (no timer pile-up);
-        # final = multi-stage delayed scroll (large Panels need layout passes).
+        # Scroll strategy: streaming = single deferred scroll; final = multi-stage
+        # delayed scroll (large Panels need multiple layout passes to settle).
         if did_final:
             try:
                 self.set_timer(0.15, self._scroll_history_end)
@@ -520,7 +498,7 @@ class CoderioTUI(App):
         elif did_streaming:
             try:
                 # Single deferred scroll — runs after this tick's layout settles,
-                # but doesn't pile up like 3 delayed timers would over 60ms cycles.
+                # without piling up timers across 60ms cycles.
                 self.call_after_refresh(self._scroll_history_end)
             except Exception:
                 pass
@@ -528,28 +506,19 @@ class CoderioTUI(App):
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
     def _scroll_history_end(self) -> None:
         """Scroll the history pane to the bottom."""
-        import os
         try:
             h = self.query_one("#history", VerticalScroll)
             h.scroll_end(animate=False)
-            if os.environ.get("CODERIO_DEBUG"):
-                from pathlib import Path as _P
-                children = list(h.children)
-                child_info = ", ".join(f"{type(c).__name__}(h={c.virtual_size.height})" for c in children)
-                with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"scroll_end: scroll_y={h.scroll_y:.0f} virtual={h.virtual_size.height} "
-                            f"content={h.content_size.height} children=[{child_info}]\n")
         except Exception:
             pass
 
     def _render_live_output(self, full_text: str) -> None:
         """MAIN THREAD: append the NEW part of the streaming text to a RichLog.
 
-        RichLog is append-only: each call writes just the delta (the new
-        characters since the last write), NOT the full buffer re-rendered. This
-        avoids the layout recompute that Static.update(Text(full_buffer))
-        triggered every 60ms — that recompute re-laid-out the entire history
-        and caused the visible streaming jitter/flicker."""
+        RichLog is append-only: each call writes just the delta (the new chars
+        since the last write), NOT the full buffer re-rendered. This avoids the
+        layout recompute that Static.update(Text(full_buffer)) would trigger on
+        every batch (re-laying-out the entire history)."""
         if self._live_out_widget is None:
             self._live_out_widget = RichLog(wrap=True, markup=False, auto_scroll=True)
             self._mount_widget_main(self._live_out_widget)
@@ -591,18 +560,9 @@ class CoderioTUI(App):
     def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
         """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
 
-        The final answer is PRE-RENDERED to plain text at the history container's
-        inner width, then mounted as a Static string — NOT as Static(Panel(Markdown)).
-
-        Why: the previous Static(Panel(Markdown(buf))) path relied on Textual's
-        deferred RichVisual height calc (get_height), which on the user's wide
-        VSCode terminal measured the widget at ~2x its true rendered height
-        (widget_vh=122 while the rendered content was ~61 rows). The layout then
-        thought the widget was 122 rows tall, scrolled to y=200, and showed the
-        EMPTY region (rows 61-122) instead of the content — the bottom border and
-        tail were 'below' a phantom empty area. Pre-rendering to text at a known
-        width makes the Static's measured height EXACTLY match its rendered lines,
-        so scroll_end lands on the real content bottom.
+        The final answer is rendered as Static(Panel(Markdown(buf))) (see
+        _mount_final_panel). scroll_end lands on the real content bottom once the
+        layout settles (note the layers caveat in the CSS).
         """
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
@@ -620,15 +580,8 @@ class CoderioTUI(App):
     def _mount_final_panel(self, buf: str) -> None:
         """MAIN THREAD: mount the final Markdown Panel and scroll to the bottom.
 
-        Simple and correct: mount Static(Panel(Markdown(buf))). The long-output
-        truncation bug (bottom rows not rendering after scroll) was NOT caused by
-        the Panel, by height measurement, or by Conpty — it was caused by the
-        `Screen { layers: base above }` CSS definition, which changes how Textual
-        computes the scrollable region's rendering: with layers active, the
-        bottom rows of scrolled-to-the-end content stop rendering (they render
-        as blank). Removing the layers definition fixes it completely. Verified:
-        sentinel text + Panel bottom border both visible after scroll_end, on
-        both narrow (80) and wide (214) terminals.
+        Mounts Static(Panel(Markdown(buf))) and schedules a multi-stage delayed
+        scroll (the Panel's height needs a few layout passes to settle).
         """
         history = self.query_one("#history")
         widget = Static(Panel(Markdown(buf), border_style="blue", title="coderio"))
@@ -643,11 +596,9 @@ class CoderioTUI(App):
         """Forward a phase change to the StatusBar widget.
 
         Called from the agent's BACKGROUND thread (StreamHandler callbacks). Do
-        NOT use query_one here — it's a DOM query that Textual requires on the
-        main thread; calling it from the agent thread raised and was swallowed,
-        so phase never reached the widget (the statusbar.log showed phase=idle
-        for an entire run). Use the cached reference instead (plain attribute
-        read, GIL-safe). StatusBar.set_phase only writes plain attributes too.
+        NOT use query_one here — it's a main-thread DOM query. Use the cached
+        reference instead (plain attribute read, GIL-safe). StatusBar.set_phase
+        also only writes plain attributes.
         """
         bar = self._status_bar
         if bar is None:
@@ -686,14 +637,10 @@ class CoderioTUI(App):
         event.input.value = ""
         self._add_text(f"▸ you {line}", style="bold cyan")
         if self._on_input:
-            # Use a Textual WORKER (thread=True), not a raw threading.Thread.
-            # The core bug: raw daemon threads are invisible to Textual's event
-            # loop. When the agent thread finishes, call_from_thread callbacks it
-            # queued (final output Panel, thinking fold, etc.) sit UNPROCESSED in
-            # the loop's queue — they only get drained on the next user input
-            # (the 'content appears on next message' bug). A worker is managed by
-            # Textual: the main loop stays alive and processes the queue while the
-            # worker runs AND after it completes, so pending UI updates land.
+            # Use a Textual WORKER (thread=True), not a raw threading.Thread. A
+            # worker is managed by Textual, so the main event loop stays alive and
+            # keeps draining pending UI updates while the worker runs AND after it
+            # completes — a raw daemon thread would not.
             def _run():
                 try:
                     self._on_input(line)
@@ -739,8 +686,8 @@ class CoderioTUI(App):
     # ----------------------------------------------------- StreamHandler protocol
     # ALL callbacks run on the agent's BACKGROUND thread. They ONLY push render
     # instructions to self._render_q (a thread-safe deque). The main-thread timer
-    # _drain_render_queue (set_interval 60ms) pops and executes them. NO
-    # call_from_thread anywhere — it was the root cause of content not rendering.
+    # _drain_render_queue (set_interval 60ms) pops and executes them — no
+    # call_from_thread here.
     def on_step_start(self, step: int = 1) -> None:
         self._flush_round_thinking()
         self._set_phase("thinking", step=step)
@@ -894,11 +841,10 @@ class CoderioTUI(App):
             widget = Static(renderable)
             history.mount(widget)
             # Scroll to end AFTER the mount + layout settle. Calling scroll_end
-            # synchronously right after mount races the layout: the new widget's
-            # height hasn't been computed yet, so scroll_end lands above the true
-            # bottom — for long outputs (3000+ chars) the tail ends up below the
-            # viewport and looks like 'missing content'. call_after_refresh defers
-            # the scroll until Textual has finished the layout pass.
+            # synchronously right after mount races the layout (the new widget's
+            # height isn't computed yet), so scroll_end lands above the true
+            # bottom. call_after_refresh defers the scroll until the layout pass
+            # finishes.
             history.call_after_refresh(history.scroll_end, animate=False)
         except Exception:
             pass
