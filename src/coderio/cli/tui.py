@@ -500,9 +500,13 @@ class CoderioTUI(App):
         # read the OLD virtual_size (before the new widget's height is computed)
         # and land above the true bottom — the 'truncated bottom border' bug.
         if did_render:
+            # Defer scroll by 150ms (set_timer, not call_after_refresh) to give
+            # Textual enough time to complete the FULL layout pass for newly
+            # mounted large Panels. call_after_refresh fires after ONE refresh
+            # cycle, but a big Markdown Panel may need multiple passes to settle
+            # its final height — scrolling too early lands above the true bottom.
             try:
-                h = self.query_one("#history", VerticalScroll)
-                h.call_after_refresh(h.scroll_end, animate=False)
+                self.set_timer(0.15, self._scroll_history_end)
             except Exception:
                 pass
 
