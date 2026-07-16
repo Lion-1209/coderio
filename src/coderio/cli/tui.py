@@ -520,8 +520,11 @@ class CoderioTUI(App):
             h.scroll_end(animate=False)
             if os.environ.get("CODERIO_DEBUG"):
                 from pathlib import Path as _P
+                children = list(h.children)
+                child_info = ", ".join(f"{type(c).__name__}(h={c.virtual_size.height})" for c in children)
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"scroll_end: scroll_y={h.scroll_y:.0f} virtual={h.virtual_size.height} content={h.content_size.height}\n")
+                    f.write(f"scroll_end: scroll_y={h.scroll_y:.0f} virtual={h.virtual_size.height} "
+                            f"content={h.content_size.height} children=[{child_info}]\n")
         except Exception:
             pass
 
