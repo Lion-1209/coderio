@@ -596,15 +596,35 @@ class CoderioTUI(App):
         history = self.query_one("#history")
         widget = Static(panel)
         history.mount(widget)
-        # Force a full screen refresh — without this, Textual may not repaint
-        # after the worker ends (idle state), leaving the Panel's bottom
-        # invisible until the next user input triggers a refresh.
-        self.refresh()
         if os.environ.get("CODERIO_DEBUG"):
             self.set_timer(0.2, lambda: self._debug_panel_height(widget))
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
         self.set_timer(0.5, self._scroll_history_end)
+        # Conpty repaint nudge (VSCode integrated terminal / Windows Terminal):
+        # After the agent worker ends the app goes idle. Conpty's dirty-line
+        # tracking can miss the bottom rows newly scrolled into view (the Panel's
+        # lower border + tail) — they only repaint on the NEXT input event, which
+        # is the 'content appears on the next message' symptom. The scroll timers
+        # above run BEFORE layout fully settles, so nudging there races and can
+        # corrupt short outputs. This fires LAST (0.6s, after every scroll has
+        # completed), scoped to #history only, with layout=True so Conpty gets a
+        # fresh full-region repaint of the scroll area. Verified in test that
+        # scroll_y/max_scroll and widget height stay correct after this call.
+        self.set_timer(0.6, self._conpty_repaint_nudge)
+
+    def _conpty_repaint_nudge(self) -> None:
+        """Force a single layout+repaint of the history scroll area, then
+        re-assert the bottom scroll position. Runs once, 0.6s after the final
+        Panel mounted — after every scroll timer has fired — so it does not race
+        the layout passes (which is what broke short outputs when refresh() was
+        called at mount time)."""
+        try:
+            history = self.query_one("#history", VerticalScroll)
+            history.refresh(layout=True)
+            history.scroll_end(animate=False)
+        except Exception:
+            pass
 
     def _debug_panel_height(self, widget) -> None:
         import os
