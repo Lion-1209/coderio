@@ -599,8 +599,11 @@ class CoderioTUI(App):
         if os.environ.get("CODERIO_DEBUG"):
             try:
                 from pathlib import Path as _P
+                h = self.query_one("#history")
                 with open(_P.home() / ".coderio" / "statusbar.log", "a", encoding="utf-8") as f:
-                    f.write(f"panel_height_check: virtual_h={widget.virtual_size.height} styles_height={widget.styles.height}\n")
+                    f.write(f"panel_check: widget_vh={widget.virtual_size.height} "
+                            f"history_vh={h.virtual_size.height} history_ch={h.content_size.height} "
+                            f"scroll_y={h.scroll_y:.0f} max_scroll={h.virtual_size.height - h.content_size.height}\n")
             except Exception:
                 pass
 
