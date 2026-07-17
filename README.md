@@ -2,7 +2,7 @@
 
 **中文** | [English](README_en.md)
 
-> A skill-driven coding agent with a structural harness, foldable-thinking TUI, and crew orchestration. Built on langchain + langgraph + Lion-Skills. Windows-first.
+> 一个技能驱动的编程 agent——结构化 harness 约束、可折叠思考的 TUI、crew 编排。基于 langchain + langgraph + Lion-Skills，Windows 优先，跨平台。
 
 **coderio** 是一个技能驱动的编程 agent。它的"骨架"是 [Lion-Skills](https://github.com/Lion-1209/Lion-Skills) 套件（clarify→spec→task→execute→verify→commit 工作流），coderio 给它配上真正能干活的工具、一个强制遵循工作流的 **harness 状态控制层**，以及交互式 Textual TUI。参照对象是 claude code / codex / zcode。
 
