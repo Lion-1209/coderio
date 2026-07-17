@@ -8,6 +8,7 @@ from pathlib import Path
 from coderio.config.models import (
     Config,
     ModelConfig,
+    Profile,
     ToolsConfig,
     SkillsConfig,
     CliConfig,
@@ -53,6 +54,51 @@ def _find_project_dir(search_from: Path) -> Path:
 
 def _default_user_dir() -> Path:
     return Path(os.path.expanduser("~")) / ".coderio"
+
+
+def _parse_profiles(data: dict) -> list:
+    """Parse the [[profiles]] array into Profile objects.
+
+    Each table element must have at least name + provider_id + model. base_url
+    and kind fall back to "" and "openai_compatible". Malformed entries (missing
+    required fields) are skipped rather than crashing — a typo in one profile
+    shouldn't prevent the whole config from loading.
+    """
+    raw = data.get("profiles")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        pid = entry.get("provider_id")
+        model = entry.get("model")
+        if not (name and pid and model):
+            continue  # incomplete profile — skip silently
+        out.append(Profile(
+            name=name,
+            provider_id=pid,
+            model=model,
+            base_url=entry.get("base_url", ""),
+            kind=entry.get("kind", "openai_compatible"),
+        ))
+    return out
+
+
+def _resolve_active_profile(data: dict) -> str:
+    """Resolve the active profile name from config, with a sane default.
+
+    Returns the explicit `active_profile` value if set and non-empty. Otherwise
+    empty string — build_chat_model treats empty active_profile as "use the
+    legacy [model] path", so old users with no profiles are unaffected. (The
+    "default to first profile when active is unset" lives in build_chat_model,
+    not here, because the loader shouldn't mutate user intent on disk.)
+    """
+    active = data.get("active_profile", "")
+    if isinstance(active, str):
+        return active.strip()
+    return ""
 
 
 def _from_dict(data: dict) -> Config:
@@ -108,6 +154,8 @@ def _from_dict(data: dict) -> Config:
             theme=cl.get("theme", cfg.cli.theme),
             show_tool_output=cl.get("show_tool_output", cfg.cli.show_tool_output),
         ),
+        profiles=_parse_profiles(data),
+        active_profile=_resolve_active_profile(data),
     )
 
 
@@ -123,7 +171,9 @@ def _apply_env(cfg: Config) -> Config:
     v = os.environ.get("CODERIO_BASH_SHELL")
     if v:
         tools = replace(tools, bash_shell=v)
-    return Config(model=model, tools=tools, skills=cfg.skills, session=cfg.session, cli=cfg.cli)
+    # Preserve profiles/active_profile — env overrides only touch model/tools.
+    return Config(model=model, tools=tools, skills=cfg.skills, session=cfg.session,
+                  cli=cfg.cli, profiles=cfg.profiles, active_profile=cfg.active_profile)
 
 
 def load_config(search_from: Path | str = ".", user_dir: Path | str | None = None) -> Config:

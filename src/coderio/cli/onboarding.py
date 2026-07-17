@@ -103,6 +103,48 @@ def _save_to_config(result: OnboardingResult, config_path: Path) -> None:
         tomli_w.dump(data, f)
 
 
+def _save_profile_to_config(result: OnboardingResult, profile_name: str, config_path: Path) -> None:
+    """Append a named profile to config.toml and mark it active.
+
+    Read-modify-write: preserves all existing sections and any prior profiles.
+    Appends a [[profiles]] table and sets active_profile to the new name so the
+    just-configured profile is immediately usable. If a profile with the same
+    name already exists, it is replaced in place (re-configuring rather than
+    duplicating).
+    """
+    data: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            data = {}
+    profiles = data.get("profiles", [])
+    if not isinstance(profiles, list):
+        profiles = []
+    entry = {
+        "name": profile_name,
+        "provider_id": result.provider_id,
+        "model": result.model,
+        "base_url": result.base_url,
+        "kind": result.kind,
+    }
+    # Replace an existing same-named profile, else append.
+    replaced = False
+    for i, p in enumerate(profiles):
+        if isinstance(p, dict) and p.get("name") == profile_name:
+            profiles[i] = entry
+            replaced = True
+            break
+    if not replaced:
+        profiles.append(entry)
+    data["profiles"] = profiles
+    data["active_profile"] = profile_name
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "wb") as f:
+        tomli_w.dump(data, f)
+
+
 def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str]:
     """Send a minimal API request to verify the key/endpoint works.
 

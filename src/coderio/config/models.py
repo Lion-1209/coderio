@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -10,6 +10,23 @@ class ModelConfig:
     base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     provider_id: str = ""
     max_output_tokens: int = 16384
+
+
+@dataclass
+class Profile:
+    """A named, self-contained model configuration (provider + model + endpoint).
+
+    Bundles everything build_chat_model needs to construct a chat client, so the
+    user can keep several providers side by side (e.g. a Coding Plan subscription
+    and a personal OpenAI key) and switch between them with /profile without
+    re-running onboarding. The API key itself lives in the credentials file
+    (keyed by provider_id), not here — same as the legacy [model] path.
+    """
+    name: str
+    provider_id: str
+    model: str
+    base_url: str = ""
+    kind: str = "openai_compatible"
 
 
 @dataclass
@@ -45,6 +62,11 @@ class Config:
     skills: SkillsConfig = None
     session: SessionConfig = None
     cli: CliConfig = None
+    # Named profiles (multi-config). Empty list = legacy single-config mode:
+    # build_chat_model falls through to the [model] section's 3-layer path,
+    # so existing users with no profiles are unaffected.
+    profiles: list = None
+    active_profile: str = ""
 
     def __post_init__(self):
         if self.model is None:
@@ -57,3 +79,5 @@ class Config:
             object.__setattr__(self, "session", SessionConfig())
         if self.cli is None:
             object.__setattr__(self, "cli", CliConfig())
+        if self.profiles is None:
+            object.__setattr__(self, "profiles", [])

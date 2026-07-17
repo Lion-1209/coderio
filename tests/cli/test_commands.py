@@ -11,6 +11,8 @@ class _FakeCtx:
         self.api_key = "sk-abcdef1234"
         self.base_url = "https://open.bigmodel.cn/api/anthropic"
         self.recent_sessions = ["20260625-120000-ab12"]
+        self.profiles = []
+        self.active_profile = ""
         self.usage = None
         self.stream = None
 
@@ -191,3 +193,38 @@ def test_resume_unknown_id_suggests_picker():
     res = handle_slash("/resume nope", ctx)
     assert "找不到" in (res.message or "")
     assert "/resume" in (res.message or "")  # points back to the picker
+
+
+# ----------------------------------------------- /profile (multi-config switch)
+def test_profile_no_profiles_suggests_setup():
+    ctx = _FakeCtx()
+    ctx.profiles = []
+    res = handle_slash("/profile", ctx)
+    assert "/setup" in (res.message or "")
+
+
+def test_profile_signals_picker():
+    """/profile with profiles present must return __OPEN_PROFILE_PICKER__ so the
+    TUI shows the interactive list — same pattern as /resume."""
+    from coderio.config import Profile
+    ctx = _FakeCtx()
+    ctx.profiles = [Profile(name="glm", provider_id="bigmodel_coding_plan",
+                            model="glm-5.2", kind="anthropic")]
+    res = handle_slash("/profile", ctx)
+    assert res.message == "__OPEN_PROFILE_PICKER__"
+
+
+def test_profile_list_prints_inline():
+    """/profile list prints profiles inline (no popup), active one marked ★."""
+    from coderio.config import Profile
+    ctx = _FakeCtx()
+    ctx.profiles = [
+        Profile(name="glm", provider_id="bigmodel_coding_plan", model="glm-5.2", kind="anthropic"),
+        Profile(name="oai", provider_id="openai", model="gpt-4o", kind="openai_compatible"),
+    ]
+    ctx.active_profile = "glm"
+    res = handle_slash("/profile list", ctx)
+    msg = res.message or ""
+    assert "★" in msg          # active marker
+    assert "glm" in msg
+    assert "oai" in msg

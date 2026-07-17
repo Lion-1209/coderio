@@ -47,10 +47,17 @@ def read_credentials(path: Path | str | None = None) -> dict[str, str]:
 
 
 def write_credentials(mapping: dict[str, str], path: Path | str | None = None) -> Path:
-    """Write provider_id -> key mapping, restrict to current user only."""
+    """Merge provider_id -> key entries into the credentials file.
+
+    Reads any existing keys first and merges the new mapping on top, so adding a
+    second provider via /setup doesn't erase the first provider's key. Keys for
+    an existing provider_id are overwritten (re-entering a key updates it).
+    """
     p = Path(path) if path else _DEFAULT
     p.parent.mkdir(parents=True, exist_ok=True)
-    data = {pid: {"key": key} for pid, key in mapping.items()}
+    existing = read_credentials(p)
+    existing.update(mapping)
+    data = {pid: {"key": key} for pid, key in existing.items()}
     with open(p, "wb") as f:
         tomli_w.dump(data, f)
     _restrict_permissions(p)

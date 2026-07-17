@@ -294,6 +294,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         self._chosen_model = ""
         self._base_url = ""
         self._api_key = ""
+        self._profile_name = ""
         self._provider_items: list = []  # parallel to ListView items
         # Which providers already have a saved key? (read once at open time)
         from coderio.cli.credentials import read_credentials
@@ -301,6 +302,10 @@ class OnboardingScreen(ModalScreen[dict | None]):
             self._configured = set(read_credentials().keys())
         except Exception:
             self._configured = set()
+        # Existing profiles (for the new/edit action choice). Empty on first run.
+        self._existing_profiles = self._load_existing_profiles()
+        # When editing, the Profile being modified (None = creating new).
+        self._editing_profile = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard-box"):
@@ -311,8 +316,82 @@ class OnboardingScreen(ModalScreen[dict | None]):
             yield Input(id="onboard-input")
             yield Static("", id="onboard-status")
 
+    @staticmethod
+    def _load_existing_profiles() -> list:
+        """Read [[profiles]] from config.toml so /setup can offer to edit them.
+
+        Returns an empty list on first run or any read error — the wizard then
+        skips the new/edit choice and goes straight to provider selection.
+        """
+        from pathlib import Path
+        try:
+            from coderio.config import load_config
+            cfg = load_config(search_from=".")
+            return list(cfg.profiles or [])
+        except Exception:
+            return []
+
     def on_mount(self) -> None:
-        self._show_provider_step()
+        if self._existing_profiles:
+            self._show_action_step()
+        else:
+            self._show_provider_step()
+
+    def _show_action_step(self) -> None:
+        """Step 0 (only when profiles exist): choose 新建 or 修改 an existing one.
+
+        One row to create a new profile, then one row per existing profile (with
+        provider/model as a dim subtitle) to edit it. This is the /setup entry
+        point when the user already has at least one configured profile.
+        """
+        self._step = "action"
+        self.query_one("#onboard-input", Input).visible = False
+        self.query_one("#onboard-hint").update(
+            "选择操作（↑↓ · Enter 确认 · Esc 取消）")
+        lv = self.query_one("#onboard-list", ListView)
+        lv.display = True
+        lv.clear()
+        self._action_items: list = []  # None=new, else the Profile to edit
+        lv.append(ListItem(Static("  [green]➕[/green]  新建配置")))
+        self._action_items.append(None)
+        for p in self._existing_profiles:
+            lv.append(ListItem(Static(
+                f"  [yellow]✎[/yellow]  修改  {p.name}  "
+                f"[dim]{p.provider_id} · {p.model}[/dim]")))
+            self._action_items.append(p)
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        lv.focus()
+
+    def _start_edit(self, profile) -> None:
+        """Pre-fill the wizard with an existing profile's values.
+
+        Resolves the provider from the registry (so model/key steps behave the
+        same as a new config), carries over the profile's base_url for custom
+        providers, and sets the profile name so the final name step shows it.
+        Then jumps to model selection — the most common edit is changing the
+        model or re-entering the key, not switching providers.
+        """
+        from coderio.cli.providers import get_provider
+        info = get_provider(profile.provider_id)
+        if info is not None:
+            self._chosen_provider = info
+        else:
+            # Provider no longer in the registry — can't offer model presets.
+            # Fall back to text-input model step with the profile's current model.
+            self._chosen_provider = type("_P", (), {
+                "id": profile.provider_id, "label": profile.name,
+                "kind": profile.kind, "base_url": profile.base_url,
+                "models": (), "default_model": "", "api_key_hint": "",
+                "plan": False,
+            })()
+        self._base_url = profile.base_url or (info.base_url if info else "")
+        self._chosen_model = profile.model
+        self._profile_name = profile.name
+        self._editing_profile = profile
+        self._show_model_step()
 
     # --- step transitions ---
 
@@ -381,8 +460,13 @@ class OnboardingScreen(ModalScreen[dict | None]):
         for m in p.models:
             star = " ★" if m == p.default_model else ""
             lv.append(ListItem(Static(f"  {m}{star}")))
+        # When editing, highlight the profile's current model (if it's in the
+        # preset list) so the user can just press Enter to keep it.
+        start_idx = 0
+        if self._editing_profile and self._editing_profile.model in self._model_items:
+            start_idx = self._model_items.index(self._editing_profile.model)
         try:
-            lv.index = 0
+            lv.index = start_idx
         except Exception:
             pass
         self.query_one("#onboard-hint").update(
@@ -406,17 +490,44 @@ class OnboardingScreen(ModalScreen[dict | None]):
         p = self._chosen_provider
         if p.id == "ollama":
             self._api_key = "ollama"
-            self._finish()
+            self._show_name_step()
             return
         self._step = "key"
         self.query_one("#onboard-list", ListView).display = False
-        self.query_one("#onboard-hint").update(
-            f"输入 API key（{p.api_key_hint}）：")
+        if self._editing_profile:
+            # Editing: key is optional — empty input keeps the existing key.
+            from coderio.cli.credentials import get_key
+            existing = get_key(p.id) or ""
+            self._api_key = existing  # carry over until the user types a new one
+            self.query_one("#onboard-hint").update(
+                f"输入新 API key（留空保留现有 key）— {p.api_key_hint}：")
+        else:
+            self.query_one("#onboard-hint").update(
+                f"输入 API key（{p.api_key_hint}）：")
         inp = self.query_one("#onboard-input", Input)
         inp.visible = True
         inp.password = True  # masked — shows dots
         inp.value = ""
         inp.focus()
+
+    def _show_name_step(self) -> None:
+        """Step 4: name this profile (so multiple configs can coexist).
+
+        Pre-fills with the existing profile name when editing, or the provider's
+        label when creating new — most users will just press Enter. The name is
+        how /profile lists and switches between configs.
+        """
+        self._step = "name"
+        p = self._chosen_provider
+        self.query_one("#onboard-list", ListView).display = False
+        inp = self.query_one("#onboard-input", Input)
+        inp.visible = True
+        inp.password = False
+        # Editing: show the current name; new: default to the provider label.
+        inp.value = self._profile_name or p.label
+        inp.focus()
+        self.query_one("#onboard-hint").update(
+            "给这套配置起个名字（回车确认，稍后可用 /profile 切换）：")
 
     def _start_verification(self) -> None:
         """Step 4: verify the key via a minimal API request."""
@@ -434,7 +545,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
     def _on_verify_result(self, ok: bool, msg: str) -> None:
         if ok:
             self.query_one("#onboard-status").update(f"[green]✅ {msg}[/green]")
-            self._finish()
+            self._show_name_step()
         else:
             self.query_one("#onboard-status").update(f"[red]❌ {msg}[/red]")
             self._step = "key"
@@ -446,10 +557,10 @@ class OnboardingScreen(ModalScreen[dict | None]):
             inp.focus()
 
     def _finish(self) -> None:
-        """Save credentials + config, then dismiss with result."""
+        """Save credentials + profile, then dismiss with result."""
         from pathlib import Path
         from coderio.cli.credentials import write_credentials
-        from coderio.cli.onboarding import _save_to_config, OnboardingResult
+        from coderio.cli.onboarding import _save_profile_to_config, OnboardingResult
         creds_path = Path.home() / ".coderio" / "credentials"
         write_credentials({self._chosen_provider.id: self._api_key}, creds_path)
         result = OnboardingResult(
@@ -460,11 +571,13 @@ class OnboardingScreen(ModalScreen[dict | None]):
             api_key=self._api_key,
         )
         config_path = creds_path.parent / "config.toml"
-        _save_to_config(result, config_path)
+        name = self._profile_name or self._chosen_provider.label
+        _save_profile_to_config(result, name, config_path)
         self.query_one("#onboard-status").update("[green]配置完成！[/green]")
         self.set_timer(0.8, lambda: self.dismiss({
             "provider_id": result.provider_id,
             "model": result.model,
+            "profile_name": name,
         }))
 
     # --- event handlers ---
@@ -475,7 +588,19 @@ class OnboardingScreen(ModalScreen[dict | None]):
         idx = lv.index
         if idx is None:
             return
-        if self._step == "provider":
+        if self._step == "action":
+            if idx < len(self._action_items):
+                chosen = self._action_items[idx]
+                self.query_one("#onboard-status").update("")
+                if chosen is None:
+                    # New profile — fresh wizard from provider selection.
+                    self._editing_profile = None
+                    self._show_provider_step()
+                else:
+                    # Edit existing — pre-fill its values, jump to model step
+                    # (provider stays the same in the common case).
+                    self._start_edit(chosen)
+        elif self._step == "provider":
             if idx < len(self._provider_items):
                 p = self._provider_items[idx]
                 self._chosen_provider = p
@@ -513,8 +638,78 @@ class OnboardingScreen(ModalScreen[dict | None]):
                 self._api_key = val
                 self.query_one("#onboard-status").update("")
                 self._start_verification()
+            elif self._editing_profile:
+                # Editing + empty input → keep the existing key, skip verification
+                # (it was already verified when first configured).
+                self.query_one("#onboard-status").update("")
+                self._show_name_step()
             else:
                 self.query_one("#onboard-status").update("[red]请输入 API key[/red]")
+        elif self._step == "name":
+            self._profile_name = val or self._chosen_provider.label
+            self.query_one("#onboard-input", Input).visible = False
+            self.query_one("#onboard-hint").update("[bold cyan]正在保存...[/bold cyan]")
+            self._finish()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ProfilePickerScreen(ModalScreen[str | None]):
+    """Interactive profile picker (/profile).
+
+    Lists all saved [[profiles]] from config.toml as a ListView — each row shows
+    the profile name with its provider/model as a dim subtitle, and the active
+    profile is marked ★. ↑↓ navigates, Enter switches (dismisses with the chosen
+    profile name), Esc cancels (dismisses None). Mirrors the SessionPickerScreen
+    UX so both pickers feel the same.
+    """
+
+    CSS = """
+    ProfilePickerScreen { align: center middle; }
+    #profile-box {
+        width: 70%; height: auto; max-height: 70%; border: round $accent;
+        background: $surface; padding: 1 2;
+    }
+    #profile-title { text-align: center; margin-bottom: 1; }
+    #profile-list { height: auto; max-height: 16; }
+    ProfilePickerScreen ListItem { padding: 0 1; }
+    ProfilePickerScreen ListItem > Widget :hover { background: $boost; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "取消", show=True),
+    ]
+
+    def __init__(self, profiles: list, active_name: str = "") -> None:
+        super().__init__()
+        self._profiles = profiles
+        self._active_name = active_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="profile-box"):
+            yield Static(
+                "[bold magenta]切换配置[/bold magenta]  "
+                "↑↓ 选择 · Enter 切换 · Esc 取消",
+                id="profile-title")
+            yield ListView(id="profile-list")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#profile-list", ListView)
+        for p in self._profiles:
+            star = "★ " if p.name == self._active_name else "  "
+            lv.append(ListItem(Static(
+                f"{star}{p.name}  [dim]{p.provider_id} · {p.model}[/dim]"),
+                name=p.name))
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        lv.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Enter on a row → switch to that profile."""
+        self.dismiss(event.item.name)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1167,6 +1362,31 @@ def _run_onboarding_tui() -> dict | None:
     return getattr(app, "_result", None)
 
 
+def _switch_active_profile(profile_name: str) -> str:
+    """Write the chosen profile name to config.toml as active_profile.
+
+    Read-modify-write so other sections and the profiles array are preserved.
+    Returns the name written (empty string if it couldn't be written). Called by
+    the /profile picker callback after the user picks a profile.
+    """
+    import tomllib
+    import tomli_w
+    from pathlib import Path
+    config_path = Path.home() / ".coderio" / "config.toml"
+    data: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            data = {}
+    data["active_profile"] = profile_name
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "wb") as f:
+        tomli_w.dump(data, f)
+    return profile_name
+
+
 def run_tui(
     provider_override: str | None = None,
     model_override: str | None = None,
@@ -1253,6 +1473,8 @@ def run_tui(
                 api_key="",
                 base_url=rt["cfg"].model.base_url,
                 recent_sessions=Session.list_recent(_P(rt["cfg"].session.save_dir).expanduser()),
+                profiles=rt["cfg"].profiles,
+                active_profile=rt["cfg"].active_profile,
                 usage=tui.usage,
                 stream=tui,
             )
@@ -1287,6 +1509,29 @@ def run_tui(
                         f"✅ 已重新配置 → {new_cfg.model.default}（{new_cfg.model.provider_id}）",
                         style="bold green")
                 tui.call_from_thread(tui.push_screen, OnboardingScreen(), _on_reconfigured)
+                return
+            if res.message == "__OPEN_PROFILE_PICKER__":
+                # /profile → open the ProfilePickerScreen. After the user picks,
+                # write active_profile to config.toml and rebuild the model.
+                profiles = rt["cfg"].profiles or []
+                active_name = rt["cfg"].active_profile
+                if not profiles:
+                    tui._add_text("[yellow]还没有保存的 profile。用 /setup 添加一个配置。[/yellow]")
+                    return
+                def _on_profile_picked(name):
+                    if name is None or name == active_name:
+                        return  # cancelled or re-picked the same one
+                    _switch_active_profile(name)
+                    from coderio.llm import build_chat_model as _build
+                    new_cfg = load_config(search_from=".")
+                    rt["cfg"] = new_cfg
+                    rt["model"] = _build(new_cfg, creds_path=creds_path)
+                    tui._add_text(
+                        f"✅ 已切换到配置 → {name}", style="bold green")
+                tui.call_from_thread(
+                    tui.push_screen,
+                    ProfilePickerScreen(profiles, active_name),
+                    _on_profile_picked)
                 return
             if res.message:
                 tui._add_text(res.message)

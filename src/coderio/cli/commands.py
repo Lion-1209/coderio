@@ -33,6 +33,8 @@ SLASH_COMMANDS: list[SlashCommand] = [
                  ["/clear"]),
     SlashCommand("/config", "show current configuration", ["/config"]),
     SlashCommand("/setup", "reconfigure provider/model (onboarding wizard)", ["/setup"]),
+    SlashCommand("/profile", "switch between saved provider profiles",
+                 ["/profile", "/profile list"]),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
     SlashCommand("/resume", "resume a past session (opens an interactive picker)",
                  ["/resume "]),
@@ -68,6 +70,8 @@ class ReplContext:
     api_key: str = ""
     base_url: str = ""
     recent_sessions: list[str] = None
+    profiles: list = None       # list[Profile] — saved named profiles
+    active_profile: str = ""    # name of the currently active profile
     usage: dict = None
     stream: object = None  # RichStream — for /think to expand collapsed thinking
 
@@ -176,6 +180,28 @@ def _cmd_mode(ctx, arg: str) -> CommandResult:
     )
 
 
+def _cmd_profile(ctx, arg: str) -> CommandResult:
+    """Switch between saved provider profiles.
+
+    With no argument (or anything other than 'list'): signal the TUI to open
+    the interactive ProfilePickerScreen — a ListView of profiles with the active
+    one marked ★, same UX as /resume's session picker. With 'list': print the
+    profiles inline (no popup) for a quick glance.
+    """
+    profiles = ctx.profiles or []
+    if not profiles:
+        return CommandResult(
+            message="还没有保存的 profile。用 /setup 添加一个配置。")
+    if arg.strip() == "list":
+        lines = []
+        for p in profiles:
+            mark = "★" if p.name == ctx.active_profile else " "
+            lines.append(f"  {mark} {p.name}  [dim]{p.provider_id} · {p.model}[/dim]")
+        return CommandResult(message="Profiles (★ = active):\n" + "\n".join(lines))
+    # Signal the TUI to open its interactive picker.
+    return CommandResult(message="__OPEN_PROFILE_PICKER__")
+
+
 def _cmd_clear(ctx) -> CommandResult:
     return CommandResult(reset_runtime=True, message="Context cleared (new session).")
 
@@ -200,6 +226,8 @@ def handle_slash(line: str, ctx) -> CommandResult:
         return _cmd_resume(ctx, arg)
     if cmd == "/mode":
         return _cmd_mode(ctx, arg)
+    if cmd == "/profile":
+        return _cmd_profile(ctx, arg)
     if cmd == "/clear":
         return _cmd_clear(ctx)
     if cmd == "/model":
