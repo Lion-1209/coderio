@@ -38,3 +38,4 @@ htmlcov/
 *.log
 .tmp/
 tmp/
+.zcode/
