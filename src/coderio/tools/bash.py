@@ -38,7 +38,14 @@ def detect_shell(configured: str) -> str:
     found = shutil.which("bash")
     if found:
         return found
-    raise FileNotFoundError("bash not found. Install Git Bash and/or set [tools].bash_shell in config.")
+    if sys.platform == "win32":
+        raise FileNotFoundError(
+            "bash not found. Install Git Bash (https://git-scm.com) "
+            "and/or set [tools].bash_shell in config.toml.")
+    raise FileNotFoundError(
+        "bash not found. Install it via your package manager "
+        "(e.g. apt install bash / brew install bash) "
+        "and/or set [tools].bash_shell in config.toml.")
 
 
 class BashTool:

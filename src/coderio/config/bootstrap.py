@@ -4,17 +4,12 @@ from pathlib import Path
 
 STRUCTURE = (".coderio", ".coderio/skills", ".coderio/sessions", ".coderio/logs")
 
-_SAMPLE_CONFIG = """# coderio configuration. See docs/superpowers/specs/2026-06-25-coderio-s0-core-design.md
-# API keys are read from env vars (OPENAI_API_KEY / ANTHROPIC_API_KEY / Z_API_KEY),
-# never stored here.
-
-[model]
-default = "glm-4.5"
-provider = "openai_compatible"        # openai_compatible | anthropic
-base_url = "https://open.bigmodel.cn/api/paas/v4"
+_SAMPLE_CONFIG = """# coderio configuration.
+# The [model] section is populated by the onboarding wizard on first run.
+# You can also edit it manually. API keys are stored in ~/.coderio/credentials.
 
 [tools]
-bash_shell = ""                       # empty = auto-detect Git Bash
+bash_shell = ""                       # empty = auto-detect (Git Bash on Windows, bash on Linux/macOS)
 permission_mode = "confirm"           # confirm | plan | auto
 max_tool_rounds = 25
 

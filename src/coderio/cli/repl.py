@@ -71,11 +71,32 @@ def build_runtime(
 
 
 def _maybe_onboard(console, creds_path):
-    """Run onboarding if no key configured. Returns provider_id or None."""
+    """Run onboarding if no key source is configured.
+
+    Skips the wizard if ANY of these is true:
+      - credentials file has at least one key
+      - config.toml already has a provider_id (user configured manually)
+      - ANTHROPIC_API_KEY or OPENAI_API_KEY env var is set (env-based config)
+    """
     from coderio.cli.credentials import read_credentials
+    import os
     creds = read_credentials(creds_path)
     if creds:
         return next(iter(creds))
+    # Check if config.toml already has provider_id (manual config or prior onboarding)
+    config_path = Path(creds_path).parent / "config.toml"
+    if config_path.is_file():
+        try:
+            import tomllib
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+            if data.get("model", {}).get("provider_id"):
+                return data["model"]["provider_id"]
+        except Exception:
+            pass
+    # Check env vars
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("Z_API_KEY"):
+        return None
     from coderio.cli.onboarding import run_onboarding
     result = run_onboarding(
         prompt_fn=lambda msg: console.input(f"{msg} "),

@@ -26,6 +26,8 @@ export ANTHROPIC_API_KEY="your-key-here"
 
 ```bash
 # All tests
+# Windows: .venv/Scripts/python.exe -m pytest -q
+# Linux/macOS: .venv/bin/python -m pytest -q
 .venv/Scripts/python.exe -m pytest -q
 
 # Just the CLI/TUI tests
