@@ -4,6 +4,16 @@
 
 > 一个技能驱动的编程 agent——结构化 harness 约束、可折叠思考的 TUI、crew 编排。基于 langchain + langgraph + Lion-Skills，Windows 优先，跨平台。
 
+## 为什么做这个项目
+
+一开始只是想花掉阶跃送的金币，顺便走一遍 langchain 全技术栈搭 agent 的流程。框架搭出来之后觉得单纯的 REPL + CLI 不太酷，就开始折腾 TUI 了——目前 TUI 的效果我自己还挺满意的。
+
+不过整体框架并没有细细调优，所以目前只是一个工作之余搓出来的 demo。开源的目的不是做一个产品，而是希望给那些用 langchain 技术栈的人做一点小参考：ReAct 循环怎么搭、harness 怎么做结构约束、TUI 怎么做流式渲染、crew 怎么编排——这些代码都在，能跑，欢迎拿去玩。
+
+> 关于名字：**coderio = code + rio**（不是 coder + io 哦）。我的英文名是 Lion，本来想叫 codelion，但感觉怪怪的，所以就叫 coderio 了。
+
+---
+
 **coderio** 是一个技能驱动的编程 agent。它的"骨架"是 [Lion-Skills](https://github.com/Lion-1209/Lion-Skills) 套件（clarify→spec→task→execute→verify→commit 工作流），coderio 给它配上真正能干活的工具、一个强制遵循工作流的 **harness 状态控制层**，以及交互式 Textual TUI。参照对象是 claude code / codex / zcode。
 
 核心理念：**skill 是操作手册，harness 是执行纪律，工具是手**。三者分层，互不替代。

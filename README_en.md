@@ -4,6 +4,16 @@
 
 > A skill-driven coding agent with a structural harness, foldable-thinking TUI, and crew orchestration. Built on langchain + langgraph + Lion-Skills. Windows-first, cross-platform.
 
+## Why this project
+
+It started as a way to burn through some free tokens from StepFun, and to go through the full langchain tech stack to build an agent. Once the framework was up, a plain REPL + CLI didn't feel cool enough — so the TUI journey began. I'm quite happy with how the TUI turned out.
+
+That said, the overall framework hasn't been finely tuned. This is a demo built in my spare time, not a product. The goal of open-sourcing is simply to offer a small reference for anyone using the langchain stack: how to build a ReAct loop, how to do structural harness constraints, how to do streaming TUI rendering, how to orchestrate a crew pipeline — the code is all here, it runs, feel free to play with it.
+
+> About the name: **coderio = code + rio** (not coder + io). My English name is Lion — I wanted "codelion" but it sounded weird, so coderio it is.
+
+---
+
 **coderio** is a skill-driven coding agent. Its "backbone" is the [Lion-Skills](https://github.com/Lion-1209/Lion-Skills) suite (clarify→spec→task→execute→verify→commit workflow). coderio pairs it with real working tools, a **harness state-control layer** that enforces the workflow, and an interactive Textual TUI. Reference targets: claude code / codex / zcode.
 
 Core philosophy: **skills are the playbook, the harness is discipline, tools are the hands.** Three layers, none substituting for another.
