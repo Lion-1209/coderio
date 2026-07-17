@@ -18,9 +18,11 @@ def _pick_api_key(provider: str) -> str | None:
 def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
     """Build a chat model.
 
-    If cfg.model.provider_id is set (S1), look up the provider registry for
-    base_url/kind and read the key from the credentials file (falling back to
-    env). Otherwise use S0 behavior (protocol + env key).
+    Resolution order:
+      1. provider_id in registry → use registry base_url/kind + credentials key
+      2. provider_id set but NOT in registry → use config.toml's base_url/provider
+         + credentials key (custom provider from config.toml or 'coderio config add')
+      3. no provider_id → S0 fallback: config.toml provider/base_url + env key
     """
     m = cfg.model
     max_tokens = m.max_output_tokens
@@ -29,13 +31,24 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
         from coderio.cli.credentials import get_key
 
         info = get_provider(m.provider_id)
-        if info is None:
-            raise ValueError(f"Unknown provider_id: {m.provider_id!r}")
-        key = get_key(m.provider_id, creds_path) or _pick_api_key(info.kind)
-        model_name = m.default or info.default_model
-        if info.kind == "anthropic":
-            return ChatAnthropic(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
-        return ChatOpenAI(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
+        key = get_key(m.provider_id, creds_path) or _pick_api_key(
+            info.kind if info else m.provider)
+        model_name = m.default or (info.default_model if info else "")
+        if info:
+            # Known provider — use registry base_url/kind.
+            if info.kind == "anthropic":
+                return ChatAnthropic(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
+            return ChatOpenAI(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
+        # Custom provider_id not in registry — use config.toml base_url/provider.
+        kind = m.provider or "openai_compatible"
+        if not m.base_url:
+            raise ValueError(
+                f"provider_id '{m.provider_id}' is not a known provider and "
+                f"no base_url is set in config.toml. Either use a known provider_id, "
+                f"or set [model] base_url and provider in config.toml.")
+        if kind == "anthropic":
+            return ChatAnthropic(model=model_name, base_url=m.base_url, api_key=key, max_tokens=max_tokens)
+        return ChatOpenAI(model=model_name, base_url=m.base_url, api_key=key, max_tokens=max_tokens)
 
     api_key = _pick_api_key(m.provider)
     if m.provider == "openai_compatible":

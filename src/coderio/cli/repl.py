@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import getpass
 from pathlib import Path
 
 from rich.console import Console
@@ -70,20 +69,19 @@ def build_runtime(
     return cfg, store, model, tools, gate, session, active, stream
 
 
-def _maybe_onboard(console, creds_path):
-    """Run onboarding if no key source is configured.
+def _needs_onboarding(creds_path) -> bool:
+    """Check whether the onboarding wizard should run.
 
-    Skips the wizard if ANY of these is true:
+    Returns False (skip onboarding) if ANY key source exists:
       - credentials file has at least one key
-      - config.toml already has a provider_id (user configured manually)
-      - ANTHROPIC_API_KEY or OPENAI_API_KEY env var is set (env-based config)
+      - config.toml already has a provider_id
+      - ANTHROPIC_API_KEY / OPENAI_API_KEY / Z_API_KEY env var is set
     """
     from coderio.cli.credentials import read_credentials
     import os
     creds = read_credentials(creds_path)
     if creds:
-        return next(iter(creds))
-    # Check if config.toml already has provider_id (manual config or prior onboarding)
+        return False
     config_path = Path(creds_path).parent / "config.toml"
     if config_path.is_file():
         try:
@@ -91,19 +89,12 @@ def _maybe_onboard(console, creds_path):
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
             if data.get("model", {}).get("provider_id"):
-                return data["model"]["provider_id"]
+                return False
         except Exception:
             pass
-    # Check env vars
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("Z_API_KEY"):
-        return None
-    from coderio.cli.onboarding import run_onboarding
-    result = run_onboarding(
-        prompt_fn=lambda msg: console.input(f"{msg} "),
-        password_fn=lambda: getpass.getpass("API key: "),
-        creds_file=creds_path,
-    )
-    return result.provider_id if result else None
+        return False
+    return True
 
 
 def _resolve_resume(cfg: Config, resume: str | None, continue_last: bool) -> Session:

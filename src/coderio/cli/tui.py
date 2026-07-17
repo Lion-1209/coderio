@@ -257,6 +257,257 @@ class StatusBar(Widget):
         return t
 
 
+class OnboardingScreen(ModalScreen[dict | None]):
+    """TUI-based onboarding wizard (multi-step ModalScreen).
+
+    Uses ListView (↑↓ + Enter) for provider/model selection, Input with
+    password masking for API key. Dismisses with a result dict on success,
+    or None if cancelled.
+    """
+
+    CSS = """
+    OnboardingScreen { align: center middle; }
+    #onboard-box {
+        width: 70%; height: auto; max-height: 80%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    #onboard-title { text-align: center; color: $accent; margin-bottom: 1; }
+    #onboard-status { color: $text-muted; margin-top: 1; }
+    #onboard-input { margin-top: 1; border: round $accent; }
+    #onboard-input:focus { border: round $accent; }
+    #onboard-list { height: auto; max-height: 16; margin-top: 1; }
+    .onboard-group-header { color: $accent; margin-top: 1; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "取消", show=True),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        from coderio.cli.providers import PROVIDERS
+        self._providers = PROVIDERS
+        self._step = "provider"
+        self._chosen_provider = None
+        self._chosen_model = ""
+        self._base_url = ""
+        self._api_key = ""
+        self._provider_items: list = []  # parallel to ListView items
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="onboard-box"):
+            yield Static("[bold]coderio 配置向导[/bold]", id="onboard-title")
+            yield Static("", id="onboard-hint")
+            yield ListView(id="onboard-list")
+            yield Input(id="onboard-input")
+            yield Static("", id="onboard-status")
+
+    def on_mount(self) -> None:
+        self._show_provider_step()
+
+    # --- step transitions ---
+
+    def _show_provider_step(self) -> None:
+        """Step 1: provider selection via ListView (↑↓ + Enter)."""
+        self._step = "provider"
+        self.query_one("#onboard-hint").update(
+            "选择你的模型 provider（↑↓ 选择 · Enter 确认 · Esc 取消）")
+        self.query_one("#onboard-input", Input).visible = False
+        lv = self.query_one("#onboard-list", ListView)
+        lv.display = True
+        lv.clear()
+        self._provider_items = []
+        plan = [p for p in self._providers if p.plan]
+        cn = [p for p in self._providers if not p.plan and p.id in ("bigmodel_api", "stepfun_api")]
+        intl = [p for p in self._providers if p.id in ("openai", "anthropic")]
+        local = [p for p in self._providers if p.id == "ollama"]
+        custom = [p for p in self._providers if p.id == "openai_custom"]
+
+        def _add(title, ps):
+            if ps:
+                lv.append(ListItem(Static(f"[bold]{title}[/bold]")))
+                self._provider_items.append(None)  # header, not selectable
+                for p in ps:
+                    ms = f"  ({' / '.join(p.models[:2])}{'...' if len(p.models) > 2 else ''})" if p.models else ""
+                    lv.append(ListItem(Static(f"  {p.label}{ms}")))
+                    self._provider_items.append(p)
+
+        _add("Coding Plan（订阅制）", plan)
+        _add("国内 API Key 直连", cn)
+        _add("国际", intl)
+        _add("本地模型", local)
+        _add("自定义", custom)
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        lv.focus()
+
+    def _show_model_step(self) -> None:
+        """Step 2: model selection via ListView."""
+        p = self._chosen_provider
+        if not p.models:
+            # No preset models (ollama/custom) — text input
+            self._step = "model_input"
+            self.query_one("#onboard-list", ListView).display = False
+            self.query_one("#onboard-hint").update("输入模型名（例如 qwen2.5-coder / gpt-4o）：")
+            inp = self.query_one("#onboard-input", Input)
+            inp.visible = True
+            inp.password = False
+            inp.value = ""
+            inp.focus()
+            return
+        self._step = "model"
+        self.query_one("#onboard-input", Input).visible = False
+        lv = self.query_one("#onboard-list", ListView)
+        lv.display = True
+        lv.clear()
+        self._model_items = list(p.models)
+        for m in p.models:
+            star = " ★" if m == p.default_model else ""
+            lv.append(ListItem(Static(f"  {m}{star}")))
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        self.query_one("#onboard-hint").update(
+            f"选择模型（{p.label}）— ★ = 推荐（↑↓ · Enter）")
+        lv.focus()
+
+    def _show_base_url_step(self) -> None:
+        """Step 2b: base_url input (openai_custom only)."""
+        self._step = "base_url"
+        self.query_one("#onboard-list", ListView).display = False
+        self.query_one("#onboard-hint").update(
+            "输入 base_url（例如 https://api.example.com/v1）：")
+        inp = self.query_one("#onboard-input", Input)
+        inp.visible = True
+        inp.password = False
+        inp.value = ""
+        inp.focus()
+
+    def _show_key_step(self) -> None:
+        """Step 3: API key input with password masking (dots)."""
+        p = self._chosen_provider
+        if p.id == "ollama":
+            self._api_key = "ollama"
+            self._finish()
+            return
+        self._step = "key"
+        self.query_one("#onboard-list", ListView).display = False
+        self.query_one("#onboard-hint").update(
+            f"输入 API key（{p.api_key_hint}）：")
+        inp = self.query_one("#onboard-input", Input)
+        inp.visible = True
+        inp.password = True  # masked — shows dots
+        inp.value = ""
+        inp.focus()
+
+    def _start_verification(self) -> None:
+        """Step 4: verify the key via a minimal API request."""
+        self._step = "verifying"
+        self.query_one("#onboard-input", Input).visible = False
+        self.query_one("#onboard-hint").update("[bold cyan]正在验证连接...[/bold cyan]")
+        def _verify():
+            from coderio.cli.onboarding import _verify_key
+            ok, msg = _verify_key(self._chosen_provider, self._api_key,
+                                  self._chosen_model, self._base_url)
+            self.app.call_from_thread(self._on_verify_result, ok, msg)
+        import threading
+        threading.Thread(target=_verify, daemon=True).start()
+
+    def _on_verify_result(self, ok: bool, msg: str) -> None:
+        if ok:
+            self.query_one("#onboard-status").update(f"[green]✅ {msg}[/green]")
+            self._finish()
+        else:
+            self.query_one("#onboard-status").update(f"[red]❌ {msg}[/red]")
+            self._step = "key"
+            self.query_one("#onboard-hint").update("验证失败，重新输入 API key（或 Esc 取消）：")
+            inp = self.query_one("#onboard-input", Input)
+            inp.password = True
+            inp.visible = True
+            inp.value = ""
+            inp.focus()
+
+    def _finish(self) -> None:
+        """Save credentials + config, then dismiss with result."""
+        from pathlib import Path
+        from coderio.cli.credentials import write_credentials
+        from coderio.cli.onboarding import _save_to_config, OnboardingResult
+        creds_path = Path.home() / ".coderio" / "credentials"
+        write_credentials({self._chosen_provider.id: self._api_key}, creds_path)
+        result = OnboardingResult(
+            provider_id=self._chosen_provider.id,
+            model=self._chosen_model,
+            base_url=self._base_url,
+            kind=self._chosen_provider.kind,
+            api_key=self._api_key,
+        )
+        config_path = creds_path.parent / "config.toml"
+        _save_to_config(result, config_path)
+        self.query_one("#onboard-status").update("[green]配置完成！[/green]")
+        self.set_timer(0.8, lambda: self.dismiss({
+            "provider_id": result.provider_id,
+            "model": result.model,
+        }))
+
+    # --- event handlers ---
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """ListView item selected (Enter pressed)."""
+        lv = self.query_one("#onboard-list", ListView)
+        idx = lv.index
+        if idx is None:
+            return
+        if self._step == "provider":
+            # Skip header rows (None entries) — find the actual provider at/before idx
+            if idx < len(self._provider_items):
+                p = self._provider_items[idx]
+                if p is None:
+                    return  # header row, ignore
+                self._chosen_provider = p
+                self.query_one("#onboard-status").update("")
+                if p.id == "openai_custom":
+                    self._show_base_url_step()
+                else:
+                    self._base_url = p.base_url
+                    self._show_model_step()
+        elif self._step == "model":
+            if idx < len(self._model_items):
+                self._chosen_model = self._model_items[idx]
+                self.query_one("#onboard-status").update("")
+                self._show_key_step()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "onboard-input":
+            return
+        val = event.value.strip()
+        if self._step == "base_url":
+            if val:
+                self._base_url = val
+                self._show_model_step()
+            else:
+                self.query_one("#onboard-status").update("[red]请输入 base_url[/red]")
+        elif self._step == "model_input":
+            if val:
+                self._chosen_model = val
+                self.query_one("#onboard-status").update("")
+                self._show_key_step()
+            else:
+                self.query_one("#onboard-status").update("[red]请输入模型名[/red]")
+        elif self._step == "key":
+            if val:
+                self._api_key = val
+                self.query_one("#onboard-status").update("")
+                self._start_verification()
+            else:
+                self.query_one("#onboard-status").update("[red]请输入 API key[/red]")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -878,6 +1129,32 @@ class CoderioTUI(App):
             pass
 
 
+class _OnboardingApp(App):
+    """Minimal app that just shows the OnboardingScreen and exits.
+
+    Runs before the main CoderioTUI so the terminal is in Textual mode during
+    onboarding (masked key input, proper rendering) rather than raw console.
+    """
+
+    CSS = """
+    Screen { background: $surface; }
+    """
+
+    def on_mount(self) -> None:
+        def _on_done(result):
+            self._result = result
+            self.exit()
+        self._result = None
+        self.push_screen(OnboardingScreen(), _on_done)
+
+
+def _run_onboarding_tui() -> dict | None:
+    """Run the TUI onboarding wizard. Returns the result dict or None if cancelled."""
+    app = _OnboardingApp()
+    app.run()
+    return getattr(app, "_result", None)
+
+
 def run_tui(
     provider_override: str | None = None,
     model_override: str | None = None,
@@ -894,8 +1171,7 @@ def run_tui(
     history (same semantics as the REPL's --resume/--continue).
     """
     from pathlib import Path
-    from rich.console import Console
-    from coderio.cli.repl import build_runtime, _resolve_resume, _maybe_onboard
+    from coderio.cli.repl import build_runtime, _resolve_resume, _needs_onboarding
     from coderio.config import load_config
     from coderio.config.bootstrap import ensure_user_dirs
 
@@ -903,12 +1179,11 @@ def run_tui(
     search_from = "."
     creds_path = Path.home() / ".coderio" / "credentials"
 
-    # Run onboarding BEFORE building the runtime / starting the TUI. The wizard
-    # uses stdin/stdout (Rich console + getpass), which must happen before Textual
-    # takes over the terminal. Without this, a first-time user with no API key
-    # would crash on the first message instead of seeing the provider menu.
-    pre_console = Console()
-    _maybe_onboard(pre_console, creds_path)
+    # Run TUI-based onboarding if needed (replaces the old console wizard).
+    if _needs_onboarding(creds_path):
+        result = _run_onboarding_tui()
+        if result is None:
+            return  # user cancelled
 
     # Resolve a session to resume BEFORE building the runtime (so build_runtime
     # receives it instead of creating a fresh one).

@@ -123,6 +123,58 @@ def config_cmd():
     )
 
 
+@app.command("add-provider")
+def add_provider_cmd(
+    provider_id: str = typer.Option(..., "--id", help="Unique provider ID (e.g. my_openai)."),
+    base_url: str = typer.Option(..., "--base-url", help="API base URL."),
+    model: str = typer.Option(..., "--model", help="Default model name."),
+    kind: str = typer.Option("openai_compatible", "--kind", help="Protocol: openai_compatible or anthropic."),
+    api_key: str = typer.Option("", "--key", help="API key (omit to type interactively)."),
+):
+    """Add a custom provider to config.toml.
+
+    Example:
+      coderio add-provider --id my_proxy --base-url https://api.my-proxy.com/v1 \\
+          --model gpt-4o --kind openai_compatible --key sk-xxx
+    """
+    import getpass
+    import tomllib
+    import tomli_w
+    from pathlib import Path
+
+    config_path = Path.home() / ".coderio" / "config.toml"
+    creds_path = Path.home() / ".coderio" / "credentials"
+
+    # Read existing config
+    data = {}
+    if config_path.is_file():
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+
+    # Update [model] section
+    model_section = data.get("model", {})
+    model_section["provider_id"] = provider_id
+    model_section["default"] = model
+    model_section["base_url"] = base_url
+    model_section["provider"] = kind
+    data["model"] = model_section
+
+    # Write config
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "wb") as f:
+        tomli_w.dump(data, f)
+
+    # Save key
+    key = api_key or getpass.getpass("API key: ")
+    if key:
+        from coderio.cli.credentials import write_credentials
+        write_credentials({provider_id: key}, creds_path)
+
+    console = Console()
+    console.print(f"[green]✅ Provider '{provider_id}' added to {config_path}[/green]")
+    console.print(f"   model: {model}  base_url: {base_url}  kind: {kind}")
+
+
 def main_entry() -> None:
     app()
 
