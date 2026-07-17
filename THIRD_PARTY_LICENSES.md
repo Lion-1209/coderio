@@ -1,5 +1,7 @@
 # Third-Party Licenses
 
+[中文文档](README.md) | **English**
+
 ## Lion-Skills
 
 This project bundles [Lion-Skills](https://github.com/Lion-1209/Lion-Skills)

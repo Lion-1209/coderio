@@ -1,5 +1,7 @@
 # Contributing to coderio
 
+[中文文档](README.md) | **English**
+
 Thanks for your interest in contributing! This guide covers the basics.
 
 ## Development setup
