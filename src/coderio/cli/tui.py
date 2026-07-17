@@ -882,13 +882,21 @@ def run_tui(
     history (same semantics as the REPL's --resume/--continue).
     """
     from pathlib import Path
-    from coderio.cli.repl import build_runtime, _resolve_resume
+    from rich.console import Console
+    from coderio.cli.repl import build_runtime, _resolve_resume, _maybe_onboard
     from coderio.config import load_config
     from coderio.config.bootstrap import ensure_user_dirs
 
     ensure_user_dirs()
     search_from = "."
     creds_path = Path.home() / ".coderio" / "credentials"
+
+    # Run onboarding BEFORE building the runtime / starting the TUI. The wizard
+    # uses stdin/stdout (Rich console + getpass), which must happen before Textual
+    # takes over the terminal. Without this, a first-time user with no API key
+    # would crash on the first message instead of seeing the provider menu.
+    pre_console = Console()
+    _maybe_onboard(pre_console, creds_path)
 
     # Resolve a session to resume BEFORE building the runtime (so build_runtime
     # receives it instead of creating a fresh one).

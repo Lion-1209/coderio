@@ -55,7 +55,13 @@ class Session:
                 line = line.strip()
                 if not line:
                     continue
-                d = json.loads(line)
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    # Tolerate a trailing corrupted/partial line (crash mid-write,
+                    # power loss, Ctrl+C during append). Skip it rather than making
+                    # the entire session un-resumable.
+                    continue
                 if d.get("type") == "meta":
                     meta = {k: v for k, v in d.items() if k != "type"}
                 else:

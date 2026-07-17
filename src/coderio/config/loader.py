@@ -62,18 +62,38 @@ def _from_dict(data: dict) -> Config:
     s = data.get("skills", {})
     se = data.get("session", {})
     cl = data.get("cli", {})
+
+    # Validate int fields — TOML may give strings/bools if the user mis-types.
+    def _int(section: dict, key: str, default: int, section_name: str) -> int:
+        v = section.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                f"config.toml [{section_name}] {key} 必须是整数，但得到 {type(v).__name__}: {v!r}")
+        return v
+
+    # Validate permission_mode against the known enum values.
+    perm = t.get("permission_mode", cfg.tools.permission_mode)
+    if isinstance(perm, str):
+        perm_lower = perm.lower()
+        valid = ("confirm", "plan", "auto")
+        if perm_lower not in valid:
+            raise ValueError(
+                f"config.toml [tools] permission_mode='{perm}' 无效。"
+                f"可选值: {', '.join(valid)}")
+        perm = perm_lower
+
     return Config(
         model=ModelConfig(
             default=m.get("default", cfg.model.default),
             provider=m.get("provider", cfg.model.provider),
             base_url=m.get("base_url", cfg.model.base_url),
             provider_id=m.get("provider_id", ""),
-            max_output_tokens=m.get("max_output_tokens", cfg.model.max_output_tokens),
+            max_output_tokens=_int(m, "max_output_tokens", cfg.model.max_output_tokens, "model"),
         ),
         tools=ToolsConfig(
             bash_shell=t.get("bash_shell", cfg.tools.bash_shell),
-            permission_mode=t.get("permission_mode", cfg.tools.permission_mode),
-            max_tool_rounds=t.get("max_tool_rounds", cfg.tools.max_tool_rounds),
+            permission_mode=perm,
+            max_tool_rounds=_int(t, "max_tool_rounds", cfg.tools.max_tool_rounds, "tools"),
         ),
         skills=SkillsConfig(
             auto_load=s.get("auto_load", cfg.skills.auto_load),

@@ -35,9 +35,22 @@ class ActiveSkills:
         self._active.clear()
 
 
+def _os_context() -> str:
+    """Build an OS-specific context clause for the system prompt.
+
+    The bash tool's behavior differs by platform (Git Bash on Windows, native
+    bash on Linux/macOS). Telling the model the wrong OS causes it to emit
+    wrong path styles or platform-specific idioms."""
+    import sys
+    if sys.platform == "win32":
+        return ("You are coderio, a coding agent working in the user's project on Windows.\n"
+                "You have tools to read/write/edit files, run bash commands (Git Bash), search, manage")
+    return ("You are coderio, a coding agent working in the user's project.\n"
+            "You have tools to read/write/edit files, run bash commands, search, manage")
+
+
 _BASE_INSTRUCTIONS = """\
-You are coderio, a coding agent working in the user's project on Windows.
-You have tools to read/write/edit files, run bash commands (Git Bash), search, manage
+{os_context}
 todos, and fetch the web. You serve TWO kinds of requests — recognize which one and behave
 accordingly. Getting this wrong (running the heavy coding workflow on a quick question, or
 answering a coding task with chat alone) is a failure mode.
@@ -166,7 +179,7 @@ CORE_CHAIN_SKILLS = (
 
 
 def build_system_prompt(store: SkillStore, active: ActiveSkills) -> str:
-    parts = [_BASE_INSTRUCTIONS]
+    parts = [_BASE_INSTRUCTIONS.format(os_context=_os_context())]
 
     # All skills (core chain + cross-cutting) are listed by DESCRIPTION only — the
     # full playbook body is loaded on-demand via activate_skill() when the model

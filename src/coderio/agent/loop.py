@@ -154,21 +154,37 @@ def run_step(
     bound = bound_cache.get(langchain_tools, (system_prompt,))
     lc_msgs = _to_langchain_messages(system_prompt, convo)
     aggregated = None  # AIMessageChunk accumulator; its tool_calls are complete at end.
-    for event in bound.stream(lc_msgs):
-        raw = getattr(event, "content", "")
-        # Forward visible text tokens (normalize blocks->text).
-        token = _content_to_text(raw)
-        if token:
-            stream.on_token(token)
-        # Forward 'thinking' content so the UI can show a 'is thinking' indicator
-        # (otherwise the screen is frozen during the thinking stage -> looks hung).
-        thinking = _extract_thinking(raw)
-        if thinking and hasattr(stream, "on_thinking"):
-            stream.on_thinking(thinking)
-        # Accumulate chunks; langchain's AIMessageChunk.__add__ merges tool_call_chunks
-        # into full tool_calls. This handles both providers that stream incrementally
-        # and providers that emit a single complete AIMessage.
-        aggregated = event if aggregated is None else (aggregated + event)
+    try:
+        for event in bound.stream(lc_msgs):
+            raw = getattr(event, "content", "")
+            token = _content_to_text(raw)
+            if token:
+                stream.on_token(token)
+            thinking = _extract_thinking(raw)
+            if thinking and hasattr(stream, "on_thinking"):
+                stream.on_thinking(thinking)
+            aggregated = event if aggregated is None else (aggregated + event)
+    except Exception as e:
+        # Map common provider errors to actionable user-facing messages instead
+        # of letting a raw traceback surface. The error string is fed back to
+        # the TUI's error handler, which displays it in the history pane.
+        msg = str(e).lower()
+        if any(k in msg for k in ("authentication", "401", "api key", "unauthorized")):
+            raise RuntimeError(
+                "API 认证失败：API key 无效或已过期。请运行 coderio config 检查配置，"
+                "或设置 ANTHROPIC_API_KEY 环境变量。") from e
+        if any(k in msg for k in ("rate_limit", "429", "rate limit", "quota")):
+            raise RuntimeError(
+                "API 速率限制：请求过于频繁或额度用完。请稍后重试。") from e
+        if any(k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")):
+            raise RuntimeError(
+                f"网络错误：无法连接到模型端点 ({type(e).__name__})。"
+                "请检查网络连接和 base_url 配置。") from e
+        if any(k in msg for k in ("not found", "404", "model")):
+            raise RuntimeError(
+                f"模型错误：模型名可能无效 ({type(e).__name__}: {e})。"
+                "请运行 coderio config 检查 model 配置。") from e
+        raise  # unknown error — let the TUI's generic handler surface it
     usage = getattr(aggregated, "usage_metadata", None) or {}
     if usage and hasattr(stream, "add_usage"):
         stream.add_usage(usage)
