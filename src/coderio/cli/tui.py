@@ -116,6 +116,16 @@ class CommandMenu(Vertical):
         n = len(lv.children)
         idx = lv.index or 0
         lv.index = (idx + delta) % n
+        # Scroll the newly-selected item into view. Setting .index alone doesn't
+        # guarantee the viewport follows (we bypass ListView's own key handling),
+        # so when the menu has more items than its max-height the highlight can
+        # scroll out of sight. Bring it back via the highlighted child widget.
+        try:
+            child = lv.highlighted_child
+            if child is not None:
+                lv.scroll_to_widget(child)
+        except Exception:
+            pass
 
     def accept(self) -> bool:
         """Fill the selected command into the bound Input. Returns True if accepted."""
