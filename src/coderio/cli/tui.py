@@ -107,7 +107,15 @@ class CommandMenu(Vertical):
         return self.has_class("-visible")
 
     def move(self, delta: int) -> None:
-        """Move the selection by delta (+1 down, -1 up); wraps around."""
+        """Move the selection by delta (+1 down, -1 up); wraps around.
+
+        After moving, proactively scrolls so the highlight stays at least one
+        row inside the visible viewport (not flush against the edge). Textual's
+        default scroll_to_widget only reacts once the highlighted item is FULLY
+        off-screen, which makes the menu feel unresponsive — the user presses
+        down several times before the view catches up. We compute the target
+        scroll_y directly to trigger earlier.
+        """
         if not self.visible():
             return
         lv = self.query_one("#cmd-list", ListView)
@@ -115,17 +123,35 @@ class CommandMenu(Vertical):
             return
         n = len(lv.children)
         idx = lv.index or 0
-        lv.index = (idx + delta) % n
-        # Scroll the newly-selected item into view. Setting .index alone doesn't
-        # guarantee the viewport follows (we bypass ListView's own key handling),
-        # so when the menu has more items than its max-height the highlight can
-        # scroll out of sight. Bring it back via the highlighted child widget.
+        new_idx = (idx + delta) % n
+        lv.index = new_idx
+
+        # Proactive scroll: keep a 1-row margin so the highlight never sits on
+        # the very bottom/top edge of the viewport.
         try:
-            child = lv.highlighted_child
-            if child is not None:
-                lv.scroll_to_widget(child)
+            # visible viewport height (in rows)
+            vp_h = lv.size.height
+            if vp_h <= 0:
+                vp_h = 1
+            row = new_idx
+            if delta > 0:
+                # Target: highlight sits at most vp_h-2 rows below the viewport
+                # top (leaving 1 row of margin below it). Clamped to >= 0.
+                target = max(0, row - (vp_h - 2))
+            else:
+                # Target: highlight sits at least 1 row below the viewport top
+                # (leaving 1 row of margin above it). Clamped to <= max_scroll_y.
+                target = max(0, min(lv.max_scroll_y, row - 1))
+            # Clamp to valid range and apply if it actually improves the view.
+            target = max(0, min(lv.max_scroll_y, target))
+            if target != lv.scroll_y:
+                lv.scroll_y = target
         except Exception:
-            pass
+            # Fallback: at least ensure the item is visible.
+            try:
+                lv.scroll_to_widget(lv.children[new_idx], animate=False)
+            except Exception:
+                pass
 
     def accept(self) -> bool:
         """Fill the selected command into the bound Input. Returns True if accepted."""
