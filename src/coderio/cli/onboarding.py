@@ -103,6 +103,31 @@ def _save_to_config(result: OnboardingResult, config_path: Path) -> None:
         tomli_w.dump(data, f)
 
 
+def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str]:
+    """Send a minimal API request to verify the key/endpoint works.
+
+    Returns (success, message). Uses a 1-token 'hi' request — cheap and fast.
+    """
+    try:
+        if p.kind == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+            m = ChatAnthropic(model=model, base_url=base_url, api_key=api_key, max_tokens=1)
+        else:
+            from langchain_openai import ChatOpenAI
+            m = ChatOpenAI(model=model, base_url=base_url, api_key=api_key, max_tokens=1)
+        m.invoke("hi")
+        return (True, "验证成功")
+    except Exception as e:
+        msg = str(e).lower()
+        if any(k in msg for k in ("authentication", "401", "unauthorized", "api key")):
+            return (False, f"API key 无效或已过期: {e}")
+        if any(k in msg for k in ("connect", "timeout", "refused", "unreachable")):
+            return (False, f"无法连接到 {base_url}，请检查网络: {e}")
+        if any(k in msg for k in ("404", "not found", "model")):
+            return (False, f"模型 {model} 不可用: {e}")
+        return (False, f"验证失败: {type(e).__name__}: {e}")
+
+
 def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> OnboardingResult | None:
     """Run the interactive wizard. Returns None if user skips."""
     print("检测到尚未配置 API key，启动配置向导：")
@@ -121,6 +146,25 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
         if not api_key:
             print("  未输入 key，已取消。")
             return None
+        # Verify the key works before saving — catches typos, wrong endpoints,
+        # expired keys at config time instead of on first message in the TUI.
+        print("  正在验证连接...")
+        ok, msg = _verify_key(p, api_key, model, base_url)
+        if not ok:
+            print(f"  ❌ {msg}")
+            retry = prompt_fn("  重新输入 key？(回车=重试, n=跳过): ").strip().lower()
+            if retry == "n":
+                return None
+            api_key = password_fn().strip()
+            if not api_key:
+                return None
+            print("  正在验证连接...")
+            ok, msg = _verify_key(p, api_key, model, base_url)
+            if not ok:
+                print(f"  ❌ {msg}")
+                print("  仍验证失败。配置已跳过，请稍后检查配置。")
+                return None
+        print(f"  ✅ {msg}")
     else:
         api_key = "ollama"  # Ollama doesn't need a key
     write_credentials({p.id: api_key}, creds_file)

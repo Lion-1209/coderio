@@ -1,8 +1,15 @@
 from coderio.cli.onboarding import run_onboarding, OnboardingResult, _save_to_config
 from coderio.cli.credentials import read_credentials
+import coderio.cli.onboarding as onboarding_mod
 
 
-def test_select_bigmodel_coding_plan(tmp_path):
+def _mock_verify_ok(*a, **kw):
+    """Mock _verify_key to always succeed (skip real API call in tests)."""
+    return (True, "验证成功")
+
+
+def test_select_bigmodel_coding_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
     creds_file = tmp_path / "credentials"
     answers = iter(["1", "", "sk-big-123"])
     result = run_onboarding(
@@ -17,7 +24,8 @@ def test_select_bigmodel_coding_plan(tmp_path):
     assert read_credentials(creds_file) == {"bigmodel_coding_plan": "sk-big-123"}
 
 
-def test_select_stepfun_with_explicit_model(tmp_path):
+def test_select_stepfun_with_explicit_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
     answers = iter(["2", "2", "sk-step"])
     result = run_onboarding(
         prompt_fn=lambda _: next(answers),
@@ -40,7 +48,8 @@ def test_skip_returns_none(tmp_path):
     assert not (tmp_path / "credentials").exists()
 
 
-def test_openai_custom_asks_base_url(tmp_path):
+def test_openai_custom_asks_base_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
     # openai_custom is now menu item 8
     answers = iter(["8", "https://my.api/v1", "my-model", "sk-x"])
     result = run_onboarding(
@@ -53,9 +62,10 @@ def test_openai_custom_asks_base_url(tmp_path):
     assert result.model == "my-model"
 
 
-def test_onboarding_persists_to_config(tmp_path):
+def test_onboarding_persists_to_config(tmp_path, monkeypatch):
     """Onboarding must write provider_id/model to config.toml so build_chat_model
     uses the S1 path — without this the entered key is never read."""
+    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
     creds_file = tmp_path / "credentials"
     config_path = tmp_path / "config.toml"
     answers = iter(["1", "", "sk-big-123"])
@@ -65,7 +75,6 @@ def test_onboarding_persists_to_config(tmp_path):
         creds_file=creds_file,
     )
     assert result is not None
-    # config.toml should now have provider_id + model
     assert config_path.is_file()
     import tomllib
     with open(config_path, "rb") as f:
@@ -75,7 +84,7 @@ def test_onboarding_persists_to_config(tmp_path):
 
 
 def test_ollama_no_key_required(tmp_path):
-    """Ollama provider should skip the API key prompt."""
+    """Ollama provider should skip the API key prompt and verification."""
     # ollama is menu item 7
     answers = iter(["7", "qwen2.5-coder"])
     result = run_onboarding(
@@ -103,3 +112,13 @@ def test_anthropic_provider_available():
     p = get_provider("anthropic")
     assert p is not None
     assert p.kind == "anthropic"
+
+
+def test_verify_key_failure_returns_false():
+    """_verify_key should return (False, msg) for an invalid key."""
+    # Use a clearly invalid key against a real endpoint — fast 401.
+    from coderio.cli.providers import get_provider
+    p = get_provider("openai")
+    ok, msg = onboarding_mod._verify_key(p, "sk-invalid-key-test", "gpt-4o", p.base_url)
+    assert ok is False
+    assert len(msg) > 0

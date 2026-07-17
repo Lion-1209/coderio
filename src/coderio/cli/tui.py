@@ -647,6 +647,18 @@ class CoderioTUI(App):
                 except SystemExit:
                     self._render_q.append(("exit",))
                 except Exception as e:
+                    # Reset the streaming state + status bar so the TUI doesn't
+                    # get stuck in 'thinking' phase when the agent errors out
+                    # (e.g. API auth failure, network error). on_finish is never
+                    # called when run_agent raises, so we must clean up here.
+                    self._round_thinking = ""
+                    self._round_think_start = 0.0
+                    self._live_think_body = None
+                    self._live_think_chars = 0
+                    self.buffer = ""
+                    self._live_output_last_flush = 0.0
+                    if self._status_bar:
+                        self._status_bar.set_phase("idle")
                     self._render_q.append(("static", f"运行错误: {type(e).__name__}: {e}", "red"))
             self.run_worker(_run, thread=True, exclusive=True,
                             name="agent_turn", exit_on_error=False)
