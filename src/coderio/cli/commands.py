@@ -32,6 +32,7 @@ SLASH_COMMANDS: list[SlashCommand] = [
     SlashCommand("/clear", "reset context (new session + clear active skills)",
                  ["/clear"]),
     SlashCommand("/config", "show current configuration", ["/config"]),
+    SlashCommand("/setup", "reconfigure provider/model (onboarding wizard)", ["/setup"]),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
     SlashCommand("/resume", "resume a past session (opens an interactive picker)",
                  ["/resume "]),
@@ -219,4 +220,7 @@ def handle_slash(line: str, ctx) -> CommandResult:
             stream.show_last_thinking()
             return CommandResult(message=None)
         return CommandResult(message="当前无思考内容可展开。")
+    if cmd == "/setup":
+        # Signal the TUI to open the OnboardingScreen (same wizard as first run).
+        return CommandResult(message="__OPEN_ONBOARDING__")
     return CommandResult(message=f"Unknown command: {cmd}. Type /help.")

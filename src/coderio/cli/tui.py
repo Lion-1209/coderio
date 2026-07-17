@@ -268,15 +268,17 @@ class OnboardingScreen(ModalScreen[dict | None]):
     CSS = """
     OnboardingScreen { align: center middle; }
     #onboard-box {
-        width: 70%; height: auto; max-height: 80%; border: thick $accent;
+        width: 72%; height: auto; max-height: 82%; border: round $accent;
         background: $surface; padding: 1 2;
     }
-    #onboard-title { text-align: center; color: $accent; margin-bottom: 1; }
+    #onboard-title { text-align: center; margin-bottom: 1; }
+    #onboard-hint { color: $text-muted; }
     #onboard-status { color: $text-muted; margin-top: 1; }
     #onboard-input { margin-top: 1; border: round $accent; }
     #onboard-input:focus { border: round $accent; }
     #onboard-list { height: auto; max-height: 16; margin-top: 1; }
-    .onboard-group-header { color: $accent; margin-top: 1; }
+    OnboardingScreen ListItem { padding: 0 1; }
+    OnboardingScreen ListItem > Widget :hover { background: $boost; }
     """
 
     BINDINGS = [
@@ -293,10 +295,17 @@ class OnboardingScreen(ModalScreen[dict | None]):
         self._base_url = ""
         self._api_key = ""
         self._provider_items: list = []  # parallel to ListView items
+        # Which providers already have a saved key? (read once at open time)
+        from coderio.cli.credentials import read_credentials
+        try:
+            self._configured = set(read_credentials().keys())
+        except Exception:
+            self._configured = set()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard-box"):
-            yield Static("[bold]coderio 配置向导[/bold]", id="onboard-title")
+            yield Static("[bold magenta]coderio 配置向导[/bold magenta]",
+                         id="onboard-title")
             yield Static("", id="onboard-hint")
             yield ListView(id="onboard-list")
             yield Input(id="onboard-input")
@@ -308,35 +317,41 @@ class OnboardingScreen(ModalScreen[dict | None]):
     # --- step transitions ---
 
     def _show_provider_step(self) -> None:
-        """Step 1: provider selection via ListView (↑↓ + Enter)."""
+        """Step 1: provider selection via ListView (↑↓ + Enter).
+
+        All items are real providers (no header rows) — every selectable item
+        maps to a ProviderInfo, so ListView navigation never lands on a dead row.
+        Group context is shown via a dim prefix on each label; providers that
+        already have a saved key are marked ✓."""
         self._step = "provider"
-        self.query_one("#onboard-hint").update(
-            "选择你的模型 provider（↑↓ 选择 · Enter 确认 · Esc 取消）")
+        configured_count = len(self._configured)
+        hint = (
+            f"选择模型 provider（↑↓ 选择 · Enter 确认 · Esc 取消）"
+            + (f"   [green]{configured_count} 个已配置[/green]"
+               if configured_count else "")
+        )
+        self.query_one("#onboard-hint").update(hint)
         self.query_one("#onboard-input", Input).visible = False
         lv = self.query_one("#onboard-list", ListView)
         lv.display = True
         lv.clear()
         self._provider_items = []
-        plan = [p for p in self._providers if p.plan]
-        cn = [p for p in self._providers if not p.plan and p.id in ("bigmodel_api", "stepfun_api")]
-        intl = [p for p in self._providers if p.id in ("openai", "anthropic")]
-        local = [p for p in self._providers if p.id == "ollama"]
-        custom = [p for p in self._providers if p.id == "openai_custom"]
 
-        def _add(title, ps):
-            if ps:
-                lv.append(ListItem(Static(f"[bold]{title}[/bold]")))
-                self._provider_items.append(None)  # header, not selectable
-                for p in ps:
-                    ms = f"  ({' / '.join(p.models[:2])}{'...' if len(p.models) > 2 else ''})" if p.models else ""
-                    lv.append(ListItem(Static(f"  {p.label}{ms}")))
-                    self._provider_items.append(p)
-
-        _add("Coding Plan（订阅制）", plan)
-        _add("国内 API Key 直连", cn)
-        _add("国际", intl)
-        _add("本地模型", local)
-        _add("自定义", custom)
+        # Build a flat list with group labels. Each item is a real provider.
+        groups = [
+            ("订阅制", [p for p in self._providers if p.plan]),
+            ("国内直连", [p for p in self._providers if not p.plan and p.id in ("bigmodel_api", "stepfun_api")]),
+            ("国际", [p for p in self._providers if p.id in ("openai", "anthropic")]),
+            ("本地", [p for p in self._providers if p.id == "ollama"]),
+            ("自定义", [p for p in self._providers if p.id == "openai_custom"]),
+        ]
+        for group_name, providers in groups:
+            for p in providers:
+                ms = f" ({' / '.join(p.models[:2])}{'...' if len(p.models) > 2 else ''})" if p.models else ""
+                check = "  [green]✓[/green]" if p.id in self._configured else "   "
+                lv.append(ListItem(Static(
+                    f"  [dim]{group_name}[/dim]  {p.label}{ms}{check}")))
+                self._provider_items.append(p)
         try:
             lv.index = 0
         except Exception:
@@ -461,11 +476,8 @@ class OnboardingScreen(ModalScreen[dict | None]):
         if idx is None:
             return
         if self._step == "provider":
-            # Skip header rows (None entries) — find the actual provider at/before idx
             if idx < len(self._provider_items):
                 p = self._provider_items[idx]
-                if p is None:
-                    return  # header row, ignore
                 self._chosen_provider = p
                 self.query_one("#onboard-status").update("")
                 if p.id == "openai_custom":
@@ -1257,6 +1269,24 @@ def run_tui(
                         return
                     _load_session(sid)
                 tui.call_from_thread(tui.push_screen, SessionPickerScreen(summaries), _on_picked)
+                return
+            if res.message == "__OPEN_ONBOARDING__":
+                # /setup → open the OnboardingScreen to reconfigure provider/model.
+                # After it completes, rebuild the runtime with the new config.
+                def _on_reconfigured(result):
+                    if result is None:
+                        return
+                    # Reload config + rebuild model with the new provider/key.
+                    from coderio.llm import build_chat_model as _build
+                    from pathlib import Path as _Path
+                    creds = _Path.home() / ".coderio" / "credentials"
+                    new_cfg = load_config(search_from=".")
+                    rt["cfg"] = new_cfg
+                    rt["model"] = _build(new_cfg, creds_path=creds)
+                    tui._add_text(
+                        f"✅ 已重新配置 → {new_cfg.model.default}（{new_cfg.model.provider_id}）",
+                        style="bold green")
+                tui.call_from_thread(tui.push_screen, OnboardingScreen(), _on_reconfigured)
                 return
             if res.message:
                 tui._add_text(res.message)
