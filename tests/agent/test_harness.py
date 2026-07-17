@@ -157,6 +157,54 @@ def test_verify_gate_resets_on_bash_then_rewrite():
     assert cont is True and inject is not None
 
 
+def test_verify_gate_echo_does_not_clear():
+    """A bare `echo done` or `ls` must NOT clear unverified writes — that would
+    let the agent bypass the gate without actually running its code."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "echo done"}, "done")
+    cont, inject, warn = h.check_termination("all done")
+    assert cont is True, "echo should NOT satisfy VerifyGate"
+    assert inject is not None
+
+
+def test_verify_gate_ls_does_not_clear():
+    """`ls` and `pwd` are not verification — they don't run the written code."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/app.py"}, "Wrote 20 chars to src/app.py")
+    h.observe("bash", {"command": "ls -la"}, "total 0")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is True, "ls should NOT satisfy VerifyGate"
+
+
+def test_verify_gate_pytest_clears_without_filename():
+    """pytest counts as verification even without referencing the written file
+    explicitly — it discovers and runs tests."""
+    h = _harness()
+    h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
+    h.observe("bash", {"command": "pytest -q"}, "3 passed")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is False, "pytest should satisfy VerifyGate"
+
+
+def test_verify_gate_python_with_filename_clears():
+    """`python src/app.py` clears because the written file's basename is in the command."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/app.py"}, "Wrote 50 chars")
+    h.observe("bash", {"command": "python src/app.py --port 8080"}, "started")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is False, "python with the file path should satisfy VerifyGate"
+
+
+def test_verify_gate_git_status_does_not_clear():
+    """git status is not verification."""
+    h = _harness()
+    h.observe("edit_file", {"path": "main.js"}, "Edited line 5")
+    h.observe("bash", {"command": "git status"}, "nothing to commit")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is True, "git status should NOT satisfy VerifyGate"
+
+
 # ----------------------------------------------- check_termination — CompletionGate
 def test_completion_gate_blocks_pending_todos():
     store = TodoStore()

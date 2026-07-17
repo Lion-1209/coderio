@@ -219,11 +219,11 @@ def test_verify_gate_blocks_unverified_done(tmp_path):
 
 
 def test_verify_gate_passes_after_bash(tmp_path):
-    """write -> bash -> 'done' passes cleanly: no interception, no warning."""
+    """write -> bash (runs the written file) -> 'done' passes cleanly."""
     f = tmp_path / "a.txt"
     model = _model_returning(
         _tool_call_msg("write_file", {"path": str(f), "content": "hi"}),
-        _tool_call_msg("bash", {"command": "echo ok"}),
+        _tool_call_msg("bash", {"command": f"cat {f}"}),
         AIMessage(content="Done and verified.", tool_calls=[]),
     )
     session = Session.create(tmp_path, {"meta": "test"})

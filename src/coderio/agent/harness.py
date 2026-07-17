@@ -69,6 +69,48 @@ def _is_success(result: str) -> bool:
     return not result.startswith("Error")
 
 
+# Commands that are clearly verification (testing/linting/building code), not
+# just arbitrary shell activity. Matching these means even a `pytest` or `ruff`
+# without an explicit filename still counts as a real verification attempt.
+_VERIFY_COMMAND_RE = re.compile(
+    r"\b(pytest|python\s+-m\s+pytest|python\s+-m\s+unittest|"
+    r"npm\s+(test|run)|npx\s+jest|yarn\s+test|"
+    r"cargo\s+(test|build|check)|go\s+(test|build|vet)|"
+    r"ruff|flake8|pylint|mypy|eslint|tsc|cargo\s+clippy|"
+    r"make\s+(test|check|build)|cmake|"
+    r"ruby\s+-Itest|bundle\s+exec\s+rake\s+test"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _command_verifies_written(command: str, written_files: list[str]) -> bool:
+    """Does this bash command plausibly run or test the written code?
+
+    Returns True if:
+      - The command is a known test/lint/build tool (pytest, npm test, cargo
+        test, ruff, etc.) — these verify code regardless of explicit filenames.
+      - The command references a written file by basename or path — e.g.
+        ``python src/foo.py`` or ``node app.js``.
+
+    Returns False for commands that don't touch the written files at all,
+    like ``echo done``, ``ls``, ``pwd``, ``git status`` — these would let the
+    agent bypass VerifyGate without actually running its code.
+    """
+    if not command:
+        return False
+    # Known verification tools count even without explicit file references.
+    if _VERIFY_COMMAND_RE.search(command):
+        return True
+    # Check if any written file's basename or path appears in the command.
+    cmd_lower = command.lower()
+    for f in written_files:
+        basename = f.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if basename and (basename.lower() in cmd_lower or f.lower() in cmd_lower):
+            return True
+    return False
+
+
 @dataclass
 class HarnessState:
     """Per-turn harness state, derived purely from observed tool calls.
@@ -129,10 +171,13 @@ class Harness:
                 if v:
                     self.state.read_files.add(v)
         elif name == VERIFY_TOOL:
-            # Any bash call counts as a verification attempt: the agent ran its
-            # code. Clear the pending writes and reset the gate counter.
-            self.state.writes_since_verify.clear()
-            self.state.verify_attempts = 0
+            # A bash call clears "unverified writes" ONLY if it plausibly runs
+            # or tests the written code. A bare `echo done` or `ls` should NOT
+            # satisfy the gate — that defeats the entire VerifyGate purpose.
+            command = str(args.get("command", ""))
+            if _command_verifies_written(command, self.state.writes_since_verify):
+                self.state.writes_since_verify.clear()
+                self.state.verify_attempts = 0
 
     # ------------------------------------------------------- after_tool_call (plan gate)
     def after_tool_call(self, name: str, args: dict, result: str) -> str | None:
