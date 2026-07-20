@@ -1006,6 +1006,18 @@ class CoderioTUI(App):
         except Exception:
             pass
 
+    def _clear_history(self) -> None:
+        """Wipe all widgets from the history pane (used by /clear).
+
+        The old session's jsonl stays on disk — this only clears what's visible
+        on screen. Must run on the main thread (touches the DOM).
+        """
+        try:
+            h = self.query_one("#history", VerticalScroll)
+            h.remove_children()
+        except Exception:
+            pass
+
     def _render_live_output(self, full_text: str) -> None:
         """MAIN THREAD: append the NEW part of the streaming text to a RichLog.
 
@@ -1588,6 +1600,12 @@ def run_tui(
                     rt["cfg"] = c
                     rt["gate"] = build_gate(c, console=None)
                 cmd_name = line.strip().split(maxsplit=1)[0]
+                if cmd_name == "/clear":
+                    # /clear: start a fresh session + wipe active skills + clear
+                    # the history pane. Without this the old session's messages
+                    # keep being fed to the model (it reads session.messages).
+                    _clear_context()
+                    return
                 if cmd_name == "/model":
                     parts = line.strip().split(maxsplit=1)
                     if len(parts) > 1 and parts[1].strip():
@@ -1633,6 +1651,26 @@ def run_tui(
                 tui._add_text(f"▸ you {c}", style="bold cyan")
             elif m.role == "assistant":
                 tui._add_text(f"  {m.content[:200]}", style="blue")
+
+    def _clear_context() -> None:
+        """Start a fresh session + clear active skills + wipe the history pane.
+
+        Backs the /clear command. Without this the old session's messages keep
+        being fed to the model (loop.py reads session.messages), so 'context
+        cleared' was previously a lie — the model still saw the full history.
+        """
+        from coderio.session.store import Session
+        from pathlib import Path as _P
+        save_dir = _P(rt["cfg"].session.save_dir).expanduser()
+        rt["session"] = Session.create(save_dir, {
+            "model": rt["cfg"].model.default,
+            "provider": rt["cfg"].model.provider,
+        })
+        active.clear()
+        # Wipe the visible history pane so the user sees a clean slate (the old
+        # session's jsonl is preserved on disk — /resume can still get it back).
+        tui._clear_history()
+        tui._add_text("🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green")
 
     tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
     tui.run()
