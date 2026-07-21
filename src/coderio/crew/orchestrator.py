@@ -275,7 +275,7 @@ class CrewOrchestrator:
         langchain_tools = to_langchain_tools(role.tools) + [to_langchain_tool(activate, activate.args_schema)]
         skill_index = {t.name: t for t in role.tools}
         skill_index[activate.name] = activate
-        return _execute_turn(
+        turn_result = _execute_turn(
             self.model,
             bound_cache,
             langchain_tools,
@@ -287,6 +287,9 @@ class CrewOrchestrator:
             role.max_rounds or self.max_rounds,
             harness=None,
         )
+        # _execute_turn returns a TurnResult; crew only needs the text (no
+        # context-rot restart here — crew has its own verify→fix loop).
+        return turn_result.text
 
     def _task_instruction(self, role: AgentRole) -> str:
         if role.stage == "clarify":

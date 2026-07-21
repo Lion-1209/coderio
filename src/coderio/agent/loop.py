@@ -23,6 +23,28 @@ from coderio.tools.permission import PermissionGate
 # 30% of a 128k context ~ 38k tokens ~ ~150k chars. We warn on the body char total.
 _BUDGET_WARN_CHARS = 150_000
 
+# How many times the same tool-call signature can repeat in one turn before it's
+# considered a loop (context rot). Matching Step-Realtime-CLI's
+# repeatedToolCallLimit concept — a stuck agent re-reads the same file or re-runs
+# the same failing command indefinitely.
+_MAX_REPEATED_TOOL_CALLS = 3
+
+
+class TurnResult:
+    """Outcome of one _execute_turn call.
+
+    Carries the final text PLUS signals that let the caller decide whether to
+    restart (context-rot detection). A normal completion has ``hit_max_rounds``
+    and ``in_tool_loop`` both False; either True suggests the agent got stuck
+    and a fresh-context retry might help.
+    """
+    __slots__ = ("text", "hit_max_rounds", "in_tool_loop")
+
+    def __init__(self, text: str, hit_max_rounds: bool = False, in_tool_loop: bool = False):
+        self.text = text
+        self.hit_max_rounds = hit_max_rounds
+        self.in_tool_loop = in_tool_loop
+
 
 def _content_to_text(content) -> str:
     """Normalize an AIMessage.content (str OR list of Anthropic content blocks) to text.
@@ -229,14 +251,15 @@ def _execute_turn(
     on_activate_skill=None,
     harness=None,
     context_cfg=None,
-) -> str:
+) -> TurnResult:
     """Run one agent turn: loop run_step + tool execution until final text or max_rounds.
 
     Shared by run_agent (S0) and CrewOrchestrator (S2). `convo` is the message list
     fed to the model (appended in place). `on_message(msg)` is called for EVERY
     message produced (assistant + tool results) so callers can persist them
-    (run_agent writes to the session jsonl; S2 just uses convo). Returns the final
-    assistant text.
+    (run_agent writes to the session jsonl; S2 just uses convo). Returns a
+    TurnResult carrying the final text plus context-rot signals
+    (hit_max_rounds / in_tool_loop) for the caller's restart logic.
 
     `harness` (Harness | None): when provided and enabled, the harness layer exerts
     structural control over termination (VerifyGate/CompletionGate) and augments
@@ -247,6 +270,19 @@ def _execute_turn(
         convo.append(msg)
         if on_message is not None:
             on_message(msg)
+
+    # Tool-loop detection: track how many times each (name, args) signature has
+    # repeated. If one repeats > _MAX_REPEATED_TOOL_CALLS, the agent is stuck
+    # re-doing the same thing — flag it as context-rot for the restart logic.
+    _tool_call_counts: dict[tuple, int] = {}
+    _detected_loop = False
+
+    def _fingerprint(name: str, args: dict) -> tuple:
+        # Normalize args to a hashable fingerprint. Drop volatile values that
+        # legitimately change between calls (e.g. a counter) — but for our
+        # purposes the full frozen args dict is the right granularity: a stuck
+        # agent re-reads the exact same file with the exact same args.
+        return (name, tuple(sorted((str(k), str(v)) for k, v in (args or {}).items())))
 
     active_prompt = system_prompt
     last_input_tokens = 0  # updated each round from the model's usage_metadata
@@ -314,7 +350,7 @@ def _execute_turn(
                     stream.on_harness_warn(warn)
             _emit(Message.assistant(text))
             stream.on_finish()
-            return text
+            return TurnResult(text, in_tool_loop=_detected_loop)
         _emit(Message.assistant(
             _content_to_text(getattr(ai, "content", "")),
             tool_calls=[ToolCall(id=tc["id"], name=tc["name"], args=dict(tc.get("args", {})))
@@ -341,6 +377,12 @@ def _execute_turn(
                     # already appends; this fixes an inconsistency in the ReAct path.)
                     result = result + aug
             stream.on_tool_end(name, result)
+            # Tool-loop detection: count this (name, args) fingerprint. If it has
+            # now repeated > _MAX_REPEATED_TOOL_CALLS, the agent is stuck.
+            fp = _fingerprint(name, args)
+            _tool_call_counts[fp] = _tool_call_counts.get(fp, 0) + 1
+            if _tool_call_counts[fp] > _MAX_REPEATED_TOOL_CALLS:
+                _detected_loop = True
             _emit(Message.tool_result(tool_call_id=tc["id"], name=name, content=result))
             # Both activate_skill and deactivate_skill change which skill bodies
             # are in the system prompt — refresh it so the next round sees the
@@ -369,7 +411,9 @@ def _execute_turn(
             )
     _emit(Message.assistant(out))
     stream.on_finish()
-    return out
+    # hit_max_rounds=True signals context-rot to run_agent's restart logic.
+    # in_tool_loop carries whether we ALSO detected repeated tool calls.
+    return TurnResult(out, hit_max_rounds=True, in_tool_loop=_detected_loop)
 
 
 def run_agent(
@@ -461,7 +505,7 @@ def run_agent(
 
     # convo feeds the model; on_message persists every produced message to the session.
     convo = list(session.messages)
-    result = _execute_turn(
+    turn_result = _execute_turn(
         model=model, bound_cache=bound_cache, langchain_tools=langchain_tools,
         system_prompt=system_prompt, convo=convo, skill_index=skill_index,
         gate=gate, stream=stream, max_rounds=max_rounds,
@@ -471,10 +515,54 @@ def run_agent(
 
     # Persist the phase timeline at turn end (system-role message, filtered from
     # conversation history display but available for replay/debugging).
-    if state_tracker is not None and state_tracker.timeline:
-        import json
-        state_tracker.finish(hint=result[:80] if isinstance(result, str) else "")
-        session.append(Message.system(
-            json.dumps(state_tracker.to_payload(), ensure_ascii=False),
-            kind="phase_timeline"))
-    return result
+    def _persist_timeline(tracker):
+        if tracker is not None and tracker.timeline:
+            import json
+            tracker.finish(hint=turn_result.text[:80] if turn_result.text else "")
+            session.append(Message.system(
+                json.dumps(tracker.to_payload(), ensure_ascii=False),
+                kind="phase_timeline"))
+
+    _persist_timeline(state_tracker)
+
+    # Context-rot restart: if the turn hit max_rounds or got stuck in a tool
+    # loop, the convo has likely accumulated noise that confuses the model. Try
+    # ONE restart from a compacted context — this often unsticks the agent when
+    # compaction alone (mid-turn) wasn't enough. Bounded to 1 retry so it can't
+    # loop forever; if the retry also fails, accept the original result.
+    if turn_result.hit_max_rounds or turn_result.in_tool_loop:
+        from coderio.agent.compact import compact_convo
+        # Build a checkpoint summary from the bloated convo, then retry with a
+        # fresh conversation carrying just the summary.
+        try:
+            checkpoint = compact_convo(convo, model, keep_recent=6)
+            if len(checkpoint) < len(convo):  # only restart if compaction shrank it
+                if hasattr(stream, "on_phase_change"):
+                    stream.on_phase_change("restart", 0, "检测到上下文衰败，正在从压缩上下文重试")
+                # Append a restart-checkpoint marker so the retry's session shows
+                # why the context jumped. The summary itself is context_summary kind.
+                for m in checkpoint:
+                    if m.role == "system" and m.kind == "context_summary":
+                        session.append(m)
+                # Retry: rebuild convo from the compacted version (fresh tracker).
+                convo2 = list(checkpoint)
+                from coderio.agent.state import AgentStateTracker as _AST
+                tracker2 = _AST()
+                if harness is not None:
+                    from coderio.agent.harness import HarnessState as _HS
+                    harness2 = Harness(state=_HS(), todos=harness.todos,
+                                       state_tracker=tracker2, stream=stream)
+                else:
+                    harness2 = None
+                turn_result = _execute_turn(
+                    model=model, bound_cache=bound_cache, langchain_tools=langchain_tools,
+                    system_prompt=system_prompt, convo=convo2, skill_index=skill_index,
+                    gate=gate, stream=stream, max_rounds=max_rounds,
+                    on_message=session.append, on_activate_skill=_refresh_prompt,
+                    harness=harness2, context_cfg=context_cfg,
+                )
+                _persist_timeline(tracker2)
+        except Exception:
+            pass  # restart is best-effort; never let it mask the original result
+
+    return turn_result.text
