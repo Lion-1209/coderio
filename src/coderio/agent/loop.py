@@ -285,14 +285,23 @@ def _execute_turn(
     # the gate forces re-reading every cited file. Both Step-Realtime-CLI and Kimi
     # Code keep read-state per-session (via conversation memory); coderio's per-turn
     # HarnessState must be seeded from history to match that expectation.
+    #
+    # NOTE: this is a SECONDARY seed — run_agent() already pre-fills from
+    # session.messages (the authoritative, never-compacted source). This block
+    # additionally covers any read_file calls accumulated in `convo` during THIS
+    # _execute_turn invocation before the first model call (defensive — currently
+    # always a no-op since the loop hasn't started yet, but kept for robustness
+    # against future re-entry patterns). Both paths normalize via _norm_path so
+    # 'Loop.py' and 'loop.py' dedup correctly on case-insensitive filesystems.
     if harness is not None and getattr(harness, "enabled", False):
+        from coderio.agent.harness import _norm_path
         for m in convo:
             if m.role == "assistant" and m.tool_calls:
                 for tc in m.tool_calls:
                     if tc.name == "read_file":
                         p = tc.args.get("path") or tc.args.get("file_path") or ""
                         if p:
-                            harness.state.content_read_files.add(p)
+                            harness.state.content_read_files.add(_norm_path(p))
 
     # Tool-loop detection: track how many times each (name, args) signature has
     # repeated. If one repeats > _MAX_REPEATED_TOOL_CALLS, the agent is stuck
@@ -346,12 +355,31 @@ def _execute_turn(
             # Empty response: the model returned NO text and NO tool_calls. This
             # is a real failure mode (seen with step-3.7-flash: after several
             # rounds of read_file tool_calls it returned a bare empty message).
-            # Instead of ending the turn (forcing the user to manually type "继续"),
-            # retry by injecting a "please continue" nudge — modeled on Kimi Code's
-            # retryable-error approach. Capped at _MAX_EMPTY_RETRIES to avoid
-            # burning tokens on a persistently-empty model.
+            #
+            # Two-pronged recovery, capped at _MAX_EMPTY_RETRIES:
+            #   (1) On the FIRST empty response, try compacting the context before
+            #       nagging the model. Empty responses are usually a symptom of an
+            #       overloaded context window — the model bails rather than wading
+            #       through 60K+ tokens of accumulated read_file results. Compacting
+            #       once often unsticks it; re-nagging into the same bloated window
+            #       (the old behavior) just wastes two retries and still fails.
+            #       Observed in session 155057: 4 empty-response events, both
+            #       retry-pairs exhausted with the "请用 /clear 清理" notice.
+            #   (2) Then inject a "please continue" nudge (Kimi Code's pattern).
             if not text.strip():
                 empty_retries += 1
+                if empty_retries == 1 and context_cfg is not None \
+                        and getattr(context_cfg, "enabled", False):
+                    from coderio.agent.compact import compact_convo
+                    try:
+                        compacted = compact_convo(convo, model,
+                                                  keep_recent=context_cfg.keep_recent)
+                        if len(compacted) < len(convo):
+                            # Preserve the original tool_call/tool_result pairing
+                            # for messages kept (compact_convo already handles this).
+                            convo[:] = compacted
+                    except Exception:
+                        pass  # compaction failed — fall through to the nudge retry
                 if empty_retries <= _MAX_EMPTY_RETRIES:
                     msg = Message.user("（请继续你刚才的输出，不要重复已有内容。）")
                     convo.append(msg)
@@ -534,7 +562,7 @@ def run_agent(
     harness = None
     state_tracker = None
     if harness_enabled:
-        from coderio.agent.harness import Harness, HarnessState
+        from coderio.agent.harness import Harness, HarnessState, _norm_path
         from coderio.agent.state import AgentStateTracker
         todo_store = next((t.store for t in tools if getattr(t, "name", "") == "todo"), None)
         # If no TodoStore is reachable, the gates degrade gracefully (todos empty
@@ -543,6 +571,21 @@ def run_agent(
         state_tracker = AgentStateTracker()
         harness = Harness(state=HarnessState(), todos=todo_store or _TS(),
                           state_tracker=state_tracker, stream=stream)
+        # SESSION-LEVEL read-state seed: GroundingGate is supposed to enforce
+        # "claims about code must be grounded in actual source read", but the
+        # model legitimately cites files read in PRIOR turns of the same session
+        # ("turn 1 read 20 files, turn 2 'review them' should not require re-reading").
+        # Pre-fill content_read_files from session.messages (the authoritative,
+        # never-compacted history — convo gets compacted mid-turn, losing the
+        # tool_call records). Both this seed and the per-turn seed in
+        # _execute_turn go through _norm_path so 'Loop.py' and 'loop.py' dedup.
+        for m in session.messages:
+            if m.role == "assistant" and m.tool_calls:
+                for tc in m.tool_calls:
+                    if tc.name == "read_file":
+                        p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
+                        if p:
+                            harness.state.content_read_files.add(_norm_path(p))
 
     # convo feeds the model; on_message persists every produced message to the session.
     convo = list(session.messages)
@@ -590,9 +633,20 @@ def run_agent(
                 from coderio.agent.state import AgentStateTracker as _AST
                 tracker2 = _AST()
                 if harness is not None:
-                    from coderio.agent.harness import HarnessState as _HS
+                    from coderio.agent.harness import HarnessState as _HS, _norm_path as _NP
                     harness2 = Harness(state=_HS(), todos=harness.todos,
                                        state_tracker=tracker2, stream=stream)
+                    # Re-seed session-level read-state (same logic as run_agent's
+                    # primary harness): the restart's convo2 has lost tool_call
+                    # history to compaction, so without this the GroundingGate
+                    # would force-re-read every file the model cites in its retry.
+                    for m in session.messages:
+                        if m.role == "assistant" and m.tool_calls:
+                            for tc in m.tool_calls:
+                                if tc.name == "read_file":
+                                    p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
+                                    if p:
+                                        harness2.state.content_read_files.add(_NP(p))
                 else:
                     harness2 = None
                 turn_result = _execute_turn(

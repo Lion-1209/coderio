@@ -70,6 +70,37 @@ _CITED_FILE_RE = re.compile(
 )
 
 
+def _norm_path(p: str) -> str:
+    """Normalize a path for read-state dedup.
+
+    Lowercases, converts backslashes to forward slashes, collapses redundant
+    './' and '../' segments, and strips whitespace. On case-insensitive
+    filesystems (NTFS, APFS default) this correctly treats 'Loop.py' ==
+    'loop.py'; on case-sensitive filesystems it's slightly over-eager but the
+    worst case is one missed grounding check, never a false positive.
+
+    This is the single source of truth for path comparison in the harness —
+    observe() normalizes on write, _was_read() normalizes on compare, and the
+    cross-turn pre-fill in loop.py normalizes when seeding content_read_files.
+    Without it, a model that reads 'Loop.py' then cites 'loop.py:81' gets
+    force-re-read by GroundingGate (observed in real sessions: 'Loop.py' was
+    read 5x in one turn purely from case drift).
+    """
+    if not p:
+        return ""
+    p = p.strip().replace("\\", "/")
+    parts: list[str] = []
+    for part in p.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts).lower()
+
+
 def _is_success(result: str) -> bool:
     """A write tool result counts as a real write unless it errored.
 
@@ -202,7 +233,9 @@ class Harness:
                 for key in ("path", "file_path"):
                     v = str(args.get(key, "")).strip()
                     if v:
-                        self.state.content_read_files.add(v)
+                        # Normalize on write so later _was_read comparisons are
+                        # case- and slash-insensitive (see _norm_path).
+                        self.state.content_read_files.add(_norm_path(v))
         elif name == VERIFY_TOOL:
             # A bash call clears "unverified writes" ONLY if it plausibly runs
             # or tests the written code. A bare `echo done` or `ls` should NOT
@@ -394,11 +427,16 @@ class Harness:
 
     @staticmethod
     def _basename(path: str) -> str:
-        """Last path component (basename), slash/backslash agnostic. 'a/b.py' -> 'b.py'."""
-        for sep in ("/", "\\"):
-            if sep in path:
-                path = path.rsplit(sep, 1)[1]
-        return path
+        """Last path component (basename), slash/backslash agnostic. 'a/b.py' -> 'b.py'.
+
+        Operates on the NORMALIZED form (see _norm_path) so case-insensitive
+        filesystems (NTFS, APFS default) treat 'Loop.py' == 'loop.py' correctly —
+        otherwise the model citing 'loop.py:81' after reading 'Loop.py' would
+        trip the GroundingGate into a re-read loop."""
+        n = _norm_path(path)
+        if "/" in n:
+            n = n.rsplit("/", 1)[1]
+        return n
 
     def _was_read(self, cited: str) -> bool:
         """Did the model actually READ the cited file's contents this turn?
@@ -412,16 +450,24 @@ class Harness:
         permissive — it let ``grep pattern="loop"`` satisfy a citation of
         ``loop.py``, and ``list_dir("src")`` cover every file in src/.
         A bare ``:line`` suffix on the citation is stripped first.
+
+        All comparisons go through _norm_path so 'Loop.py' == 'loop.py' and
+        'a\\b.py' == 'a/b.py' (Windows path + case-insensitive filesystems).
+        Without this, the model citing 'loop.py:81' after reading 'Loop.py'
+        triggers a needless re-read — observed in real sessions as 'Loop.py'
+        being read 5x in one turn.
         """
         c = cited.rsplit(":", 1)[0] if ":" in cited else cited  # drop :line
+        c_norm = _norm_path(c)
         c_base = self._basename(c)
         for r in self.state.content_read_files:
             if not r:
                 continue
+            r_norm = _norm_path(r)
             r_base = self._basename(r)
             # Exact basename match (loader.py == loader.py) or full-path match
-            # (src/agent/loop.py == src/agent/loop.py, with/without trailing sep).
-            if c_base == r_base or c == r or c == r.replace("\\", "/"):
+            # on the normalized form (covers src/agent/loop.py, slash style, case).
+            if c_base == r_base or c_norm == r_norm:
                 return True
         return False
 

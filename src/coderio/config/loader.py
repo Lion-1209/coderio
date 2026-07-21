@@ -77,12 +77,18 @@ def _parse_profiles(data: dict) -> list:
         model = entry.get("model")
         if not (name and pid and model):
             continue  # incomplete profile — skip silently
+        # context_limit is optional and best-effort: a missing/non-int value
+        # just means "not probed yet" (0), don't raise — the runtime falls back
+        # to ContextConfig.model_context_limit.
+        cl_raw = entry.get("context_limit", 0)
+        context_limit = cl_raw if isinstance(cl_raw, int) and not isinstance(cl_raw, bool) else 0
         out.append(Profile(
             name=name,
             provider_id=pid,
             model=model,
             base_url=entry.get("base_url", ""),
             kind=entry.get("kind", "openai_compatible"),
+            context_limit=context_limit,
         ))
     return out
 
@@ -130,6 +136,11 @@ def _from_dict(data: dict) -> Config:
                 f"可选值: {', '.join(valid)}")
         perm = perm_lower
 
+    # context_limit is optional in [model]; a missing/non-int value falls back
+    # to 0 (not probed). Don't use the strict _int() helper — context_limit is
+    # a best-effort optimization, not a required config field.
+    m_cl_raw = m.get("context_limit", 0)
+    m_context_limit = m_cl_raw if isinstance(m_cl_raw, int) and not isinstance(m_cl_raw, bool) else 0
     return Config(
         model=ModelConfig(
             default=m.get("default", cfg.model.default),
@@ -137,6 +148,7 @@ def _from_dict(data: dict) -> Config:
             base_url=m.get("base_url", cfg.model.base_url),
             provider_id=m.get("provider_id", ""),
             max_output_tokens=_int(m, "max_output_tokens", cfg.model.max_output_tokens, "model"),
+            context_limit=m_context_limit,
         ),
         tools=ToolsConfig(
             bash_shell=t.get("bash_shell", cfg.tools.bash_shell),

@@ -18,6 +18,12 @@ class OnboardingResult:
     base_url: str
     kind: str
     api_key: str
+    # Context window size (tokens) probed from the provider's /v1/models/{id}
+    # endpoint at setup time. 0 = probe failed or skipped; the runtime then
+    # falls back to ContextConfig.model_context_limit. Persisted into the
+    # profile's [[profiles]] table so the threshold is accurate on every run
+    # without re-probing.
+    context_limit: int = 0
 
 
 def _menu(prompt_fn) -> ProviderInfo | str:
@@ -97,6 +103,11 @@ def _save_to_config(result: OnboardingResult, config_path: Path) -> None:
     if result.base_url:
         model_section["base_url"] = result.base_url
     model_section["provider"] = result.kind
+    # Persist the probed context window so compaction uses the real threshold
+    # on every run. Only write when > 0 — a 0 means probe failed/skipped, and
+    # we don't want to overwrite a previously-good value with the fallback.
+    if getattr(result, "context_limit", 0) > 0:
+        model_section["context_limit"] = result.context_limit
     data["model"] = model_section
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "wb") as f:
@@ -129,6 +140,13 @@ def _save_profile_to_config(result: OnboardingResult, profile_name: str, config_
         "base_url": result.base_url,
         "kind": result.kind,
     }
+    # Persist the probed context window so the compaction threshold is accurate
+    # on every subsequent run without re-probing. Only write when > 0 — a 0
+    # means the probe failed or wasn't run, and we don't want to overwrite a
+    # previously-good value with a fallback marker (e.g. when re-configuring
+    # an existing profile off-network).
+    if getattr(result, "context_limit", 0) > 0:
+        entry["context_limit"] = result.context_limit
     # Replace an existing same-named profile, else append.
     replaced = False
     for i, p in enumerate(profiles):
@@ -145,10 +163,18 @@ def _save_profile_to_config(result: OnboardingResult, profile_name: str, config_
         tomli_w.dump(data, f)
 
 
-def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str]:
-    """Send a minimal API request to verify the key/endpoint works.
+def _verify_and_probe(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str, int]:
+    """Verify the key works AND probe the model's context window size.
 
-    Returns (success, message). Uses a 1-token 'hi' request — cheap and fast.
+    Returns (success, message, context_limit). context_limit is 0 on any
+    failure (verification failed OR probe failed) — callers fall back to the
+    config default in that case, so probe failures never block onboarding.
+
+    The verification uses a 1-token 'hi' request (cheap, fast). On success we
+    additionally query /v1/models/{id} to discover the real context window so
+    the compaction threshold matches the actual model (e.g. step-3.7-flash is
+    256K, not the 200K default). Both calls are best-effort; only the verify
+    result gates the wizard.
     """
     try:
         if p.kind == "anthropic":
@@ -158,16 +184,26 @@ def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tup
             from langchain_openai import ChatOpenAI
             m = ChatOpenAI(model=model, base_url=base_url, api_key=api_key, max_tokens=1)
         m.invoke("hi")
-        return (True, "验证成功")
     except Exception as e:
         msg = str(e).lower()
         if any(k in msg for k in ("authentication", "401", "unauthorized", "api key")):
-            return (False, f"API key 无效或已过期: {e}")
+            return (False, f"API key 无效或已过期: {e}", 0)
         if any(k in msg for k in ("connect", "timeout", "refused", "unreachable")):
-            return (False, f"无法连接到 {base_url}，请检查网络: {e}")
+            return (False, f"无法连接到 {base_url}，请检查网络: {e}", 0)
         if any(k in msg for k in ("404", "not found", "model")):
-            return (False, f"模型 {model} 不可用: {e}")
-        return (False, f"验证失败: {type(e).__name__}: {e}")
+            return (False, f"模型 {model} 不可用: {e}", 0)
+        return (False, f"验证失败: {type(e).__name__}: {e}", 0)
+    # Verify passed — best-effort probe for context window size. Never raises.
+    from coderio.llm.probe import probe_context_limit
+    context_limit = probe_context_limit(p.kind, base_url, api_key, model)
+    suffix = f"（检测到 {context_limit // 1000}K 上下文窗口）" if context_limit > 0 else ""
+    return (True, f"验证成功{suffix}", context_limit)
+
+
+# Back-compat shim: older call sites/tests may still import _verify_key.
+def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str]:
+    ok, msg, _ = _verify_and_probe(p, api_key, model, base_url)
+    return (ok, msg)
 
 
 def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> OnboardingResult | None:
@@ -182,6 +218,7 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
     if p.id == "openai_custom":
         base_url = prompt_fn("输入 base_url: ").strip()
     model = _choose_model(prompt_fn, p)
+    context_limit = 0
     if p.id != "ollama":
         print(f"  提示：{p.api_key_hint}")
         api_key = password_fn().strip()
@@ -190,8 +227,10 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
             return None
         # Verify the key works before saving — catches typos, wrong endpoints,
         # expired keys at config time instead of on first message in the TUI.
+        # On success, also probe the model's context window so compaction uses
+        # the real threshold (256K for step-3.7-flash, 200K for claude, etc).
         print("  正在验证连接...")
-        ok, msg = _verify_key(p, api_key, model, base_url)
+        ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
         if not ok:
             print(f"  ❌ {msg}")
             retry = prompt_fn("  重新输入 key？(回车=重试, n=跳过): ").strip().lower()
@@ -201,7 +240,7 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
             if not api_key:
                 return None
             print("  正在验证连接...")
-            ok, msg = _verify_key(p, api_key, model, base_url)
+            ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
             if not ok:
                 print(f"  ❌ {msg}")
                 print("  仍验证失败。配置已跳过，请稍后检查配置。")
@@ -210,7 +249,8 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
     else:
         api_key = "ollama"  # Ollama doesn't need a key
     write_credentials({p.id: api_key}, creds_file)
-    result = OnboardingResult(provider_id=p.id, model=model, base_url=base_url, kind=p.kind, api_key=api_key)
+    result = OnboardingResult(provider_id=p.id, model=model, base_url=base_url,
+                              kind=p.kind, api_key=api_key, context_limit=context_limit)
     # Persist provider_id/model/base_url to config.toml so build_chat_model
     # uses the S1 (provider registry) path — not the broken S0 fallback.
     if creds_file is not None:

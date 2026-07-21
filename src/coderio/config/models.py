@@ -10,6 +10,11 @@ class ModelConfig:
     base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     provider_id: str = ""
     max_output_tokens: int = 16384
+    # Context window size (tokens) for [model].default, probed at setup time.
+    # 0 = not probed (fall back to ContextConfig.model_context_limit). Mirrors
+    # Profile.context_limit for the legacy single-config path. Kept on ModelConfig
+    # (not ContextConfig) because it's per-model, not per-compaction-policy.
+    context_limit: int = 0
 
 
 @dataclass
@@ -27,6 +32,13 @@ class Profile:
     model: str
     base_url: str = ""
     kind: str = "openai_compatible"
+    # Context window size (tokens) for THIS model, discovered at setup time by
+    # probing the provider's /v1/models/{id} endpoint. 0 = not probed (fall back
+    # to ContextConfig.model_context_limit). Stored per-profile because different
+    # providers/models have different windows — without this, a 256K model like
+    # step-3.7-flash gets mis-treated as the global default (200K), triggering
+    # compaction at 120K instead of 153K.
+    context_limit: int = 0
 
 
 @dataclass
@@ -70,7 +82,14 @@ class ContextConfig:
                                        # hit 61k tokens without triggering; 60% gives
                                        # earlier, healthier compaction)
     keep_recent: int = 8               # messages preserved verbatim at the tail
-    model_context_limit: int = 128_000  # assumed window size; conservative default
+    model_context_limit: int = 200_000  # assumed window size when the active
+                                        # profile has no probed context_limit.
+                                        # Raised from 128K (too aggressive — a
+                                        # 256K model was compacting at 76K) to
+                                        # 200K, the floor for modern models
+                                        # (Claude, GPT-4o, step-3.7). The real
+                                        # value comes from probe_context_limit
+                                        # at setup time, stored per-profile.
 
 
 @dataclass

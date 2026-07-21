@@ -110,7 +110,10 @@ def test_missing_context_section_uses_defaults(tmp_path):
     assert cfg.context.enabled is True
     assert cfg.context.trigger_ratio == 0.6
     assert cfg.context.keep_recent == 8
-    assert cfg.context.model_context_limit == 128_000
+    # 200K is the conservative floor for modern models (Claude, GPT-4o, step);
+    # the real per-model value comes from probe_context_limit at setup time,
+    # stored on the Profile as context_limit.
+    assert cfg.context.model_context_limit == 200_000
 
 
 def test_parses_context_section(tmp_path):
@@ -131,6 +134,52 @@ def test_parses_context_section(tmp_path):
     assert cfg.context.model_context_limit == 200_000
 
 
+def test_model_section_context_limit_legacy_path(tmp_path):
+    """REGRESSION: the legacy [model] single-config path must also persist
+    and load context_limit (probe-time discovery).
+
+    Onboarding writes context_limit to [model] when there are no profiles, so
+    users who configured coderio before multi-profile support still get the
+    correct compaction threshold after re-running setup.
+    """
+    user_cfg = tmp_path / "userhome" / "config.toml"
+    write(user_cfg, """
+        [model]
+        default = "step-3.7-flash"
+        provider = "anthropic"
+        provider_id = "stepfun_coding_plan"
+        context_limit = 256000
+    """)
+    proj = tmp_path / "proj"
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.model.context_limit == 256_000
+
+
+def test_model_section_context_limit_defaults_zero(tmp_path):
+    """No context_limit in [model] means 0 (not probed)."""
+    user_cfg = tmp_path / "userhome" / "config.toml"
+    write(user_cfg, """
+        [model]
+        default = "step-3.7-flash"
+    """)
+    proj = tmp_path / "proj"
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.model.context_limit == 0
+
+
+def test_model_section_context_limit_rejects_non_int(tmp_path):
+    """A typo'd context_limit must not crash config load."""
+    user_cfg = tmp_path / "userhome" / "config.toml"
+    write(user_cfg, """
+        [model]
+        default = "x"
+        context_limit = "lots"
+    """)
+    proj = tmp_path / "proj"
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.model.context_limit == 0
+
+
 # --- profiles (multi-config) ---
 
 def test_parses_profiles_and_active(tmp_path):
@@ -144,6 +193,7 @@ def test_parses_profiles_and_active(tmp_path):
         model = "glm-5.2"
         base_url = "https://open.bigmodel.cn/api/anthropic"
         kind = "anthropic"
+        context_limit = 128000
 
         [[profiles]]
         name = "OpenAI"
@@ -159,8 +209,28 @@ def test_parses_profiles_and_active(tmp_path):
     assert cfg.profiles[0].name == "智谱套餐"
     assert cfg.profiles[0].provider_id == "bigmodel_coding_plan"
     assert cfg.profiles[0].kind == "anthropic"
+    assert cfg.profiles[0].context_limit == 128_000
+    # context_limit defaults to 0 when not present (probe didn't run / failed).
     assert cfg.profiles[1].name == "OpenAI"
     assert cfg.profiles[1].model == "gpt-4o"
+    assert cfg.profiles[1].context_limit == 0
+
+
+def test_profile_context_limit_rejects_non_int(tmp_path):
+    """A non-int context_limit (user typo) must fall back to 0, not crash."""
+    user_cfg = tmp_path / "userhome" / "config.toml"
+    write(user_cfg, """
+        active_profile = "x"
+
+        [[profiles]]
+        name = "x"
+        provider_id = "openai"
+        model = "gpt-4o"
+        context_limit = "lots"
+    """)
+    proj = tmp_path / "proj"
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.profiles[0].context_limit == 0
 
 
 def test_no_profiles_is_backward_compatible(tmp_path):

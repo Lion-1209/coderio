@@ -394,6 +394,36 @@ def test_grounding_gate_does_not_false_positive_on_prose():
     assert len(cited) == 1 and cited[0].startswith("loader.py")
 
 
+def test_was_read_is_case_and_slash_insensitive():
+    """REGRESSION: reading 'Loop.py' must satisfy a citation of 'loop.py:81'.
+
+    On case-insensitive filesystems (NTFS, APFS default) these are the same
+    file, so the GroundingGate must treat them as already-read. Without
+    normalization, the model reads 'src\\coderio\\agent\\Loop.py' and then
+    cites 'loop.py' — the gate would force a re-read every time the model's
+    case drifts. Observed in real sessions: 'Loop.py' read 5x in one turn.
+    """
+    from coderio.agent.harness import _norm_path
+    h = _harness()
+    # observe a read with mixed case + backslashes
+    h.observe("read_file", {"path": "src\\coderio\\agent\\Loop.py"}, "1	contents")
+    # cite the same file in different forms — all should match
+    assert h._was_read("loop.py") is True
+    assert h._was_read("loop.py:81") is True
+    assert h._was_read("src/coderio/agent/loop.py") is True
+    assert h._was_read("Src\\Coderio\\Agent\\LOOP.PY") is True
+    # and a truly unread file still doesn't match
+    assert h._was_read("other.py") is False
+
+    # _norm_path direct checks
+    assert _norm_path("a/b.py") == "a/b.py"
+    assert _norm_path("a\\b.py") == "a/b.py"
+    assert _norm_path("A\\B.py") == "a/b.py"
+    assert _norm_path("./a/b.py") == "a/b.py"
+    assert _norm_path("a/./b/../c.py") == "a/c.py"
+    assert _norm_path("") == ""
+
+
 def test_grounding_gate_catches_multiple_citations():
     h = _harness()
     cont, inject, warn = h.check_termination(

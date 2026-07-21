@@ -1176,6 +1176,16 @@ class CoderioTUI(App):
             event.prevent_default()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # CRITICAL: only handle the MAIN chat input. Input.Submitted bubbles up
+        # the widget tree by default, so a submission in OnboardingScreen's
+        # `#onboard-input` (API key / model / base_url fields) or any other
+        # modal's Input would also land here and be dispatched to _on_input →
+        # run_agent → session.append, leaking sensitive fields like API keys
+        # into the session jsonl. Observed in real sessions: a 64-char API
+        # key was persisted as a user message. Guard by widget id — only `#msg`
+        # is the chat input. (on_input_changed above already has this guard.)
+        if event.input.id != "msg":
+            return
         line = event.value.strip()
         if not line:
             return

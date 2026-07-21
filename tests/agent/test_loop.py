@@ -467,6 +467,105 @@ def test_grounding_gate_no_op_for_pure_conversation(tmp_path):
     assert stream.warnings == []
 
 
+def test_grounding_gate_session_level_remember_prior_turn_reads(tmp_path):
+    """REGRESSION: GroundingGate must honor reads from PRIOR turns of the same
+    session, not just the current turn.
+
+    Scenario (observed in real session 155057): turn 1 reads loader.py, turn 2
+    ("代码评审") summarizes and cites loader.py:81 WITHOUT re-reading. Pre-fix,
+    each turn got a fresh HarnessState with empty content_read_files; the gate
+    forced a re-read of every cited file, bloating the session with redundant
+    read_file calls. The fix pre-fills content_read_files from session.messages
+    at run_agent entry, so reads carry across turns.
+    """
+    from coderio.session.message import Message, ToolCall
+    f = tmp_path / "loader.py"
+    f.write_text("HARNESS = True\n", encoding="utf-8")
+
+    # Simulate turn 1 having already happened: session has an assistant message
+    # with a read_file tool_call + the matching tool_result. We construct this
+    # manually because the test is about cross-turn state, not turn 1 itself.
+    session = Session.create(tmp_path, {"meta": "test"})
+    session.append(Message.user("分析项目"))
+    session.append(Message.assistant(
+        "",
+        tool_calls=[ToolCall(id="tc1", name="read_file", args={"path": str(f)})],
+    ))
+    session.append(Message.tool_result(tool_call_id="tc1", name="read_file",
+                                       content="1	HARNESS = True"))
+
+    # Turn 2: model cites loader.py:81 WITHOUT reading it again. With the fix,
+    # the gate sees loader.py in content_read_files (seeded from session msgs)
+    # and does NOT force-continue.
+    model = _model_returning(
+        AIMessage(content="loader.py:81 已经接入了 config.harness。", tool_calls=[]),
+    )
+    stream = _RecStream()
+    final = run_agent(
+        user_input="评审", model=model, tools=build_default_tools(),
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=stream, max_rounds=5,
+    )
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
+    assert harness_msgs == [], (
+        "session-level seed broken: gate forced re-read of a file already read "
+        "in a prior turn. harness_msgs: " + str(harness_msgs)
+    )
+    assert "loader.py" in final
+
+
+def test_empty_response_triggers_compact_before_retry(tmp_path):
+    """REGRESSION: empty model responses should trigger context compaction on
+    the first retry, not just nag the model with "please continue".
+
+    Empty responses usually mean the context is overloaded (the model bails
+    rather than wading through 60K+ tokens). Re-nagging into the same bloated
+    window wastes both retries — observed in real sessions as 4 consecutive
+    empty-response events, both pairs exhausting retries.
+    """
+    from coderio.config import ContextConfig
+    f = tmp_path / "x.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    # Model returns empty first, then a real answer.
+    model = _model_returning(
+        AIMessage(content="", tool_calls=[]),
+        AIMessage(content="最终答案。", tool_calls=[]),
+    )
+    ctx_cfg = ContextConfig(enabled=True, trigger_ratio=0.6, keep_recent=4,
+                            model_context_limit=200_000)
+    session = Session.create(tmp_path, {"meta": "test"})
+    stream = _RecStream()
+    compact_calls = []
+    real_compact = None
+    try:
+        from coderio.agent import compact as _c
+        real_compact = _c.compact_convo
+
+        def _spy(convo, model, keep_recent=8):
+            compact_calls.append(len(convo))
+            return real_compact(convo, model, keep_recent=keep_recent)
+        _c.compact_convo = _spy
+        final = run_agent(
+            user_input="hi", model=model, tools=build_default_tools(),
+            gate=PermissionGate("auto"),
+            skill_store=SkillStore(), active_skills=ActiveSkills(),
+            session=session, stream=stream, max_rounds=5,
+            context_cfg=ctx_cfg,
+        )
+    finally:
+        if real_compact is not None:
+            from coderio.agent import compact as _c
+            _c.compact_convo = real_compact
+    # Compact was attempted at least once (the empty-response branch fires it).
+    # It may or may not actually shrink a tiny test convo, but the CALL must
+    # have happened — that's the regression signal.
+    assert len(compact_calls) >= 1, (
+        "empty response did not trigger compaction — fallback to 'please "
+        "continue' only is the bug we're guarding against")
+    assert "最终答案" in final
+
+
 def test_empty_response_shows_notice_not_silent_hang(tmp_path):
     """Regression: after several tool-call rounds, step-3.7-flash returned a bare
     empty message (no text, no tool_calls). _execute_turn treated it as 'done'

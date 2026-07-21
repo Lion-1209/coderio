@@ -4,12 +4,14 @@ import coderio.cli.onboarding as onboarding_mod
 
 
 def _mock_verify_ok(*a, **kw):
-    """Mock _verify_key to always succeed (skip real API call in tests)."""
-    return (True, "验证成功")
+    """Mock _verify_and_probe to always succeed (skip real API call in tests).
+
+    Returns the 3-tuple shape: (ok, msg, context_limit)."""
+    return (True, "验证成功", 256_000)
 
 
 def test_select_bigmodel_coding_plan(tmp_path, monkeypatch):
-    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
+    monkeypatch.setattr(onboarding_mod, "_verify_and_probe", _mock_verify_ok)
     creds_file = tmp_path / "credentials"
     answers = iter(["1", "", "sk-big-123"])
     result = run_onboarding(
@@ -25,7 +27,7 @@ def test_select_bigmodel_coding_plan(tmp_path, monkeypatch):
 
 
 def test_select_stepfun_with_explicit_model(tmp_path, monkeypatch):
-    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
+    monkeypatch.setattr(onboarding_mod, "_verify_and_probe", _mock_verify_ok)
     answers = iter(["2", "2", "sk-step"])
     result = run_onboarding(
         prompt_fn=lambda _: next(answers),
@@ -49,7 +51,7 @@ def test_skip_returns_none(tmp_path):
 
 
 def test_openai_custom_asks_base_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
+    monkeypatch.setattr(onboarding_mod, "_verify_and_probe", _mock_verify_ok)
     # openai_custom is now menu item 8
     answers = iter(["8", "https://my.api/v1", "my-model", "sk-x"])
     result = run_onboarding(
@@ -65,7 +67,7 @@ def test_openai_custom_asks_base_url(tmp_path, monkeypatch):
 def test_onboarding_persists_to_config(tmp_path, monkeypatch):
     """Onboarding must write provider_id/model to config.toml so build_chat_model
     uses the S1 path — without this the entered key is never read."""
-    monkeypatch.setattr(onboarding_mod, "_verify_key", _mock_verify_ok)
+    monkeypatch.setattr(onboarding_mod, "_verify_and_probe", _mock_verify_ok)
     creds_file = tmp_path / "credentials"
     config_path = tmp_path / "config.toml"
     answers = iter(["1", "", "sk-big-123"])
