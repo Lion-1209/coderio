@@ -8,6 +8,32 @@ from langchain_anthropic import ChatAnthropic
 
 from coderio.config import Config
 
+# Max SDK-level retries on transient failures (429 / 5xx / network). The OpenAI
+# client defaults to 2 and Anthropic to 2; bump to 3 so a brief rate-limit spike
+# or a momentary network blip doesn't immediately surface as a fatal error to
+# the user. The SDK already backs off exponentially between attempts.
+_MAX_RETRIES: int = 3
+# Per-request timeout in seconds. Without an explicit value the SDK default
+# applies (OpenAI: none/60s, Anthropic: 600s), which is inconsistent across
+# providers and can hang the TUI on a stuck connection. 90s covers slow coding
+# models while still failing fast on a dead endpoint.
+_REQUEST_TIMEOUT: int = 90
+
+
+def _build_client(kind: str, *, model: str, base_url: str, api_key, max_tokens: int):
+    """Construct a ChatAnthropic or ChatOpenAI with uniform retry/timeout settings.
+
+    Centralizes the two knobs (max_retries, timeout) so every provider layer
+    (profile, registry provider_id, custom provider_id, S0 fallback) gets the
+    same resilience instead of each call site setting them ad hoc.
+    """
+    common = dict(model=model, base_url=base_url, api_key=api_key,
+                  max_tokens=max_tokens, max_retries=_MAX_RETRIES,
+                  timeout=_REQUEST_TIMEOUT)
+    if kind == "anthropic":
+        return ChatAnthropic(**common)
+    return ChatOpenAI(**common)
+
 
 def _pick_api_key(provider: str) -> str | None:
     if provider == "anthropic":
@@ -72,9 +98,8 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
             raise ValueError(
                 f"profile '{profile.name}': provider_id '{profile.provider_id}' "
                 f"has no base_url. Set base_url in the profile or use a known provider_id.")
-        if kind == "anthropic":
-            return ChatAnthropic(model=model_name, base_url=base_url, api_key=key, max_tokens=max_tokens)
-        return ChatOpenAI(model=model_name, base_url=base_url, api_key=key, max_tokens=max_tokens)
+        return _build_client(kind, model=model_name, base_url=base_url,
+                             api_key=key, max_tokens=max_tokens)
 
     if m.provider_id:
         from coderio.cli.providers import get_provider
@@ -86,9 +111,8 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
         model_name = m.default or (info.default_model if info else "")
         if info:
             # Known provider — use registry base_url/kind.
-            if info.kind == "anthropic":
-                return ChatAnthropic(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
-            return ChatOpenAI(model=model_name, base_url=info.base_url, api_key=key, max_tokens=max_tokens)
+            return _build_client(info.kind, model=model_name, base_url=info.base_url,
+                                 api_key=key, max_tokens=max_tokens)
         # Custom provider_id not in registry — use config.toml base_url/provider.
         kind = m.provider or "openai_compatible"
         if not m.base_url:
@@ -97,12 +121,13 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
                 f"no base_url is set in config.toml. Either use a known provider_id, "
                 f"or set [model] base_url and provider in config.toml.")
         if kind == "anthropic":
-            return ChatAnthropic(model=model_name, base_url=m.base_url, api_key=key, max_tokens=max_tokens)
-        return ChatOpenAI(model=model_name, base_url=m.base_url, api_key=key, max_tokens=max_tokens)
+            return _build_client(kind, model=model_name, base_url=m.base_url,
+                                 api_key=key, max_tokens=max_tokens)
+        return _build_client(kind, model=model_name, base_url=m.base_url,
+                             api_key=key, max_tokens=max_tokens)
 
     api_key = _pick_api_key(m.provider)
-    if m.provider == "openai_compatible":
-        return ChatOpenAI(model=m.default, base_url=m.base_url, api_key=api_key, max_tokens=max_tokens)
-    if m.provider == "anthropic":
-        return ChatAnthropic(model=m.default, base_url=m.base_url, api_key=api_key, max_tokens=max_tokens)
+    if m.provider in ("openai_compatible", "anthropic"):
+        return _build_client(m.provider, model=m.default, base_url=m.base_url,
+                             api_key=api_key, max_tokens=max_tokens)
     raise ValueError(f"Unknown provider: {m.provider!r} (expected 'openai_compatible' or 'anthropic')")

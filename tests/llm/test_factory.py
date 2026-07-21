@@ -146,3 +146,26 @@ def test_stale_active_profile_falls_through(tmp_path):
     from langchain_openai import ChatOpenAI
     assert isinstance(model, ChatOpenAI)
     assert model.model_name == "glm-4.5"  # fell through to [model]
+
+
+# --- retry / timeout resilience (_build_client) ---
+
+def test_build_client_sets_max_retries_and_timeout_openai():
+    """Every built ChatOpenAI carries uniform max_retries + timeout so a brief
+    429 spike or network blip doesn't immediately surface as a fatal error."""
+    from coderio.llm.factory import _MAX_RETRIES, _REQUEST_TIMEOUT
+    cfg = Config(model=ModelConfig(provider="openai_compatible", default="glm-4.5",
+                                   base_url="http://x/v4"))
+    model = build_chat_model(cfg)
+    assert model.max_retries == _MAX_RETRIES
+    assert model.request_timeout == _REQUEST_TIMEOUT
+
+
+def test_build_client_sets_max_retries_and_timeout_anthropic():
+    """ChatAnthropic gets the same retry/timeout treatment."""
+    from coderio.llm.factory import _MAX_RETRIES
+    cfg = Config(model=ModelConfig(provider="anthropic", default="claude", base_url=""))
+    model = build_chat_model(cfg)
+    from langchain_anthropic import ChatAnthropic
+    assert isinstance(model, ChatAnthropic)
+    assert model.max_retries == _MAX_RETRIES

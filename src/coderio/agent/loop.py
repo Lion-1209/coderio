@@ -175,11 +175,12 @@ def run_step(
                 "或设置 ANTHROPIC_API_KEY 环境变量。") from e
         if any(k in msg for k in ("rate_limit", "429", "rate limit", "quota")):
             raise RuntimeError(
-                "API 速率限制：请求过于频繁或额度用完。请稍后重试。") from e
+                "API 速率限制：请求过于频繁或额度用完（SDK 已自动重试 3 次仍失败）。"
+                "请稍后重试，或检查账户额度。") from e
         if any(k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")):
             raise RuntimeError(
-                f"网络错误：无法连接到模型端点 ({type(e).__name__})。"
-                "请检查网络连接和 base_url 配置。") from e
+                f"网络错误：无法连接到模型端点 ({type(e).__name__})，"
+                "已自动重试 3 次。请检查网络连接和 base_url 配置。") from e
         if any(k in msg for k in ("not found", "404", "model")):
             raise RuntimeError(
                 f"模型错误：模型名可能无效 ({type(e).__name__}: {e})。"
