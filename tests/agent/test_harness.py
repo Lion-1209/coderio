@@ -297,14 +297,38 @@ def test_grounding_gate_basename_match():
     assert (cont, inject, warn) == (False, None, None)
 
 
-def test_grounding_gate_dir_read_covers_files():
-    """A list_dir on 'src/agent/' counts as having looked at files there."""
+def test_grounding_gate_dir_read_does_not_cover_files():
+    """A list_dir only returns filenames, not contents — it must NOT ground a
+    citation about a file's internals. The model must read_file the specific
+    file before claiming 'harness.py defines four gates'. This closes a bypass
+    where list_dir('src/') satisfied citations for every file under src/."""
     h = _harness()
     h.observe("list_dir", {"path": "src/agent/"}, "loop.py\nharness.py")
-    # Citing a file under that dir — basename 'harness.py' isn't in read_files,
-    # but the read path 'src/agent/' is a substring of 'src/agent/harness.py'.
+    # Citing a file under that dir without a read_file — should be ungrounded.
+    cont, inject, warn = h.check_termination("src/agent/harness.py 定义了四道门。")
+    assert cont is True  # gate forces a re-read
+    assert inject is not None
+    assert "harness.py" in inject
+
+
+def test_grounding_gate_read_file_grounds_citation():
+    """A read_file of the exact cited file grounds the citation (positive case
+    for the tightened check — only read_file counts, not list_dir/grep)."""
+    h = _harness()
+    h.observe("read_file", {"path": "src/agent/harness.py"}, "contents...")
     cont, inject, warn = h.check_termination("src/agent/harness.py 定义了四道门。")
     assert (cont, inject, warn) == (False, None, None)
+
+
+def test_grounding_gate_grep_does_not_ground_citation():
+    """A grep for a pattern is NOT a content read — the model only sees matching
+    lines, never the full file. Citing the file after grep should be ungrounded.
+    This closes the bypass where grep pattern='loop' satisfied 'loop.py:42'."""
+    h = _harness()
+    h.observe("grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ...")
+    cont, inject, warn = h.check_termination("loop.py:42 处理 ReAct 循环。")
+    assert cont is True  # gate forces a real read_file
+    assert inject is not None
 
 
 def test_grounding_gate_escalates_to_warn_after_max():

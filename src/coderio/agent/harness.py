@@ -36,6 +36,12 @@ WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit"
 # Read-only tools that "ground" a claim about a file — if the model cited a path
 # and one of these tools touched it, the citation is evidence-backed.
 READ_TOOLS: frozenset[str] = frozenset({"read_file", "grep", "list_dir", "glob"})
+# Tools that actually READ FILE CONTENTS. Only these ground a citation about a
+# file's internals — grep only matches a pattern (the model never sees the full
+# file), and list_dir/glob return NAMES without contents. Crediting them would
+# let the model cite "loader.py:81 does X" after a `grep pattern="loader"` or a
+# `list_dir("src")` that only returned filenames.
+CONTENT_READ_TOOLS: frozenset[str] = frozenset({"read_file"})
 
 # Running a shell command counts as a verification attempt — even a failing one
 # means the agent tried to run its code, so we stop nagging. This avoids both
@@ -52,8 +58,12 @@ _MAX_GATE_ATTEMPTS: int = 2
 _CITED_FILE_RE = re.compile(
     r"(?<![\w/])"                       # not preceded by a word/slash char
     r"(?:[\w./\\-]+[\\/])?"             # optional dir prefix (src/, agent\)
-    r"[\w-]+\."                         # basename stem + dot
-    r"(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml|rs|go|java|rb|sh|css|html)"
+    r"(?:"
+    r"[\w-]+\."                         # basename stem + dot + extension
+    r"(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml|rs|go|java|rb|sh|css|html|sql|c|cpp|h|hpp|php|swift|kt|scala|lua|vim|el)"
+    r"|"
+    r"(?:Dockerfile|Makefile|makefile|Gemfile|Rakefile|CMakeLists\.txt|\.env|\.gitignore|\.dockerignore|requirements\.txt|package\.json|tsconfig\.json|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock)"
+    r")"
     r"(?::\d+)?"                        # optional :line-number
     r"(?![\w])"                         # not followed by a word char
 )
@@ -131,6 +141,13 @@ class HarnessState:
     # The GroundingGate checks citations against this set: claiming "loader.py:81
     # does X" without loader.py in here is an ungrounded assertion.
     read_files: set[str] = field(default_factory=set)
+    # Subset of read_files opened with read_file (content-level reads). The
+    # GroundingGate trusts these for file-content citations; grep/list_dir/glob
+    # only land in read_files (directory/path awareness), NOT here — seeing a
+    # filename in `list_dir` output doesn't mean the model read the file's
+    # contents, so a citation like "loader.py:81 does X" should require an actual
+    # read_file of loader.py.
+    content_read_files: set[str] = field(default_factory=set)
     # Times the grounding gate has force-continued this turn.
     grounding_attempts: int = 0
 
@@ -170,6 +187,15 @@ class Harness:
                 v = str(args.get(key, "")).strip()
                 if v:
                     self.state.read_files.add(v)
+            # read_file is the only tool that actually reads file CONTENTS. A
+            # grep only matches a pattern, list_dir/glob return names — none of
+            # those let the model truthfully cite a specific line's behavior, so
+            # they don't ground a content-level citation.
+            if name in CONTENT_READ_TOOLS:
+                for key in ("path", "file_path"):
+                    v = str(args.get(key, "")).strip()
+                    if v:
+                        self.state.content_read_files.add(v)
         elif name == VERIFY_TOOL:
             # A bash call clears "unverified writes" ONLY if it plausibly runs
             # or tests the written code. A bare `echo done` or `ls` should NOT
@@ -344,22 +370,27 @@ class Harness:
         return path
 
     def _was_read(self, cited: str) -> bool:
-        """Did any read tool touch the cited path this turn?
+        """Did the model actually READ the cited file's contents this turn?
 
-        Matches loosely: if the model cited ``loader.py`` and we read ``src/agent/``
-        (list_dir) or ``loader.py`` directly or grep'd with path ``src/agent``, that
-        counts. We compare on basename AND substring so a dir read covers its files.
+        Only content-level reads (read_file) ground a citation about a file's
+        internals — grep/list_dir/glob don't, because they never show the file's
+        actual content (grep matches a pattern; list_dir/glob return names).
+
+        Matching: basename OR full-path exact match against the files opened with
+        read_file. The old loose substring match (``c in r or r in c``) was too
+        permissive — it let ``grep pattern="loop"`` satisfy a citation of
+        ``loop.py``, and ``list_dir("src")`` cover every file in src/.
         A bare ``:line`` suffix on the citation is stripped first.
         """
         c = cited.rsplit(":", 1)[0] if ":" in cited else cited  # drop :line
         c_base = self._basename(c)
-        for r in self.state.read_files:
+        for r in self.state.content_read_files:
             if not r:
                 continue
             r_base = self._basename(r)
-            # direct match on basename, or the read path contains the cited stem,
-            # or the cited path contains the read dir (read "src/x" covers "src/x/y.py").
-            if c_base == r_base or c in r or r in c or c_base in r:
+            # Exact basename match (loader.py == loader.py) or full-path match
+            # (src/agent/loop.py == src/agent/loop.py, with/without trailing sep).
+            if c_base == r_base or c == r or c == r.replace("\\", "/"):
                 return True
         return False
 
