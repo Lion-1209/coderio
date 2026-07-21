@@ -375,6 +375,13 @@ def _execute_turn(
                     # Force-continue: do NOT return. Inject the harness demand as a
                     # user message (the model sees a hard follow-up requirement) and
                     # keep looping. Persisted via on_message so it's auditable.
+                    # Surface a VISIBLE notice (distinct from escalation warn) so the
+                    # user understands why the agent keeps running after the model
+                    # produced what looked like a final answer — without this, the
+                    # text Panel appears, then more tool calls / thinking follow with
+                    # no explanation, which reads as a rendering bug.
+                    if hasattr(stream, "on_harness_continue"):
+                        stream.on_harness_continue(inject)
                     msg = Message.user(inject)
                     convo.append(msg)
                     if on_message is not None:

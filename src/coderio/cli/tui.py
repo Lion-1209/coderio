@@ -901,6 +901,16 @@ class CoderioTUI(App):
         # round's thinking is flushed/folded.
         self._live_think_body: Static | None = None
         self._live_think_chars = 0  # chars shown so far (to append only the delta)
+        # Agent-thread-local flag: has a think_start already been queued for the
+        # CURRENT round? `_live_think_body` is set by the MAIN thread 60ms later
+        # (next _drain_render_queue tick), so reading it from the agent thread is
+        # a race — within one drain window many on_thinking chunks arrive before
+        # the main thread has had a chance to mount the Collapsible, and each one
+        # would otherwise queue a SEPARATE think_start, fragmenting one continuous
+        # thinking stream into N tiny Collapsibles ("The" / "The user is" / ...).
+        # This flag is owned entirely by the agent thread (set in on_thinking,
+        # cleared in _flush_round_thinking / on_finish), so there's no race.
+        self._round_think_started: bool = False
         # Live output: a RichLog widget for streaming the answer as it arrives.
         # RichLog is append-only — each token chunk is written once, avoiding the
         # full-widget layout recompute that Static.update(Text(full_buffer)) would
@@ -1190,6 +1200,7 @@ class CoderioTUI(App):
                     self._round_think_start = 0.0
                     self._live_think_body = None
                     self._live_think_chars = 0
+                    self._round_think_started = False
                     self.buffer = ""
                     self._live_output_last_flush = 0.0
                     if self._status_bar:
@@ -1258,8 +1269,18 @@ class CoderioTUI(App):
             self._round_think_start = time.monotonic()
         self._round_thinking += text
         now = time.monotonic()
-        if self._live_think_body is None:
-            # First chunk: push a think_start
+        # Decide think_start vs think_update using an AGENT-THREAD-LOCAL flag,
+        # NOT `_live_think_body`. The latter is set by the main thread only after
+        # the next _drain_render_queue tick (60ms away), so reading it here is a
+        # race: within one drain window many on_thinking chunks arrive, each one
+        # would re-enter the "first chunk" branch and queue another think_start,
+        # fragmenting one continuous thinking stream into many tiny Collapsibles.
+        if not self._round_think_started:
+            # First chunk of this round: queue think_start with the FULL text so
+            # far, and mark the round as started. The main thread will mount ONE
+            # Collapsible; subsequent chunks queue think_update against that same
+            # widget.
+            self._round_think_started = True
             self._live_think_chars = len(self._round_thinking)
             self._render_q.append(("think_start", self._round_thinking))
             self._live_output_last_flush = now  # reuse throttle timer for thinking
@@ -1307,18 +1328,42 @@ class CoderioTUI(App):
             f"⚠ {message}\n\n产出可能未经验证，请人工复核。",
             title="⚠ harness 警告", border_style="red")))
 
+    def on_harness_continue(self, reason: str) -> None:
+        """Surface a harness force-continue as a dim notice line.
+
+        Distinct from on_harness_warn (red escalation panel): this is a normal
+        control-flow event, not an error. The model produced what looked like a
+        final answer but the harness found unfinished work and demanded more.
+        Without this visible cue, the user sees the answer Panel appear, then
+        more thinking/tool calls follow with no explanation — reads as a bug.
+        Renders as a single dim line so it doesn't compete with real output."""
+        self._flush_round_thinking()
+        self._flush_buffer()
+        first_line = reason.splitlines()[0] if reason else ""
+        if len(first_line) > 120:
+            first_line = first_line[:117] + "…"
+        self._render_q.append((
+            "static",
+            f"↻ harness 要求继续：{first_line}",
+            "dim italic",
+        ))
+
     def on_finish(self) -> None:
         # Capture everything remaining and push ONE finalize instruction.
         # The main-thread drain will fold thinking + mount the final Markdown Panel.
         think_text = self._round_thinking
         secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
-        had_live = self._live_think_body is not None
+        # had_live = a live Collapsible was mounted for this round. Use the
+        # agent-thread flag (truthful at this moment) rather than _live_think_body
+        # (which the main thread owns and may not have updated yet).
+        had_live = self._round_think_started
         buf = self.buffer
         # Reset accumulated state.
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._live_think_body = None
         self._live_think_chars = 0
+        self._round_think_started = False
         self.buffer = ""
         self._live_output_last_flush = 0.0
         self._render_q.append(("finalize", buf, think_text, secs, had_live))
@@ -1342,16 +1387,29 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- thinking fold (true fold/unfold)
     def _flush_round_thinking(self) -> None:
-        """Push a think_fold instruction to the render queue (agent thread)."""
+        """Push a think_fold instruction to the render queue (agent thread).
+
+        Called whenever a round's thinking needs to be sealed off: before each
+        tool call, before non-thinking output begins, and at turn end. Clears
+        the agent-thread `_round_think_started` flag so the NEXT round's first
+        on_thinking chunk queues a fresh think_start (one Collapsible per round,
+        never per-chunk)."""
         if not self._round_thinking.strip():
+            # Even if there's no text, drop the started flag so the next round
+            # gets a clean start (a stray True here with no body to fold would
+            # make the next on_thinking skip think_start).
+            self._round_think_started = False
             return
         text = self._round_thinking
         secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
-        had_live = self._live_think_body is not None
+        # had_live = a live Collapsible was mounted for THIS round. Read the
+        # agent-thread flag, not _live_think_body (main-thread state, races).
+        had_live = self._round_think_started
         self._round_thinking = ""
         self._round_think_start = 0.0
         self._live_think_body = None
         self._live_think_chars = 0
+        self._round_think_started = False
         self._render_q.append(("think_fold", text, secs, had_live))
 
     def show_last_thinking(self) -> bool:
@@ -1365,11 +1423,21 @@ class CoderioTUI(App):
     # ----------------------------------------------------- helpers: add content to history
     def _flush_buffer(self) -> None:
         """Push the accumulated output to the render queue, replacing the live
-        streaming RichLog with a final Markdown Panel (mid-turn tool calls)."""
+        streaming RichLog with a Markdown Panel.
+
+        Marked as an INTERMEDIATE panel (distinct title + dim cyan border) so the
+        user can visually tell this is mid-process output, NOT the final answer.
+        The final answer is mounted by _mount_final_panel with title "coderio"
+        and a blue border. Without this distinction, a model that emits text then
+        continues with more tool calls looks like it "finished, then restarted"."""
         # Remove the live streaming widget first (if present).
         self._render_q.append(("clear_live",))
         if self.buffer.strip():
-            self._render_q.append(("panel", Panel(Markdown(self.buffer), border_style="blue", title="coderio")))
+            self._render_q.append(("panel", Panel(
+                Markdown(self.buffer),
+                border_style="cyan",
+                title="[dim]中间输出 · agent 仍在运行…[/dim]",
+            )))
         self.buffer = ""
 
     def _add_text(self, text: str, style: str = "") -> None:
