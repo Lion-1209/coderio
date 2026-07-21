@@ -10,7 +10,7 @@ from langchain_core.messages import (
 )
 
 from coderio.agent.prompts import ActiveSkills, build_system_prompt
-from coderio.agent.skill_tool import ActivateSkillTool
+from coderio.agent.skill_tool import ActivateSkillTool, DeactivateSkillTool
 from coderio.agent.stream import NullStream
 from coderio.session import Message, ToolCall
 from coderio.session.store import Session
@@ -302,7 +302,10 @@ def _execute_turn(
                     result = aug
             stream.on_tool_end(name, result)
             _emit(Message.tool_result(tool_call_id=tc["id"], name=name, content=result))
-            if name == "activate_skill" and on_activate_skill is not None:
+            # Both activate_skill and deactivate_skill change which skill bodies
+            # are in the system prompt — refresh it so the next round sees the
+            # updated active set.
+            if name in ("activate_skill", "deactivate_skill") and on_activate_skill is not None:
                 new_prompt = on_activate_skill()
                 if new_prompt:
                     active_prompt = new_prompt
@@ -336,7 +339,9 @@ def run_agent(
     """
     stream = stream or NullStream()
     activate_tool = ActivateSkillTool(skill_store, active_skills)
+    deactivate_tool = DeactivateSkillTool(active_skills)
     skill_index = _build_skill_index(tools, activate_tool)
+    skill_index[deactivate_tool.name] = deactivate_tool
 
     # Stage auto-inject uses the TEXT part of the input (user_input may be a
     # multimodal content-block list; detect_stage needs a plain string).
@@ -364,11 +369,15 @@ def run_agent(
 
     langchain_tools = to_langchain_tools(
         tools,
-        extra={activate_tool.name: activate_tool.args_schema},
+        extra={
+            activate_tool.name: activate_tool.args_schema,
+            deactivate_tool.name: deactivate_tool.args_schema,
+        },
     )
     from coderio.tools.base import to_langchain_tool as _adapt
     langchain_tools = langchain_tools + [
-        _adapt(activate_tool, activate_tool.args_schema)
+        _adapt(activate_tool, activate_tool.args_schema),
+        _adapt(deactivate_tool, deactivate_tool.args_schema),
     ]
 
     def _refresh_prompt():

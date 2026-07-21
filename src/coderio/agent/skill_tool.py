@@ -34,3 +34,36 @@ class ActivateSkillTool:
         skill = self.store.get(name)
         newly = self.active.activate(skill)
         return f"Activated skill: {name}" if newly else f"Skill already active: {name}"
+
+
+class DeactivateSkillArgs(BaseModel):
+    name: str = Field(description="Name of the active skill to deactivate.")
+
+
+class DeactivateSkillTool:
+    """Tool that deactivates an active skill, dropping its body from context.
+
+    Mirrors ActivateSkillTool. The budget warning in loop.py points the model at
+    `deactivate_skill` when active skill bodies exceed ~30% of the context budget;
+    without this tool that hint would reference a non-existent tool and the model
+    would get an 'unknown tool' error. After deactivation the prompt is refreshed
+    via the same on_activate_skill callback path (it rebuilds the system prompt
+    from whatever skills remain active).
+    """
+    name = "deactivate_skill"
+    description = (
+        "Deactivate an active skill to free context. Use when active skill bodies "
+        "are consuming too much budget and one is no longer needed for the task."
+    )
+    args_schema = DeactivateSkillArgs
+
+    def __init__(self, active: ActiveSkills) -> None:
+        self.active = active
+
+    def run(self, name: str) -> str:
+        removed = self.active.deactivate(name)
+        if not removed:
+            active_names = [s.name for s in self.active.all()]
+            return (f"Error: skill not active: {name}. "
+                    f"Active skills: {', '.join(active_names) or '(none)'}")
+        return f"Deactivated skill: {name}. Prompt will refresh on next turn."
