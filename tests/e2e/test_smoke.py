@@ -124,3 +124,93 @@ def test_cli_unknown_flag_errors():
         capture_output=True, text=True, timeout=30,
     )
     assert r.returncode != 0
+
+
+# ----------------------------------------------- state machine + compaction integration
+# These verify the phase-1/2/3 architecture features work end-to-end through
+# run_agent (not just in isolation): the phase timeline is persisted, and the
+# context config flows through to _execute_turn.
+
+def test_e2e_phase_timeline_persisted_to_session(tmp_path):
+    """A turn that does read→write→bash leaves a phase_timeline system message
+    in the session jsonl, recording the explore→implement→verify progression."""
+    f = tmp_path / "target.py"
+    f.write_text("print('hello')\n", encoding="utf-8")
+    # Sequence: read_file → write_file → bash(pytest) → final text
+    model = _model_returning(
+        _tc("read_file", {"path": str(f)}),
+        _tc("write_file", {"path": str(f)}, content=""),
+        _tc("bash", {"command": "pytest"}, content=""),
+        AIMessage(content="Done. All tests pass.", tool_calls=[]),
+    )
+    cfg = Config()
+    tools = build_default_tools(cfg.tools.bash_shell)
+    gate = PermissionGate("auto")
+    store = SkillStore()
+    active = ActiveSkills()
+    session = Session.create(tmp_path / "sessions", {"model": "test"})
+    run_agent(
+        user_input="read target.py, update it, run tests",
+        model=model, tools=tools, gate=gate,
+        skill_store=store, active_skills=active,
+        session=session, stream=NullStream(), max_rounds=10,
+    )
+    # The phase_timeline system message should be in the session.
+    sys_msgs = [m for m in session.messages if m.role == "system" and m.kind == "phase_timeline"]
+    assert len(sys_msgs) >= 1, "expected a phase_timeline system message"
+    import json
+    timeline = json.loads(sys_msgs[-1].content)
+    states = [entry["state"] for entry in timeline]
+    # The mock model writes without creating a todo first, so the write phase
+    # is PLAN (write + no todos), not IMPLEMENT (write + todos). Either is valid
+    # ground-truth derivation; what matters is the progression is captured.
+    assert "explore" in states, f"explore missing from {states}"
+    assert "plan" in states or "implement" in states, f"write phase missing from {states}"
+    assert "verify" in states, f"verify missing from {states}"
+    assert "complete" in states, f"complete missing from {states}"
+
+
+def test_e2e_context_config_flows_through(tmp_path):
+    """context_cfg=None (default) means no compaction — run_agent still works."""
+    f = tmp_path / "x.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    model = _model_returning(
+        _tc("read_file", {"path": str(f)}),
+        AIMessage(content="Read it.", tool_calls=[]),
+    )
+    cfg = Config()
+    tools = build_default_tools(cfg.tools.bash_shell)
+    gate = PermissionGate("auto")
+    store = SkillStore()
+    active = ActiveSkills()
+    session = Session.create(tmp_path / "sessions", {"model": "test"})
+    # No context_cfg passed — defaults to None, compaction disabled.
+    answer = run_agent(
+        user_input="read x.py",
+        model=model, tools=tools, gate=gate,
+        skill_store=store, active_skills=active,
+        session=session, stream=NullStream(), max_rounds=5,
+    )
+    assert "Read it" in answer
+
+
+def test_e2e_disabled_context_config_does_not_crash(tmp_path):
+    """A ContextConfig with enabled=False should behave like compaction off."""
+    from coderio.config import ContextConfig
+    f = tmp_path / "y.py"
+    f.write_text("y = 2\n", encoding="utf-8")
+    model = _model_returning(
+        _tc("read_file", {"path": str(f)}),
+        AIMessage(content="ok", tool_calls=[]),
+    )
+    cfg = Config()
+    tools = build_default_tools(cfg.tools.bash_shell)
+    session = Session.create(tmp_path / "sessions", {"model": "test"})
+    answer = run_agent(
+        user_input="read y.py",
+        model=model, tools=tools, gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=NullStream(), max_rounds=5,
+        context_cfg=ContextConfig(enabled=False),
+    )
+    assert "ok" in answer

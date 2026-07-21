@@ -23,12 +23,15 @@ Core philosophy: **skills are the playbook, the harness is discipline, tools are
 ## Features
 
 - **Harness four-gate hard constraint**: when the agent writes code but tries to declare "done" without running it, the harness intercepts and force-continues — not a soft prompt rule, but system-level structural control (based on tool-call ground truth)
-- **Intent classification**: automatically distinguishes CODE / QA / ANALYZE intents — coding tasks follow the workflow, questions get direct answers
+- **Explicit state machine**: real-time phase derivation (explore→plan→implement→verify→complete), status bar shows task phase + model activity dual-axis; per-turn phase timeline persisted to session for replay/debugging
+- **Automatic context compaction**: when a long conversation approaches the token limit, old messages are summarized into a system message, preserving recent context + tool_call/tool_result pair integrity to avoid window-overflow failures
+- **Context-rot auto-restart**: when the agent gets stuck in a tool-call loop or exhausts max rounds, automatically retries once from a compacted clean context
+- **Intent classification**: automatically distinguishes CODE / QA / ANALYZE intents — coding tasks follow the workflow, questions get direct answers (bilingual CN/EN signal words)
 - **Progressive disclosure**: skill bodies load on-demand, system prompt ~2K tokens instead of dumping everything
-- **Interactive TUI**: Textual terminal UI with foldable thinking (Ctrl+O), streaming output, tool-call status bar (animated spinner + step + timer), slash-command autocomplete, session resume picker
+- **Interactive TUI**: Textual terminal UI with foldable thinking (Ctrl+O), streaming output, tool-call status bar (animated spinner + step + task phase + timer), slash-command autocomplete, session resume picker
 - **Two modes**: interactive single-agent (daily use) + 6-agent crew pipeline (large tasks, LangGraph orchestration)
 - **Tool error resilience**: tool failures become tool results fed back to the model for self-correction, never crash the turn
-- **Multi-provider**: Zhipu GLM / StepFun StepFun coding plans (Anthropic protocol) + OpenAI + Anthropic + Ollama + custom OpenAI-compatible endpoints
+- **Multi-provider + named profiles**: Zhipu GLM / StepFun coding plans (Anthropic protocol) + OpenAI + Anthropic + Ollama + custom; supports multiple config profiles with `/profile` runtime switching
 
 ---
 
@@ -62,6 +65,12 @@ default = "glm-5.2"
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto
+
+[context]
+enabled = true                          # auto-compaction for long sessions (default on)
+trigger_ratio = 0.75                    # compact at 75% of the context window
+keep_recent = 8                         # preserve the most recent N messages verbatim
+model_context_limit = 128000            # model context window size (tokens)
 ```
 
 Supported providers:
@@ -150,8 +159,29 @@ Capability layer          tools/ · skills/ · llm/ · session/ · config/
 |------|----------|-----------|
 | **VerifyGate** | Hard, progressive escalation | Wrote code but didn't run bash before declaring "done" → intercept, inject forced continuation; released after 2 attempts + red warning |
 | **CompletionGate** | Hard | Non-trivial todos remain when declaring "done" → intercept |
-| **GroundingGate** | Hard | Cites code locations never actually read when declaring "done" → intercept (prevents analysis built on assumptions) |
+| **GroundingGate** | Hard | Cites code locations never read_file'd when declaring "done" → intercept (grep/list_dir don't count as reading content — prevents analysis built on assumptions) |
 | **PlanGate** | Soft nudge | Writes code without any todos → append nudge to tool result |
+
+### Context management (three layers)
+
+The hardest problems in long sessions are context-window overflow and the agent "spinning". coderio has three defense layers:
+
+| Layer | Trigger | Mechanism |
+|-------|---------|-----------|
+| **Context compaction** | input_tokens > 75% of window | Old messages summarized into a system message, preserving recent context + tool_call pair integrity |
+| **Context-rot detection** | Same tool call repeated >3 times / max rounds exhausted | Flagged as `TurnResult.in_tool_loop` / `hit_max_rounds` |
+| **Auto-restart** | Context-rot detected | Retries the same prompt once from a compacted clean context (max 1 retry) |
+
+### Explicit state machine
+
+Agent execution phases are derived in real time and shown in the status bar (`Step 3 · [implement] thinking · 12.4s`):
+
+```
+explore (read_file/grep) → plan (first write, no todo) → implement (write + todo)
+  → verify (bash pytest) → complete
+```
+
+Each turn's phase timeline is persisted to the session jsonl (`kind="phase_timeline"`), available for replay/debugging, but invisible to the model (doesn't pollute context).
 
 Full architecture design: [`docs/coderio-architecture.md`](docs/coderio-architecture.md) (Chinese).
 

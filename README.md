@@ -23,12 +23,15 @@
 ## 特性
 
 - **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）
-- **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答
+- **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
+- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败
+- **context-rot 自动重启**：检测到 agent 陷入工具调用循环或耗尽轮数上限时，从压缩后的干净上下文自动重试一次
+- **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
-- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 计时器）、slash 命令自动补全、会话恢复选择器
+- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器
 - **两种模式**：交互式单 agent（日常）+ 6-agent crew 流水线（大需求，LangGraph 编排）
 - **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn
-- **多 provider**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容
+- **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 
 ---
 
@@ -62,6 +65,12 @@ default = "glm-5.2"
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto
+
+[context]
+enabled = true                          # 长会话自动压缩（默认开）
+trigger_ratio = 0.75                    # 达到上下文窗口 75% 时触发
+keep_recent = 8                         # 保留最近 N 条消息不压缩
+model_context_limit = 128000            # 模型上下文窗口大小（token）
 ```
 
 支持的 provider：
@@ -150,8 +159,29 @@ Agent 层 (agent/)      ReAct 循环 + harness 状态控制 + 提示词构建
 |----|------|------|
 | **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；2 次后放行 + 红色警告 |
 | **CompletionGate** | 硬 | 有未完成 todo 就声明"完成"→ 拦截 |
-| **GroundingGate** | 硬 | 引用了从未读取的代码位置就声明"完成"→ 拦截（防止分析建立在臆测上） |
+| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上） |
 | **PlanGate** | 软提醒 | 没 todo 就写代码 → 工具结果追加 nudge |
+
+### 上下文治理（三层防线）
+
+长会话最容易遇到的问题就是上下文窗口溢出和 agent"转晕"。coderio 有三层防线：
+
+| 层 | 触发 | 机制 |
+|----|------|------|
+| **上下文压缩** | input_tokens > 窗口的 75% | 旧消息总结成 system 摘要，保留近期消息 + tool_call 配对完整性 |
+| **context-rot 检测** | 同一工具调用重复 >3 次 / 达到 max_rounds | 标记为 `TurnResult.in_tool_loop` / `hit_max_rounds` |
+| **自动重启** | 检测到 context-rot | 从压缩后的干净上下文重跑同一 prompt（最多 1 次） |
+
+### 显式状态机
+
+agent 执行阶段实时推导并显示在状态栏（`步骤3 · [实现] 思考中 · 12.4s`）：
+
+```
+探索（read_file/grep）→ 规划（首次 write 无 todo）→ 实现（write + todo）
+  → 验证（bash pytest）→ 完成
+```
+
+每轮的 phase 时间线持久化到 session jsonl（`kind="phase_timeline"`），可回放调试，但对模型不可见（不会污染上下文）。
 
 详细架构设计见 [`docs/coderio-architecture.md`](docs/coderio-architecture.md)。
 
