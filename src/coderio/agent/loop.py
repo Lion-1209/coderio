@@ -300,7 +300,10 @@ def _execute_turn(
                 harness.observe(name, args, result)
                 aug = harness.after_tool_call(name, args, result)
                 if aug:
-                    result = aug
+                    # APPEND the nudge, not replace — the model still needs the
+                    # original tool result to proceed. (The harness_middleware path
+                    # already appends; this fixes an inconsistency in the ReAct path.)
+                    result = result + aug
             stream.on_tool_end(name, result)
             _emit(Message.tool_result(tool_call_id=tc["id"], name=name, content=result))
             # Both activate_skill and deactivate_skill change which skill bodies

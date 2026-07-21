@@ -76,6 +76,23 @@ def test_plan_gate_nudges_on_write_with_no_todos():
     assert aug is not None and "[nudge]" in aug
 
 
+def test_plan_gate_nudge_is_append_safe():
+    """The nudge must start with a newline so that `result + aug` keeps the
+    original tool result readable. The ReAct loop APPENDS (not replaces); if the
+    nudge didn't lead with \\n the two texts would mash together on one line.
+    Regression for the result=aug overwrite bug that used to discard the tool result.
+    """
+    h = _harness()
+    aug = h.after_tool_call("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    assert aug is not None
+    assert aug.startswith("\n"), "nudge must start with newline for clean append"
+    # Verify append preserves the original result text
+    original = "Wrote 10 chars to a.py"
+    combined = original + aug
+    assert original in combined
+    assert "[nudge]" in combined
+
+
 def test_plan_gate_no_nudge_when_todos_exist():
     h = _harness(_add_todo(TodoStore()))
     aug = h.after_tool_call("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
