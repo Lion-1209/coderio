@@ -17,6 +17,10 @@ class StreamHandler(Protocol):
     # Harness escalation release: the agent claimed completion despite an
     # unverified write / pending todos, and the gate exhausted its retries.
     def on_harness_warn(self, message: str) -> None: ...
+    # Agent phase change (explore/plan/implement/verify/complete). Fired by the
+    # AgentStateTracker from inside Harness.observe/check_termination. Lets the
+    # UI show the task-level phase alongside the model-activity micro-phase.
+    def on_phase_change(self, state: str, step: int, hint: str) -> None: ...
 
 
 class NullStream:
@@ -30,3 +34,4 @@ class NullStream:
     def on_thinking(self, text: str) -> None: pass
     def on_truncated(self, stop_reason: str) -> None: pass
     def on_harness_warn(self, message: str) -> None: pass
+    def on_phase_change(self, state: str, step: int, hint: str) -> None: pass

@@ -403,3 +403,73 @@ def test_grounding_gate_catches_multiple_citations():
     assert inject is not None
     for f in ("loop.py", "harness.py", "prompts.py"):
         assert f in inject
+
+
+# ----------------------------------------------- phase tracking (AgentStateTracker)
+
+class _CapturingStream:
+    """Minimal StreamHandler stand-in that records on_phase_change calls."""
+    def __init__(self):
+        self.calls: list[tuple[str, int, str]] = []
+    def on_phase_change(self, state: str, step: int, hint: str) -> None:
+        self.calls.append((state, step, hint))
+
+
+def _harness_with_tracker():
+    from coderio.agent.state import AgentStateTracker
+    stream = _CapturingStream()
+    tracker = AgentStateTracker()
+    h = Harness(state=HarnessState(), todos=TodoStore(),
+                state_tracker=tracker, stream=stream)
+    return h, tracker, stream
+
+
+def test_phase_tracks_explore_on_read():
+    """observe(read_file) transitions to EXPLORE and fires on_phase_change."""
+    h, tracker, stream = _harness_with_tracker()
+    h.observe("read_file", {"path": "a.py"}, "contents")
+    assert tracker.current.value == "explore"
+    assert any(s == "explore" for s, _, _ in stream.calls)
+
+
+def test_phase_tracks_implement_on_write_with_todos():
+    """observe(write_file) with a todo list → IMPLEMENT phase."""
+    h, tracker, stream = _harness_with_tracker()
+    _add_todo(h.todos)
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")
+    assert tracker.current.value == "implement"
+    assert any(s == "implement" for s, _, _ in stream.calls)
+
+
+def test_phase_tracks_plan_on_write_without_todos():
+    """observe(write_file) with NO todos → PLAN phase (PlanGate signal)."""
+    h, tracker, stream = _harness_with_tracker()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")
+    assert tracker.current.value == "plan"
+
+
+def test_phase_tracks_verify_on_test_run():
+    """observe(bash) that verifies written code → VERIFY phase."""
+    h, tracker, stream = _harness_with_tracker()
+    _add_todo(h.todos)
+    # Write first (→ IMPLEMENT), then run a verifying bash (→ VERIFY)
+    h.observe("write_file", {"path": "test_a.py"}, "Wrote")
+    assert tracker.current.value == "implement"
+    h.observe("bash", {"command": "pytest test_a.py"}, "1 passed")
+    assert tracker.current.value == "verify"
+
+
+def test_phase_tracking_noop_without_tracker():
+    """A Harness without state_tracker (back-compat) doesn't crash on observe."""
+    h = _harness()  # no state_tracker, no stream
+    h.observe("read_file", {"path": "a.py"}, "contents")  # must not raise
+    h.observe("write_file", {"path": "b.py"}, "Wrote")    # must not raise
+
+
+def test_phase_debounce_across_repeated_reads():
+    """10 read_file calls produce ONE explore transition, not 10."""
+    h, tracker, stream = _harness_with_tracker()
+    for i in range(10):
+        h.observe("read_file", {"path": f"f{i}.py"}, "contents")
+    explore_calls = [c for c in stream.calls if c[0] == "explore"]
+    assert len(explore_calls) == 1  # debounced

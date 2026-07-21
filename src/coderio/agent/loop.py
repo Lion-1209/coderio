@@ -59,7 +59,13 @@ def _extract_thinking(content) -> str:
 
 
 def _to_langchain_messages(system_prompt: str, convo: list[Message]) -> list:
-    """Convert our Message list to langchain message objects (spec §4.2)."""
+    """Convert our Message list to langchain message objects (spec §4.2).
+
+    system-role messages (phase_timeline / context_summary / restart_checkpoint)
+    are converted to additional SystemMessage instances — langchain concatenates
+    them with the main system prompt. Phase-timeline JSON is dropped from the
+    model view (it's metadata, not conversation); only context_summary passes through.
+    """
     msgs: list = [SystemMessage(content=system_prompt)]
     for m in convo:
         if m.role == "user":
@@ -74,6 +80,11 @@ def _to_langchain_messages(system_prompt: str, convo: list[Message]) -> list:
             msgs.append(AIMessage(content=m.content, tool_calls=tcs or []))
         elif m.role == "tool":
             msgs.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id or ""))
+        elif m.role == "system":
+            # Phase timelines are observability metadata — never shown to the model.
+            # Context summaries (kind="context_summary") ARE shown (that's their purpose).
+            if m.kind != "phase_timeline":
+                msgs.append(SystemMessage(content=m.content))
     return msgs
 
 
@@ -407,20 +418,34 @@ def run_agent(
     # Build the structural harness. It reads the SAME TodoStore the todo tool
     # writes to (find it in the tools list) so the gates see live todo state.
     harness = None
+    state_tracker = None
     if harness_enabled:
         from coderio.agent.harness import Harness, HarnessState
+        from coderio.agent.state import AgentStateTracker
         todo_store = next((t.store for t in tools if getattr(t, "name", "") == "todo"), None)
         # If no TodoStore is reachable, the gates degrade gracefully (todos empty
         # -> plan gate always nudges, completion gate always skips). Build anyway.
         from coderio.tools.todo import TodoStore as _TS
-        harness = Harness(state=HarnessState(), todos=todo_store or _TS())
+        state_tracker = AgentStateTracker()
+        harness = Harness(state=HarnessState(), todos=todo_store or _TS(),
+                          state_tracker=state_tracker, stream=stream)
 
     # convo feeds the model; on_message persists every produced message to the session.
     convo = list(session.messages)
-    return _execute_turn(
+    result = _execute_turn(
         model=model, bound_cache=bound_cache, langchain_tools=langchain_tools,
         system_prompt=system_prompt, convo=convo, skill_index=skill_index,
         gate=gate, stream=stream, max_rounds=max_rounds,
         on_message=session.append, on_activate_skill=_refresh_prompt,
         harness=harness,
     )
+
+    # Persist the phase timeline at turn end (system-role message, filtered from
+    # conversation history display but available for replay/debugging).
+    if state_tracker is not None and state_tracker.timeline:
+        import json
+        state_tracker.finish(hint=result[:80] if isinstance(result, str) else "")
+        session.append(Message.system(
+            json.dumps(state_tracker.to_payload(), ensure_ascii=False),
+            kind="phase_timeline"))
+    return result

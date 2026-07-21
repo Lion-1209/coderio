@@ -25,6 +25,17 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Collapsible, Input, ListItem, ListView, RichLog, Static
 
+# Human-readable labels for AgentState task-phase values (shown in StatusBar).
+# Mirrors _PHASE_LABELS in cli/stream.py — duplicated rather than imported to
+# keep tui.py decoupled from the Rich CLI stream module.
+_TASK_PHASE_LABELS: dict[str, str] = {
+    "explore": "探索",
+    "plan": "规划",
+    "implement": "实现",
+    "verify": "验证",
+    "complete": "完成",
+}
+
 
 class CommandMenu(Vertical):
     """Popup slash-command menu (Claude-Code-style autocomplete).
@@ -208,6 +219,10 @@ class StatusBar(Widget):
         self.step: int = 0
         self.tool_index: int = 0
         self.tool_total: int = 0
+        # Task-level phase (explore/plan/implement/verify/complete), orthogonal
+        # to self.phase (which tracks model micro-activity: thinking/responding/tool).
+        # Derived from harness ground truth via AgentStateTracker. Empty = unknown.
+        self.task_phase: str = ""
         self._app = None
         self._spin_frame = 0  # cycles through _SPINNER each heartbeat while active
 
@@ -254,6 +269,14 @@ class StatusBar(Widget):
             self.tool_index = tool_index
             self.tool_total = tool_total
 
+    def set_task_phase(self, task_phase: str) -> None:
+        """Update the task-level phase tag (explore/plan/implement/verify/...).
+
+        Safe from any thread (plain attribute write, GIL-safe). Repainted by the
+        heartbeat. Pass "" to clear.
+        """
+        self.task_phase = task_phase
+
     def render(self) -> RenderableType:
         # Build a phase label that shows WHERE in the task the agent is, so the
         # user can distinguish "still working, step 3" from "frozen". The step
@@ -284,6 +307,12 @@ class StatusBar(Widget):
         parts = []
         if step_tag:
             parts.append(step_tag)
+        # Task-level phase tag (e.g. [实现]) derived from harness ground truth.
+        # Shown before the micro-activity label so the user sees both axes:
+        # "步骤3 · [实现] 思考中 · 12.4s".
+        if self.task_phase:
+            task_label = _TASK_PHASE_LABELS.get(self.task_phase, self.task_phase)
+            parts.append(f"[{task_label}]")
         parts.append(label)
         parts.append(f"{elapsed:.1f}s")
         body = " · ".join(parts)
@@ -1300,6 +1329,16 @@ class CoderioTUI(App):
         for k in ("input_tokens", "output_tokens"):
             if k in meta:
                 self.usage[k] += meta[k]
+
+    def on_phase_change(self, state: str, step: int, hint: str) -> None:
+        """Task-level phase change (explore/plan/implement/verify/...).
+
+        Called from Harness._track_phase on the agent's background thread. Just
+        forwards to StatusBar.set_task_phase (plain attribute write, GIL-safe);
+        the heartbeat repaints within ~100ms. 'complete' clears the tag.
+        """
+        if self._status_bar:
+            self._status_bar.set_task_phase("" if state == "complete" else state)
 
     # ----------------------------------------------------- thinking fold (true fold/unfold)
     def _flush_round_thinking(self) -> None:

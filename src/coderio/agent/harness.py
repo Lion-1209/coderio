@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from coderio.tools.todo import TodoStore
@@ -162,6 +162,11 @@ class Harness:
     state: HarnessState
     todos: "TodoStore"
     enabled: bool = True
+    # Optional: agent state tracker + stream for phase observability. When set,
+    # observe()/check_termination() derive the current AgentState from ground
+    # truth and fire on_phase_change. None = phase tracking off (back-compat).
+    state_tracker: Any = None
+    stream: Any = None
 
     # ------------------------------------------------------------------ observe
     def observe(self, name: str, args: dict, result: str) -> None:
@@ -173,6 +178,7 @@ class Harness:
         """
         if not self.enabled:
             return
+        just_verified = False
         if name in WRITE_TOOLS and _is_success(result):
             path = str(args.get("path", ""))
             if path and path not in self.state.writes_since_verify:
@@ -204,6 +210,30 @@ class Harness:
             if _command_verifies_written(command, self.state.writes_since_verify):
                 self.state.writes_since_verify.clear()
                 self.state.verify_attempts = 0
+                just_verified = True
+        # Derive + fire phase change after state is updated.
+        self._track_phase(just_verified=just_verified, hint=name)
+
+    def _track_phase(self, just_verified: bool = False, hint: str = "") -> None:
+        """Derive the current AgentState from ground truth and fire a transition.
+
+        No-op when state_tracker is None (phase tracking off). Debounce is inside
+        AgentStateTracker.transition — repeated same-phase calls don't bloat the
+        timeline.
+        """
+        if self.state_tracker is None:
+            return
+        from coderio.agent.state import AgentState
+        phase = self.state_tracker.derive_phase(
+            writes_since_verify=self.state.writes_since_verify,
+            todos_exist=bool(self.todos.todos),
+            just_verified=just_verified,
+        )
+        # Only notify the stream when the phase ACTUALLY changed (debounce) —
+        # otherwise 10 read_file calls would fire 10 redundant on_phase_change.
+        if self.state_tracker.transition(phase, hint=hint):
+            if self.stream is not None and hasattr(self.stream, "on_phase_change"):
+                self.stream.on_phase_change(str(phase), 0, hint)
 
     # ------------------------------------------------------- after_tool_call (plan gate)
     def after_tool_call(self, name: str, args: dict, result: str) -> str | None:

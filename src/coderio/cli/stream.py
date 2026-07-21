@@ -10,6 +10,15 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
+# Human-readable labels for AgentState values (shared with the TUI StatusBar).
+_PHASE_LABELS: dict[str, str] = {
+    "explore": "探索",
+    "plan": "规划",
+    "implement": "实现",
+    "verify": "验证",
+    "complete": "完成",
+}
+
 
 class RichStream:
     """StreamHandler impl: live token stream + final markdown re-render.
@@ -180,6 +189,11 @@ class RichStream:
                 border_style="red",
             )
         )
+
+    def on_phase_change(self, state: str, step: int, hint: str) -> None:
+        """Print a dim phase-change marker (useful in non-TUI / debug mode)."""
+        label = _PHASE_LABELS.get(state, state)
+        self.console.print(f"[dim]· [{label}][/dim] {hint}", highlight=False)
 
     def on_finish(self) -> None:
         self._flush_round_thinking()
