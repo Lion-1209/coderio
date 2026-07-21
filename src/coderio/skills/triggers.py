@@ -10,10 +10,12 @@ STAGE_SKILL_MAP: dict[str, str] = {
 _PATTERNS: dict[str, list[re.Pattern]] = {
     "implement": [
         re.compile(r"\b(start|begin)\s+implement(ing)?\b", re.IGNORECASE),
+        re.compile(r"\b(let'?s|please|go ahead and)\s+(implement|build|code)\b", re.IGNORECASE),
         re.compile("开始实现|开始执行|开跑"),
     ],
     "commit": [
         re.compile(r"\bcommit\b", re.IGNORECASE),
+        re.compile(r"\b(save|push)\s+(it|the changes?|this)\b", re.IGNORECASE),
         re.compile("提交(一下|吧)?"),
     ],
 }
