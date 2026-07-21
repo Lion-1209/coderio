@@ -29,6 +29,13 @@ class PermissionGate:
         return self._mode
 
     def check(self, tool_name: str, args: dict[str, Any]) -> bool:
+        # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
+        # read-only and shouldn't prompt (same as read_file/list_dir). This is
+        # action-level, not tool-name-level, because note is polymorphic.
+        if tool_name == "note":
+            action = str(args.get("action", "")).lower()
+            if action in ("read", "list"):
+                return True
         if tool_name not in DESTRUCTIVE_TOOLS:
             return True
         if self._mode == PermissionMode.AUTO:

@@ -310,7 +310,24 @@ def _execute_turn(
                 new_prompt = on_activate_skill()
                 if new_prompt:
                     active_prompt = new_prompt
-    out = f"Stopped: reached max rounds ({max_rounds})."
+    out = (
+        f"已达最大轮数上限（{max_rounds} 轮），本轮停止。\n\n"
+        "可能的原因：任务较大、陷入工具调用循环、或遇到持续失败的重试。\n"
+        "可以尝试：\n"
+        "  • /clear 开启新会话后用更具体的指令重新开始\n"
+        "  • 在 config.toml 里调大 [tools] max_tool_rounds\n"
+        "  • 把大任务拆成更小的步骤分多轮完成"
+    )
+    # If there are unverified writes when we stop, warn the user — the VerifyGate
+    # never got its chance, so written code may not have been tested.
+    if harness is not None and getattr(harness, "enabled", False):
+        pending = list(harness.state.writes_since_verify)
+        if pending:
+            out += (
+                f"\n\n⚠ 注意：以下文件已写入但未经验证（未跑测试/构建）：\n"
+                + "\n".join(f"  - {p}" for p in pending)
+                + "\n建议手动验证后再继续。"
+            )
     _emit(Message.assistant(out))
     stream.on_finish()
     return out
