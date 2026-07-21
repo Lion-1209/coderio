@@ -405,6 +405,27 @@ def test_grounding_gate_catches_multiple_citations():
         assert f in inject
 
 
+def test_grounding_gate_regex_ignores_code_attributes():
+    """Code snippets like `self._live = None` or `obj.attr.py` must NOT be
+    treated as file citations. The regex's left-boundary now excludes a
+    preceding dot, so `_live.py` after `self.` doesn't match.
+
+    Regression: a real session had the model's analysis mention `_live.py`
+    (from `self._live = None` in stream.py's code), which the GroundingGate
+    flagged as an unread file, forcing a spurious re-read."""
+    from coderio.agent.harness import _cited_files
+    # Code context — should NOT match the attribute portion
+    assert _cited_files("stream.py 里 self._live = None") == ["stream.py"]
+    assert _cited_files("the obj._attr.py pattern") == []
+    assert _cited_files("config._base.py") == []
+    # A genuine standalone citation (preceded by space) — SHOULD match
+    assert "loop.py" in _cited_files("看 loop.py 的实现")
+    # self._live.py (dot-prefixed) must not match, but a real stream.py ref does
+    cited = _cited_files("在 stream.py 中，self._live 被初始化")
+    assert "stream.py" in cited
+    assert "_live.py" not in cited
+
+
 # ----------------------------------------------- phase tracking (AgentStateTracker)
 
 class _CapturingStream:

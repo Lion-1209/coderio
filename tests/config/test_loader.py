@@ -108,7 +108,7 @@ def test_missing_context_section_uses_defaults(tmp_path):
     """A config with no [context] section gets the compaction defaults."""
     cfg = load_config(search_from="nohome", user_dir=tmp_path)
     assert cfg.context.enabled is True
-    assert cfg.context.trigger_ratio == 0.75
+    assert cfg.context.trigger_ratio == 0.6
     assert cfg.context.keep_recent == 8
     assert cfg.context.model_context_limit == 128_000
 

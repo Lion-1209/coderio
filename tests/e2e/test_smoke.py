@@ -214,3 +214,71 @@ def test_e2e_disabled_context_config_does_not_crash(tmp_path):
         context_cfg=ContextConfig(enabled=False),
     )
     assert "ok" in answer
+
+
+def test_e2e_grounding_gate_remembers_reads_across_turns(tmp_path):
+    """GroundingGate must remember files read in PRIOR turns, not just the current
+    one. Regression: a real session had the agent read 20 files in turn 1, then
+    in turn 2 the gate forgot them all and forced re-reading every cited file."""
+    f = tmp_path / "target.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    # Turn 1: read the file, then emit a brief response.
+    # Turn 2: the model cites target.py in its analysis — the gate should NOT
+    # block it (the file was read in turn 1, now pre-filled into content_read_files).
+    model = _model_returning(
+        # turn 1
+        _tc("read_file", {"path": str(f)}, mid="c1"),
+        AIMessage(content="Read target.py in turn 1.", tool_calls=[]),
+        # turn 2: cite target.py without re-reading — should pass the gate
+        AIMessage(content="Based on target.py, x is 1.", tool_calls=[]),
+    )
+    cfg = Config()
+    tools = build_default_tools(cfg.tools.bash_shell)
+    session = Session.create(tmp_path / "sessions", {"model": "test"})
+    # Turn 1
+    run_agent(
+        user_input="read target.py",
+        model=model, tools=tools, gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=NullStream(), max_rounds=5,
+    )
+    # Turn 2 — cites target.py without re-reading; should NOT be blocked by gate
+    answer = run_agent(
+        user_input="what does target.py contain?",
+        model=model, tools=tools, gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=NullStream(), max_rounds=5,
+    )
+    assert "x is 1" in answer
+    # The gate should NOT have injected a "[harness]" message in turn 2
+    gate_injects = [m for m in session.messages
+                    if m.role == "user" and str(m.content).startswith("[harness]")]
+    # Any gate inject would be from turn 2 (turn 1 had no citations in its output)
+    # If the gate remembered the read, there are ZERO injects.
+    assert gate_injects == [], f"GroundingGate forgot cross-turn read: {gate_injects}"
+
+
+def test_e2e_empty_response_retries_then_succeeds(tmp_path):
+    """An empty model response (no text, no tool_calls) should be retried by
+    injecting a 'please continue' nudge, NOT end the turn. Regression: a real
+    session ended silently on empty response, forcing the user to type '继续'."""
+    f = tmp_path / "x.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    # Sequence: read_file → EMPTY → real output (on retry)
+    model = _model_returning(
+        _tc("read_file", {"path": str(f)}, mid="c1"),
+        AIMessage(content="", tool_calls=[]),  # empty response
+        AIMessage(content="The file contains x = 1.", tool_calls=[]),  # retry succeeds
+    )
+    cfg = Config()
+    tools = build_default_tools(cfg.tools.bash_shell)
+    session = Session.create(tmp_path / "sessions", {"model": "test"})
+    answer = run_agent(
+        user_input="read x.py and describe it",
+        model=model, tools=tools, gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=NullStream(), max_rounds=5,
+    )
+    # The turn should NOT have ended on the empty response — it retried and got
+    # the real output.
+    assert "x = 1" in answer

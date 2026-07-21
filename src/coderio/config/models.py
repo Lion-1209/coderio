@@ -65,7 +65,10 @@ class ContextConfig:
     when ``enabled=False`` (no compaction attempts, original behavior).
     """
     enabled: bool = True
-    trigger_ratio: float = 0.75        # compact at 75% of the context window
+    trigger_ratio: float = 0.6         # compact at 60% of the context window (lowered
+                                       # from 0.75 — a 30-read_file analysis session
+                                       # hit 61k tokens without triggering; 60% gives
+                                       # earlier, healthier compaction)
     keep_recent: int = 8               # messages preserved verbatim at the tail
     model_context_limit: int = 128_000  # assumed window size; conservative default
 

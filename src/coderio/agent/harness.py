@@ -56,7 +56,8 @@ _MAX_GATE_ATTEMPTS: int = 2
 # like "the loader" or "go to step 2" doesn't false-positive. Anchored to a word
 # boundary on the left; the path body may include /, \, word chars, dash, dot.
 _CITED_FILE_RE = re.compile(
-    r"(?<![\w/])"                       # not preceded by a word/slash char
+    r"(?<![\w/.\\-])"                   # not preceded by word/slash/dot/dash (prevents matching
+                                        # `self._live.py` — the `.` before `_live` blocks it)
     r"(?:[\w./\\-]+[\\/])?"             # optional dir prefix (src/, agent\)
     r"(?:"
     r"[\w-]+\."                         # basename stem + dot + extension

@@ -29,6 +29,13 @@ _BUDGET_WARN_CHARS = 150_000
 # the same failing command indefinitely.
 _MAX_REPEATED_TOOL_CALLS = 3
 
+# How many times to retry after an empty model response (no text, no tool_calls)
+# before accepting it as a real termination. Kimi Code models empty responses as
+# a retryable error with exponential backoff; we retry by injecting a "please
+# continue" nudge so the model re-generates without the user having to manually
+# type "继续". Capped to avoid burning tokens on a model that keeps returning empty.
+_MAX_EMPTY_RETRIES = 2
+
 
 class TurnResult:
     """Outcome of one _execute_turn call.
@@ -271,6 +278,22 @@ def _execute_turn(
         if on_message is not None:
             on_message(msg)
 
+    # Pre-fill the harness's read-state from conversation history so GroundingGate
+    # doesn't falsely flag files read in PRIOR turns as "unread this turn". Without
+    # this, a multi-turn "analyze this project" session hits a read→cite→blocked→
+    # re-read loop: turn 1 reads 20 files, turn 2's fresh HarnessState forgets them,
+    # the gate forces re-reading every cited file. Both Step-Realtime-CLI and Kimi
+    # Code keep read-state per-session (via conversation memory); coderio's per-turn
+    # HarnessState must be seeded from history to match that expectation.
+    if harness is not None and getattr(harness, "enabled", False):
+        for m in convo:
+            if m.role == "assistant" and m.tool_calls:
+                for tc in m.tool_calls:
+                    if tc.name == "read_file":
+                        p = tc.args.get("path") or tc.args.get("file_path") or ""
+                        if p:
+                            harness.state.content_read_files.add(p)
+
     # Tool-loop detection: track how many times each (name, args) signature has
     # repeated. If one repeats > _MAX_REPEATED_TOOL_CALLS, the agent is stuck
     # re-doing the same thing — flag it as context-rot for the restart logic.
@@ -286,6 +309,7 @@ def _execute_turn(
 
     active_prompt = system_prompt
     last_input_tokens = 0  # updated each round from the model's usage_metadata
+    empty_retries = 0      # empty-response retry counter (see _MAX_EMPTY_RETRIES)
     for step_num in range(1, max_rounds + 1):
         # Context compaction: if the previous round's input_tokens exceeded the
         # trigger ratio, summarize old messages before this round's model call.
@@ -322,13 +346,23 @@ def _execute_turn(
             # Empty response: the model returned NO text and NO tool_calls. This
             # is a real failure mode (seen with step-3.7-flash: after several
             # rounds of read_file tool_calls it returned a bare empty message).
-            # Treating it as "done" makes the turn end silently — the user sees
-            # the screen freeze with no output and no explanation. Instead, emit a
-            # visible notice (persisted to session + shown in UI) so the user knows
-            # the model produced nothing (vs. the UI being broken).
+            # Instead of ending the turn (forcing the user to manually type "继续"),
+            # retry by injecting a "please continue" nudge — modeled on Kimi Code's
+            # retryable-error approach. Capped at _MAX_EMPTY_RETRIES to avoid
+            # burning tokens on a persistently-empty model.
             if not text.strip():
-                notice = ("(模型返回了空响应 — 既无文本也无工具调用。可能是上下文过长或模型提前结束。"
-                          "请重试，或用 /clear 清理上下文后继续。)")
+                empty_retries += 1
+                if empty_retries <= _MAX_EMPTY_RETRIES:
+                    msg = Message.user("（请继续你刚才的输出，不要重复已有内容。）")
+                    convo.append(msg)
+                    if on_message is not None:
+                        on_message(msg)
+                    continue
+                # Too many empty retries — emit a visible notice and end the turn
+                # so the user knows what happened (vs. the UI silently freezing).
+                notice = ("(模型连续返回空响应，已重试 "
+                          f"{_MAX_EMPTY_RETRIES} 次仍无输出。可能是上下文过长或模型异常。"
+                          "请用 /clear 清理上下文后重试。)")
                 stream.on_tool_start("_empty_response", {})
                 stream.on_tool_end("_empty_response", notice)
                 _emit(Message.tool_result(tool_call_id="_empty", name="_empty_response", content=notice))
