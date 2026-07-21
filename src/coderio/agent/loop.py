@@ -228,6 +228,7 @@ def _execute_turn(
     on_message=None,
     on_activate_skill=None,
     harness=None,
+    context_cfg=None,
 ) -> str:
     """Run one agent turn: loop run_step + tool execution until final text or max_rounds.
 
@@ -248,13 +249,37 @@ def _execute_turn(
             on_message(msg)
 
     active_prompt = system_prompt
+    last_input_tokens = 0  # updated each round from the model's usage_metadata
     for step_num in range(1, max_rounds + 1):
+        # Context compaction: if the previous round's input_tokens exceeded the
+        # trigger ratio, summarize old messages before this round's model call.
+        # Uses the provider-reported count (exact, not a tokenizer guess). Skipped
+        # on round 1 (no prior usage data) and when context_cfg is None/disabled.
+        if (context_cfg is not None and getattr(context_cfg, "enabled", False)
+                and step_num > 1 and last_input_tokens > 0):
+            from coderio.agent.compact import compact_convo, should_compact
+            if should_compact(last_input_tokens,
+                              context_cfg.model_context_limit,
+                              context_cfg.trigger_ratio):
+                if hasattr(stream, "on_phase_change"):
+                    stream.on_phase_change("compacting", step_num, "压缩上下文")
+                compacted = compact_convo(convo, model,
+                                          keep_recent=context_cfg.keep_recent)
+                if len(compacted) < len(convo):
+                    # In-place replace so the reference held by this function
+                    # stays valid; _emit and harness both read `convo`.
+                    convo[:] = compacted
+
         # Signal the UI to start its busy indicator BEFORE the model call. The
         # step number lets the UI show progress ("步骤 2") so the user knows the
         # agent is iterating, not frozen.
         if hasattr(stream, "on_step_start"):
             stream.on_step_start(step_num)
         ai = run_step(bound_cache, langchain_tools, active_prompt, convo, stream)
+        # Capture input_tokens for next round's compaction check.
+        _usage = getattr(ai, "usage_metadata", None) or {}
+        if isinstance(_usage, dict):
+            last_input_tokens = _usage.get("input_tokens", 0) or last_input_tokens
         tool_calls = list(getattr(ai, "tool_calls", []) or [])
         if not tool_calls:
             text = _content_to_text(getattr(ai, "content", ""))
@@ -359,6 +384,7 @@ def run_agent(
     max_rounds: int = 25,
     stage_auto_inject: bool = True,
     harness_enabled: bool = True,
+    context_cfg=None,
 ) -> str:
     """Run the ReAct loop until the model returns final text or max_rounds hit.
 
@@ -368,6 +394,9 @@ def run_agent(
     it blocks "done" on unverified writes (hard, escalating) and nudges a plan before
     writing (soft). Pass False to disable (original soft-rule behavior). See
     agent/harness.py.
+    `context_cfg`: when set (ContextConfig), compacts the convo when input_tokens
+    exceeds the configured ratio of the model's context window (spec: harness
+    phase 2). None = no compaction.
     """
     stream = stream or NullStream()
     activate_tool = ActivateSkillTool(skill_store, active_skills)
@@ -437,7 +466,7 @@ def run_agent(
         system_prompt=system_prompt, convo=convo, skill_index=skill_index,
         gate=gate, stream=stream, max_rounds=max_rounds,
         on_message=session.append, on_activate_skill=_refresh_prompt,
-        harness=harness,
+        harness=harness, context_cfg=context_cfg,
     )
 
     # Persist the phase timeline at turn end (system-role message, filtered from

@@ -12,6 +12,7 @@ from coderio.config.models import (
     ToolsConfig,
     SkillsConfig,
     CliConfig,
+    ContextConfig,
     SessionConfig,
 )
 
@@ -108,6 +109,7 @@ def _from_dict(data: dict) -> Config:
     s = data.get("skills", {})
     se = data.get("session", {})
     cl = data.get("cli", {})
+    cx = data.get("context", {})
 
     # Validate int fields — TOML may give strings/bools if the user mis-types.
     def _int(section: dict, key: str, default: int, section_name: str) -> int:
@@ -154,6 +156,12 @@ def _from_dict(data: dict) -> Config:
             theme=cl.get("theme", cfg.cli.theme),
             show_tool_output=cl.get("show_tool_output", cfg.cli.show_tool_output),
         ),
+        context=ContextConfig(
+            enabled=cx.get("enabled", cfg.context.enabled),
+            trigger_ratio=cx.get("trigger_ratio", cfg.context.trigger_ratio),
+            keep_recent=_int(cx, "keep_recent", cfg.context.keep_recent, "context"),
+            model_context_limit=_int(cx, "model_context_limit", cfg.context.model_context_limit, "context"),
+        ),
         profiles=_parse_profiles(data),
         active_profile=_resolve_active_profile(data),
     )
@@ -171,9 +179,10 @@ def _apply_env(cfg: Config) -> Config:
     v = os.environ.get("CODERIO_BASH_SHELL")
     if v:
         tools = replace(tools, bash_shell=v)
-    # Preserve profiles/active_profile — env overrides only touch model/tools.
+    # Preserve profiles/active_profile/context — env overrides only touch model/tools.
     return Config(model=model, tools=tools, skills=cfg.skills, session=cfg.session,
-                  cli=cfg.cli, profiles=cfg.profiles, active_profile=cfg.active_profile)
+                  cli=cfg.cli, context=cfg.context,
+                  profiles=cfg.profiles, active_profile=cfg.active_profile)
 
 
 def load_config(search_from: Path | str = ".", user_dir: Path | str | None = None) -> Config:

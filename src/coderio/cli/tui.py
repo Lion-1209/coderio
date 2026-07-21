@@ -1664,6 +1664,7 @@ def run_tui(
             max_rounds=rt["cfg"].tools.max_tool_rounds,
             stage_auto_inject=rt["cfg"].skills.stage_auto_inject,
             harness_enabled=rt["cfg"].skills.harness,
+            context_cfg=rt["cfg"].context,
         )
 
     def _load_session(sid: str) -> None:

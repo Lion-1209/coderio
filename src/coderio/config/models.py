@@ -56,12 +56,28 @@ class SessionConfig:
 
 
 @dataclass
+class ContextConfig:
+    """Context-window compaction settings (spec: harness phase 2).
+
+    When the provider-reported input_tokens exceeds ``trigger_ratio`` of
+    ``model_context_limit``, old messages are summarized into a single system
+    message and the most recent ``keep_recent`` are kept verbatim. Disabled
+    when ``enabled=False`` (no compaction attempts, original behavior).
+    """
+    enabled: bool = True
+    trigger_ratio: float = 0.75        # compact at 75% of the context window
+    keep_recent: int = 8               # messages preserved verbatim at the tail
+    model_context_limit: int = 128_000  # assumed window size; conservative default
+
+
+@dataclass
 class Config:
     model: ModelConfig = None
     tools: ToolsConfig = None
     skills: SkillsConfig = None
     session: SessionConfig = None
     cli: CliConfig = None
+    context: ContextConfig = None
     # Named profiles (multi-config). Empty list = legacy single-config mode:
     # build_chat_model falls through to the [model] section's 3-layer path,
     # so existing users with no profiles are unaffected.
@@ -79,5 +95,7 @@ class Config:
             object.__setattr__(self, "session", SessionConfig())
         if self.cli is None:
             object.__setattr__(self, "cli", CliConfig())
+        if self.context is None:
+            object.__setattr__(self, "context", ContextConfig())
         if self.profiles is None:
             object.__setattr__(self, "profiles", [])

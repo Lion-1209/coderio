@@ -4,6 +4,7 @@ from coderio.config.models import (
     Profile,
     ToolsConfig,
     SkillsConfig,
+    ContextConfig,
     SessionConfig,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "Profile",
     "ToolsConfig",
     "SkillsConfig",
+    "ContextConfig",
     "SessionConfig",
     "load_config",
 ]
