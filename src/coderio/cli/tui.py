@@ -1681,7 +1681,10 @@ def run_tui(
         active.clear()
         # Render the resumed conversation into the history pane so the user sees
         # context they're continuing, not a blank screen.
-        tui._add_text(f"↩ 已恢复会话 {sid}（{len(rt['session'].messages)} 条历史消息）", style="bold green")
+        # Count only conversation messages (exclude system-role metadata like
+        # phase_timeline / context_summary so the count matches what's displayed).
+        convo_msgs = [m for m in rt["session"].messages if m.role != "system"]
+        tui._add_text(f"↩ 已恢复会话 {sid}（{len(convo_msgs)} 条历史消息）", style="bold green")
         for m in rt["session"].messages:
             if m.role == "user":
                 c = m.content

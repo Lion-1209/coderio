@@ -110,7 +110,12 @@ class Session:
                     if rec.get("type") == "meta":
                         model = rec.get("model", "") or model
                         continue
-                    count += 1  # every non-meta line is a message
+                    # system-role messages (phase_timeline / context_summary) are
+                    # observability metadata, not conversation — don't count them
+                    # in message_count and don't surface them as first_user.
+                    if rec.get("role") == "system":
+                        continue
+                    count += 1  # user/assistant/tool line is a real message
                     if rec.get("role") == "user" and not first_user:
                         # content may be str or a multimodal block list
                         c = rec.get("content", "")
