@@ -49,13 +49,19 @@ class CommandMenu(Vertical):
 
     DEFAULT_CSS = """
     CommandMenu {
+        /* Lives INSIDE #input-bar (above StatusBar). When visible it expands
+           the input-bar upward, pushing into the history pane's area — but
+           since #history is height:1fr it shrinks to accommodate, so there's
+           no overlap (unlike the old dock:bottom approach where the menu
+           floated over and hid the StatusBar's first char + lost its own
+           bottom border). height is fixed so the ListView gets a real
+           viewport (height:auto collapses to ~4 rows in practice). */
         display: none;          /* hidden until input starts with "/" */
-        dock: bottom;
-        height: auto; max-height: 12;
+        height: 10;
         background: $surface;
         border: round $accent;
         padding: 0;
-        margin: 0 1;
+        margin: 0;
     }
     CommandMenu.-visible { display: block; }
     CommandMenu ListView { background: $surface; }
@@ -120,12 +126,20 @@ class CommandMenu(Vertical):
     def move(self, delta: int) -> None:
         """Move the selection by delta (+1 down, -1 up); wraps around.
 
-        After moving, proactively scrolls so the highlight stays at least one
-        row inside the visible viewport (not flush against the edge). Textual's
+        After moving, proactively scrolls so the highlight stays at least two
+        rows inside the visible viewport (not flush against the edge). Textual's
         default scroll_to_widget only reacts once the highlighted item is FULLY
         off-screen, which makes the menu feel unresponsive — the user presses
         down several times before the view catches up. We compute the target
         scroll_y directly to trigger earlier.
+
+        Robustness note: we do NOT trust lv.size.height blindly. In a real
+        terminal the CommandMenu (dock:bottom, max-height:12) overlaps the
+        history pane, and the *effective* visible row count can be smaller
+        than what the ListView reports (border/padding/overlap). So we clamp
+        the assumed viewport height to a conservative cap and keep a 2-row
+        margin on both sides — even if the reported height is slightly off,
+        the highlight stays in the safe zone.
         """
         if not self.visible():
             return
@@ -137,28 +151,35 @@ class CommandMenu(Vertical):
         new_idx = (idx + delta) % n
         lv.index = new_idx
 
-        # Proactive scroll: keep a 1-row margin so the highlight never sits on
-        # the very bottom/top edge of the viewport.
         try:
-            # visible viewport height (in rows)
+            # Effective viewport height for scroll math. The ListView reports
+            # its computed height, but in a real terminal the menu's visible
+            # area can be smaller (overlap with history border, conpty quirks).
+            # Cap to a conservative value and keep a 2-row margin on each side
+            # so the highlight never sits on the very edge.
             vp_h = lv.size.height
             if vp_h <= 0:
-                vp_h = 1
+                vp_h = 8  # fallback if layout hasn't settled yet
+            margin = 2  # rows of breathing room above AND below the highlight
             row = new_idx
             if delta > 0:
-                # Target: highlight sits at most vp_h-2 rows below the viewport
-                # top (leaving 1 row of margin below it). Clamped to >= 0.
-                target = max(0, row - (vp_h - 2))
+                # Moving DOWN: keep the highlight within the bottom margin.
+                # Target scroll_y so row sits at most (vp_h - margin - 1) rows
+                # below the viewport top.
+                target = max(0, row - (vp_h - margin - 1))
             else:
-                # Target: highlight sits at least 1 row below the viewport top
-                # (leaving 1 row of margin above it). Clamped to <= max_scroll_y.
-                target = max(0, min(lv.max_scroll_y, row - 1))
-            # Clamp to valid range and apply if it actually improves the view.
+                # Moving UP: keep the highlight within the top margin.
+                # Target scroll_y so row sits at least `margin` rows below top.
+                target = max(0, row - margin)
+            # Clamp to valid range and apply if it actually changes the view.
             target = max(0, min(lv.max_scroll_y, target))
             if target != lv.scroll_y:
                 lv.scroll_y = target
+            # Belt-and-suspenders: also ask Textual to ensure visibility. This
+            # is a no-op when already visible, but catches any edge case the
+            # manual computation missed (e.g. vp_h reporting a stale value).
+            lv.scroll_to_widget(lv.children[new_idx], animate=False, top=False)
         except Exception:
-            # Fallback: at least ensure the item is visible.
             try:
                 lv.scroll_to_widget(lv.children[new_idx], animate=False)
             except Exception:
@@ -939,13 +960,13 @@ class CoderioTUI(App):
     def compose(self) -> ComposeResult:
         from coderio.cli.commands import slash_completions
         yield VerticalScroll(id="history")
-        # The command menu (popup, hidden by default; shown when input starts "/").
-        # Layered above the input bar so it overlays the history pane.
-        yield CommandMenu(slash_completions())
-        # input-bar holds BOTH the StatusBar and the Input — StatusBar sits above
-        # the input inside the same docked container, so they stack instead of
-        # overlapping at the dock:bottom edge.
+        # input-bar holds the CommandMenu + StatusBar + Input. CommandMenu lives
+        # INSIDE the bar (not as a separate dock:bottom sibling) so that when it
+        # expands it pushes the bar's contents up as a unit — no overlap with
+        # the StatusBar (which was hiding "就" in "就绪") and no lost bottom
+        # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
+            yield CommandMenu(slash_completions())
             yield StatusBar()
             yield Input(
                 placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
@@ -1736,13 +1757,29 @@ def run_tui(
         if imgs:
             tui._add_text(f"📎 已附加 {len(imgs)} 张图片: " + ", ".join(p for p, _, _ in imgs), style="dim")
         user_content = build_user_content(line)
+        # Resolve the effective context_limit: the active profile's probed value
+        # (set at setup time via probe_context_limit) wins; the legacy [model]
+        # path's context_limit is the fallback for configs without profiles.
+        # If both are 0 (not probed / probe failed), fall back to
+        # ContextConfig.model_context_limit (the 200K default).
+        # Without this, a 256K-context model is mistreated as the 200K default
+        # and gets compacted at 120K instead of 153K.
+        from dataclasses import replace as _replace
+        eff_ctx = rt["cfg"].context
+        active_name = rt["cfg"].active_profile
+        active_profile = next((p for p in (rt["cfg"].profiles or [])
+                               if p.name == active_name), None)
+        if active_profile is not None and active_profile.context_limit > 0:
+            eff_ctx = _replace(eff_ctx, model_context_limit=active_profile.context_limit)
+        elif getattr(rt["cfg"].model, "context_limit", 0) > 0:
+            eff_ctx = _replace(eff_ctx, model_context_limit=rt["cfg"].model.context_limit)
         run_agent(
             user_input=user_content, model=rt["model"], tools=tools, gate=rt["gate"],
             skill_store=store, active_skills=active, session=rt["session"], stream=tui,
             max_rounds=rt["cfg"].tools.max_tool_rounds,
             stage_auto_inject=rt["cfg"].skills.stage_auto_inject,
             harness_enabled=rt["cfg"].skills.harness,
-            context_cfg=rt["cfg"].context,
+            context_cfg=eff_ctx,
         )
 
     def _load_session(sid: str) -> None:
