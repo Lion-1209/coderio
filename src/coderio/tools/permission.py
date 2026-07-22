@@ -8,6 +8,7 @@ from coderio.tools.base import DESTRUCTIVE_TOOLS
 # Forward-declared type-only import to avoid a circular dependency at runtime
 # (workspace.py imports nothing from permission.py, but we keep the typing tight).
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from coderio.tools.workspace import WorkspacePolicy
 
@@ -16,6 +17,7 @@ class PermissionMode(StrEnum):
     """Permission modes. StrEnum so members ARE strings (== works with raw str),
     but invalid values raise ValueError at construction — catching config typos
     early instead of silently degrading at runtime."""
+
     CONFIRM = "confirm"
     PLAN = "plan"
     AUTO = "auto"
@@ -82,9 +84,12 @@ class RichPromptPermissionGate(PermissionGate):
     `prompt_fn` is injectable so tests can answer without a real TTY.
     """
 
-    def __init__(self, console=None,
-                 prompt_fn: Callable[[str, dict[str, Any]], bool] | None = None,
-                 policy: "WorkspacePolicy | None" = None):
+    def __init__(
+        self,
+        console=None,
+        prompt_fn: Callable[[str, dict[str, Any]], bool] | None = None,
+        policy: "WorkspacePolicy | None" = None,
+    ):
         super().__init__(PermissionMode.CONFIRM, policy=policy)
         self._console = console
         self._prompt_fn = prompt_fn or _default_prompt

@@ -109,16 +109,19 @@ def test_completions_cover_every_registered_command():
     This is the guard against drift: add a command but forget to list it for
     completion, and this test fails."""
     from coderio.cli.commands import SLASH_COMMANDS, slash_completions
+
     completions = slash_completions()
     for cmd in SLASH_COMMANDS:
         # at least one completion candidate starts with the bare command name
-        assert any(c.startswith(cmd.name) for c in completions), \
+        assert any(c.startswith(cmd.name) for c in completions), (
             f"{cmd.name} missing from completions"
+        )
 
 
 def test_completions_include_aliases():
     """/quit must be completable even though it's an alias of /exit."""
     from coderio.cli.commands import slash_completions
+
     completions = slash_completions()
     assert "/quit" in completions
 
@@ -128,6 +131,7 @@ def test_every_completion_resolves_to_real_command():
     a real command (not 'Unknown command'). Strips any argument after the command
     name first, since handle_slash parses command + arg separately."""
     from coderio.cli.commands import slash_completions
+
     ctx = _FakeCtx()
     ctx.usage = {"input_tokens": 0, "output_tokens": 0}
     for comp in slash_completions():
@@ -142,14 +146,15 @@ def test_every_completion_resolves_to_real_command():
 def test_help_lists_all_commands():
     """/help must list every registered command (no command silently absent)."""
     from coderio.cli.commands import SLASH_COMMANDS
-    msg = (handle_slash("/help", _FakeCtx()).message or "")
+
+    msg = handle_slash("/help", _FakeCtx()).message or ""
     for cmd in SLASH_COMMANDS:
         assert cmd.name in msg, f"{cmd.name} missing from /help output"
 
 
 def test_help_includes_subcommands_like_skills_install():
     """/skills install is a real subcommand; /help should surface it."""
-    msg = (handle_slash("/help", _FakeCtx()).message or "")
+    msg = handle_slash("/help", _FakeCtx()).message or ""
     assert "skills" in msg.lower()
 
 
@@ -207,9 +212,16 @@ def test_profile_signals_picker():
     """/profile with profiles present must return __OPEN_PROFILE_PICKER__ so the
     TUI shows the interactive list — same pattern as /resume."""
     from coderio.config import Profile
+
     ctx = _FakeCtx()
-    ctx.profiles = [Profile(name="glm", provider_id="bigmodel_coding_plan",
-                            model="glm-5.2", kind="anthropic")]
+    ctx.profiles = [
+        Profile(
+            name="glm",
+            provider_id="bigmodel_coding_plan",
+            model="glm-5.2",
+            kind="anthropic",
+        )
+    ]
     res = handle_slash("/profile", ctx)
     assert res.message == "__OPEN_PROFILE_PICKER__"
 
@@ -217,14 +229,22 @@ def test_profile_signals_picker():
 def test_profile_list_prints_inline():
     """/profile list prints profiles inline (no popup), active one marked ★."""
     from coderio.config import Profile
+
     ctx = _FakeCtx()
     ctx.profiles = [
-        Profile(name="glm", provider_id="bigmodel_coding_plan", model="glm-5.2", kind="anthropic"),
-        Profile(name="oai", provider_id="openai", model="gpt-4o", kind="openai_compatible"),
+        Profile(
+            name="glm",
+            provider_id="bigmodel_coding_plan",
+            model="glm-5.2",
+            kind="anthropic",
+        ),
+        Profile(
+            name="oai", provider_id="openai", model="gpt-4o", kind="openai_compatible"
+        ),
     ]
     ctx.active_profile = "glm"
     res = handle_slash("/profile list", ctx)
     msg = res.message or ""
-    assert "★" in msg          # active marker
+    assert "★" in msg  # active marker
     assert "glm" in msg
     assert "oai" in msg

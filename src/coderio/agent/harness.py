@@ -20,6 +20,7 @@ VerifyGate + CompletionGate + GroundingGate use progressive escalation:
 force-continue twice, then release with a visible warning (never silently, never
 infinite-loop).
 """
+
 from __future__ import annotations
 
 import re
@@ -56,17 +57,17 @@ _MAX_GATE_ATTEMPTS: int = 2
 # like "the loader" or "go to step 2" doesn't false-positive. Anchored to a word
 # boundary on the left; the path body may include /, \, word chars, dash, dot.
 _CITED_FILE_RE = re.compile(
-    r"(?<![\w/.\\-])"                   # not preceded by word/slash/dot/dash (prevents matching
-                                        # `self._live.py` — the `.` before `_live` blocks it)
-    r"(?:[\w./\\-]+[\\/])?"             # optional dir prefix (src/, agent\)
+    r"(?<![\w/.\\-])"  # not preceded by word/slash/dot/dash (prevents matching
+    # `self._live.py` — the `.` before `_live` blocks it)
+    r"(?:[\w./\\-]+[\\/])?"  # optional dir prefix (src/, agent\)
     r"(?:"
-    r"[\w-]+\."                         # basename stem + dot + extension
+    r"[\w-]+\."  # basename stem + dot + extension
     r"(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml|rs|go|java|rb|sh|css|html|sql|c|cpp|h|hpp|php|swift|kt|scala|lua|vim|el)"
     r"|"
     r"(?:Dockerfile|Makefile|makefile|Gemfile|Rakefile|CMakeLists\.txt|\.env|\.gitignore|\.dockerignore|requirements\.txt|package\.json|tsconfig\.json|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock)"
     r")"
-    r"(?::\d+)?"                        # optional :line-number
-    r"(?![\w])"                         # not followed by a word char
+    r"(?::\d+)?"  # optional :line-number
+    r"(?![\w])"  # not followed by a word char
 )
 
 
@@ -184,6 +185,7 @@ class HarnessState:
     No field here is writable by the model — it is all ground truth accumulated
     by ``Harness.observe`` as tools execute.
     """
+
     # File paths written since the last verification (bash). Non-empty here means
     # "there is unverified code on disk".
     writes_since_verify: list[str] = field(default_factory=list)
@@ -215,6 +217,7 @@ class Harness:
     ``enabled`` short-circuits every method to a no-op/passthrough, so the loop
     can always hold a Harness object and just flip this flag (or pass harness=None).
     """
+
     state: HarnessState
     todos: "TodoStore"
     enabled: bool = True
@@ -298,7 +301,6 @@ class Harness:
         """
         if self.state_tracker is None:
             return
-        from coderio.agent.state import AgentState
         phase = self.state_tracker.derive_phase(
             writes_since_verify=self.state.writes_since_verify,
             todos_exist=bool(self.todos.todos),
@@ -329,7 +331,7 @@ class Harness:
         self.state.plan_nudged = True
         return (
             "\n[nudge] You're writing code but have no task list yet. For non-trivial "
-            "work, call todo(action=\"add\", ...) first to decompose the task into "
+            'work, call todo(action="add", ...) first to decompose the task into '
             "verifiable steps. (Trivial fixes like a typo can ignore this.)"
         )
 
@@ -375,21 +377,28 @@ class Harness:
         if attempt >= _MAX_GATE_ATTEMPTS:
             # Escalation exhausted: release, but loudly. Never silent.
             files = ", ".join(self.state.writes_since_verify)
-            return (False, None,
-                    f"agent wrote code to [{files}] but never ran it to verify, "
-                    "then declared completion. Output is UNVERIFIED — please review.")
+            return (
+                False,
+                None,
+                f"agent wrote code to [{files}] but never ran it to verify, "
+                "then declared completion. Output is UNVERIFIED — please review.",
+            )
         if attempt == 0:
-            return (True,
-                    "[harness] You wrote code but haven't verified it. You MUST run it "
-                    "(use bash to execute/test/lint the files you changed) before "
-                    "declaring done. Do not summarize or claim completion — call bash now.",
-                    None)
+            return (
+                True,
+                "[harness] You wrote code but haven't verified it. You MUST run it "
+                "(use bash to execute/test/lint the files you changed) before "
+                "declaring done. Do not summarize or claim completion — call bash now.",
+                None,
+            )
         # attempt == 1: second interception, name the files and tighten the screws.
         files = ", ".join(self.state.writes_since_verify)
-        return (True,
-                f"[harness] STILL no verification. Files written but not run: {files}. "
-                "Run them with bash now. Do NOT reply with text — call bash.",
-                None)
+        return (
+            True,
+            f"[harness] STILL no verification. Files written but not run: {files}. "
+            "Run them with bash now. Do NOT reply with text — call bash.",
+            None,
+        )
 
     # ----------------------------------------------------------- CompletionGate
     def _completion_gate(self) -> tuple[bool, str | None, str | None]:
@@ -409,15 +418,20 @@ class Harness:
         self.state.completion_attempts += 1
 
         if attempt >= _MAX_GATE_ATTEMPTS:
-            return (False, None,
-                    f"agent declared completion with {len(pending)} unfinished todo(s). "
-                    "Some planned work may be incomplete — please review the task list.")
-        return (True,
-                f"[harness] Your task list has {len(pending)} unfinished item(s). Mark "
-                "them complete via todo(action=\"update\", status=\"completed\") only if "
-                "truly done, or finish the remaining work. Do not claim overall "
-                "completion with pending todos.",
-                None)
+            return (
+                False,
+                None,
+                f"agent declared completion with {len(pending)} unfinished todo(s). "
+                "Some planned work may be incomplete — please review the task list.",
+            )
+        return (
+            True,
+            f"[harness] Your task list has {len(pending)} unfinished item(s). Mark "
+            'them complete via todo(action="update", status="completed") only if '
+            "truly done, or finish the remaining work. Do not claim overall "
+            "completion with pending todos.",
+            None,
+        )
 
     # ----------------------------------------------------------- GroundingGate
     def _grounding_gate(self, final_text: str) -> tuple[bool, str | None, str | None]:
@@ -446,25 +460,32 @@ class Harness:
 
         if attempt >= _MAX_GATE_ATTEMPTS:
             files = ", ".join(sorted(ungrounded))
-            return (False, None,
-                    f"agent cited code in [{files}] without reading it this turn. "
-                    "Conclusions about that code may rest on stale docs or memory — "
-                    "please verify against the actual source.")
+            return (
+                False,
+                None,
+                f"agent cited code in [{files}] without reading it this turn. "
+                "Conclusions about that code may rest on stale docs or memory — "
+                "please verify against the actual source.",
+            )
         if attempt == 0:
             files = ", ".join(sorted(ungrounded))
-            return (True,
-                    f"[harness] You cited {files} but did not read it this turn. A claim "
-                    "about code must be grounded in the actual source, not documentation "
-                    "or memory (docs go stale; source is ground truth). Read the cited "
-                    "file(s) with read_file now, then revise your analysis to match what "
-                    "you actually find. Do not repeat the citation unread.",
-                    None)
+            return (
+                True,
+                f"[harness] You cited {files} but did not read it this turn. A claim "
+                "about code must be grounded in the actual source, not documentation "
+                "or memory (docs go stale; source is ground truth). Read the cited "
+                "file(s) with read_file now, then revise your analysis to match what "
+                "you actually find. Do not repeat the citation unread.",
+                None,
+            )
         files = ", ".join(sorted(ungrounded))
-        return (True,
-                f"[harness] STILL unread: {files}. Read them with read_file before you "
-                "make any claim about their contents. If the file doesn't exist, say so "
-                "explicitly instead of asserting things about it.",
-                None)
+        return (
+            True,
+            f"[harness] STILL unread: {files}. Read them with read_file before you "
+            "make any claim about their contents. If the file doesn't exist, say so "
+            "explicitly instead of asserting things about it.",
+            None,
+        )
 
     @staticmethod
     def _basename(path: str) -> str:

@@ -21,5 +21,6 @@ class Skill:
 
     def load_body(self):
         from coderio.skills.parser import read_body
+
         self._body = read_body(self.dir_path / "SKILL.md")
         self._loaded = True

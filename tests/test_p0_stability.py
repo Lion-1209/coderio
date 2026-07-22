@@ -1,4 +1,5 @@
 """Tests for P0 stability fixes: session crash recovery and config validation."""
+
 import json
 from pathlib import Path
 
@@ -16,9 +17,12 @@ class TestSessionCrashRecovery:
         skipped, not crash the entire session load."""
         path = tmp_path / "test.jsonl"
         path.write_text(
-            json.dumps({"type": "meta", "model": "test"}) + "\n"
-            + json.dumps({"role": "user", "content": "hello"}) + "\n"
-            + json.dumps({"role": "assistant", "content": "hi"}) + "\n"
+            json.dumps({"type": "meta", "model": "test"})
+            + "\n"
+            + json.dumps({"role": "user", "content": "hello"})
+            + "\n"
+            + json.dumps({"role": "assistant", "content": "hi"})
+            + "\n"
             + '{"role": "user", "content": "truncated',  # no closing brace
             encoding="utf-8",
         )
@@ -29,8 +33,10 @@ class TestSessionCrashRecovery:
     def test_load_skips_blank_lines(self, tmp_path):
         path = tmp_path / "blanks.jsonl"
         path.write_text(
-            json.dumps({"role": "user", "content": "a"}) + "\n\n\n"
-            + json.dumps({"role": "assistant", "content": "b"}) + "\n",
+            json.dumps({"role": "user", "content": "a"})
+            + "\n\n\n"
+            + json.dumps({"role": "assistant", "content": "b"})
+            + "\n",
             encoding="utf-8",
         )
         session = Session.load(path)
@@ -39,8 +45,10 @@ class TestSessionCrashRecovery:
     def test_load_clean_session_unaffected(self, tmp_path):
         path = tmp_path / "clean.jsonl"
         path.write_text(
-            json.dumps({"type": "meta", "model": "m"}) + "\n"
-            + json.dumps({"role": "user", "content": "hi"}) + "\n",
+            json.dumps({"type": "meta", "model": "m"})
+            + "\n"
+            + json.dumps({"role": "user", "content": "hi"})
+            + "\n",
             encoding="utf-8",
         )
         session = Session.load(path)

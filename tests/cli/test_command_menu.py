@@ -4,6 +4,7 @@ Drives the REAL CoderioTUI via run_test. Verifies the menu pops on "/", filters
 live, ↑↓ navigates, Tab/Enter accepts (and Enter does NOT submit while the menu
 is open — that matches Claude Code's behavior), and Esc hides it.
 """
+
 import pytest
 
 from coderio.cli.tui import CoderioTUI, CommandMenu, StatusBar
@@ -135,7 +136,8 @@ async def test_highlight_stays_visible_after_many_down_presses():
                 # with at least 1 row of margin (not flush on the bottom edge).
                 assert top <= idx < top + vp_h, (
                     f"highlight lost at terminal h={term_h}: idx={idx} "
-                    f"outside viewport [{top},{top + vp_h})")
+                    f"outside viewport [{top},{top + vp_h})"
+                )
 
 
 @pytest.mark.asyncio
@@ -151,6 +153,7 @@ async def test_menu_does_not_overlap_status_bar():
     must be at or above the StatusBar's top edge.
     """
     from textual.geometry import Size
+
     app = CoderioTUI()
     async with app.run_test(size=Size(100, 30)) as pilot:
         inp = app.query_one("#msg", Input)
@@ -163,7 +166,8 @@ async def test_menu_does_not_overlap_status_bar():
         assert menu_bottom <= sb_top, (
             f"menu overlaps StatusBar: menu bottom={menu_bottom} > "
             f"StatusBar top={sb_top}. The menu's bottom border would clip "
-            "the StatusBar's first character.")
+            "the StatusBar's first character."
+        )
 
 
 @pytest.mark.asyncio
@@ -176,6 +180,7 @@ async def test_menu_shows_more_than_four_items():
     on CommandMenu gives the ListView a real viewport (8 visible rows after
     border). This test guards against the collapse recurring."""
     from textual.geometry import Size
+
     app = CoderioTUI()
     async with app.run_test(size=Size(100, 30)) as pilot:
         inp = app.query_one("#msg", Input)
@@ -186,7 +191,8 @@ async def test_menu_shows_more_than_four_items():
         # 8 is the expected value (height:10 - 2 border rows = 8 content).
         assert lv.size.height >= 6, (
             f"ListView viewport collapsed to {lv.size.height} rows — expected "
-            ">=6. The menu is showing too few items; height:auto regression.")
+            ">=6. The menu is showing too few items; height:auto regression."
+        )
 
 
 @pytest.mark.asyncio

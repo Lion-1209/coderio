@@ -8,6 +8,7 @@ what the agent is actually doing, not just what it claims.
 The timeline persists to the session jsonl at turn end (via a system-role
 Message) so a past turn's phase progression can be replayed for debugging.
 """
+
 from __future__ import annotations
 
 import time
@@ -25,6 +26,7 @@ class AgentState(StrEnum):
       VERIFY    — bash ran a verifying command (test/build/lint)
       COMPLETE  — turn ended (cleanly or max-rounds)
     """
+
     EXPLORE = "explore"
     PLAN = "plan"
     IMPLEMENT = "implement"
@@ -35,21 +37,28 @@ class AgentState(StrEnum):
 @dataclass
 class StateSnapshot:
     """One point in the phase timeline."""
+
     state: AgentState
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
-    step: int = 0           # ReAct round number when the transition fired
-    hint: str = ""          # optional context (e.g. "wrote loader.py", "ran pytest")
+    step: int = 0  # ReAct round number when the transition fired
+    hint: str = ""  # optional context (e.g. "wrote loader.py", "ran pytest")
 
     def to_dict(self) -> dict:
-        return {"state": str(self.state), "timestamp": self.timestamp,
-                "step": self.step, "hint": self.hint}
+        return {
+            "state": str(self.state),
+            "timestamp": self.timestamp,
+            "step": self.step,
+            "hint": self.hint,
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> "StateSnapshot":
-        return cls(state=AgentState(d.get("state", "explore")),
-                   timestamp=d.get("timestamp", ""),
-                   step=d.get("step", 0),
-                   hint=d.get("hint", ""))
+        return cls(
+            state=AgentState(d.get("state", "explore")),
+            timestamp=d.get("timestamp", ""),
+            step=d.get("step", 0),
+            hint=d.get("hint", ""),
+        )
 
 
 class AgentStateTracker:
@@ -112,7 +121,8 @@ class AgentStateTracker:
         so the final step number is captured for timeline replay."""
         self._current = AgentState.COMPLETE
         self.timeline.append(
-            StateSnapshot(state=AgentState.COMPLETE, step=step, hint=hint))
+            StateSnapshot(state=AgentState.COMPLETE, step=step, hint=hint)
+        )
 
     def to_payload(self) -> list[dict]:
         """Serialize the timeline for persistence (system-role Message content)."""

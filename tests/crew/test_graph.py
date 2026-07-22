@@ -3,6 +3,7 @@
 These verify the graph itself, complementing test_orchestrator.py (which tests
 behavior through the public run() interface).
 """
+
 from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
@@ -20,8 +21,11 @@ def _orch(**kw):
     model = kw.pop("model", MagicMock())
     kw.setdefault("auto_mode", True)
     return CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), **kw,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        **kw,
     )
 
 
@@ -83,6 +87,7 @@ def test_interrupt_fires_in_non_auto_pause_node():
     the graph's interrupt mechanism). We verify by checking that invoking the
     node directly triggers the langgraph interrupt sentinel."""
     import pytest
+
     orch = _orch(auto_mode=False)
     pause = orch._make_pause_node("clarify")
     # interrupt() outside a graph run raises a special exception/sentinel;

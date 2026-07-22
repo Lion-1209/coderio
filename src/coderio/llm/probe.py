@@ -11,6 +11,7 @@ shape mismatch), it returns 0 — the caller falls back to the config default.
 No retry, no exception: this is a best-effort optimization, never a blocker
 for the setup flow.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,8 +66,10 @@ def probe_context_limit(
             # because the API surface may grow. Both header shapes accepted.
             url = f"{base}/models/{urllib.parse.quote(model)}"
             headers = (
-                "x-api-key", api_key,
-                "anthropic-version", "2023-06-01",
+                "x-api-key",
+                api_key,
+                "anthropic-version",
+                "2023-06-01",
             )
         else:
             # OpenAI-compatible: GET /v1/models/{id} (note: many compatible
@@ -84,8 +87,14 @@ def probe_context_limit(
                 return 0
             payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         return _extract_context_limit(payload)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-            ValueError, json.JSONDecodeError, OSError):
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        ValueError,
+        json.JSONDecodeError,
+        OSError,
+    ):
         return 0
     except Exception:
         # Defensive: probe is best-effort, never raise to the caller.

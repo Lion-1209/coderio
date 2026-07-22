@@ -25,6 +25,7 @@ def test_crew_command_runs_with_mock(tmp_path, monkeypatch):
 
         def run(self, request):
             from coderio.crew.state import ProjectState
+
             s = ProjectState(request=request)
             s.clarification = "c"
             s.spec = "s"

@@ -10,7 +10,9 @@ _LINE_PREFIX_RE = re.compile(r"^\s*\d+\s*?\t")
 
 class EditFileArgs(BaseModel):
     path: str = Field(description="Path to the file to edit.")
-    old_string: str = Field(description="Exact text to replace (must match uniquely unless replace_all).")
+    old_string: str = Field(
+        description="Exact text to replace (must match uniquely unless replace_all)."
+    )
     new_string: str = Field(description="Text to substitute in place of old_string.")
     replace_all: bool = Field(default=False, description="Replace every occurrence.")
 
@@ -31,7 +33,9 @@ class EditFileTool:
     )
     args_schema = EditFileArgs
 
-    def run(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    def run(
+        self, path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> str:
         p = Path(path)
         if not p.is_file():
             return f"Error: file not found: {path}"

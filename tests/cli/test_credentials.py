@@ -22,6 +22,7 @@ def test_get_key(tmp_path):
 
 def test_permissions_restricted(tmp_path):
     import sys
+
     creds_file = tmp_path / ".coderio" / "credentials"
     write_credentials({"bigmodel_api": "sk-x"}, path=creds_file)
     assert creds_file.is_file()

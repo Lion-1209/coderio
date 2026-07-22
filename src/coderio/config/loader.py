@@ -81,15 +81,19 @@ def _parse_profiles(data: dict) -> list:
         # just means "not probed yet" (0), don't raise — the runtime falls back
         # to ContextConfig.model_context_limit.
         cl_raw = entry.get("context_limit", 0)
-        context_limit = cl_raw if isinstance(cl_raw, int) and not isinstance(cl_raw, bool) else 0
-        out.append(Profile(
-            name=name,
-            provider_id=pid,
-            model=model,
-            base_url=entry.get("base_url", ""),
-            kind=entry.get("kind", "openai_compatible"),
-            context_limit=context_limit,
-        ))
+        context_limit = (
+            cl_raw if isinstance(cl_raw, int) and not isinstance(cl_raw, bool) else 0
+        )
+        out.append(
+            Profile(
+                name=name,
+                provider_id=pid,
+                model=model,
+                base_url=entry.get("base_url", ""),
+                kind=entry.get("kind", "openai_compatible"),
+                context_limit=context_limit,
+            )
+        )
     return out
 
 
@@ -122,7 +126,8 @@ def _from_dict(data: dict) -> Config:
         v = section.get(key, default)
         if isinstance(v, bool) or not isinstance(v, int):
             raise ValueError(
-                f"config.toml [{section_name}] {key} 必须是整数，但得到 {type(v).__name__}: {v!r}")
+                f"config.toml [{section_name}] {key} 必须是整数，但得到 {type(v).__name__}: {v!r}"
+            )
         return v
 
     # Validate permission_mode against the known enum values.
@@ -133,27 +138,34 @@ def _from_dict(data: dict) -> Config:
         if perm_lower not in valid:
             raise ValueError(
                 f"config.toml [tools] permission_mode='{perm}' 无效。"
-                f"可选值: {', '.join(valid)}")
+                f"可选值: {', '.join(valid)}"
+            )
         perm = perm_lower
 
     # context_limit is optional in [model]; a missing/non-int value falls back
     # to 0 (not probed). Don't use the strict _int() helper — context_limit is
     # a best-effort optimization, not a required config field.
     m_cl_raw = m.get("context_limit", 0)
-    m_context_limit = m_cl_raw if isinstance(m_cl_raw, int) and not isinstance(m_cl_raw, bool) else 0
+    m_context_limit = (
+        m_cl_raw if isinstance(m_cl_raw, int) and not isinstance(m_cl_raw, bool) else 0
+    )
     return Config(
         model=ModelConfig(
             default=m.get("default", cfg.model.default),
             provider=m.get("provider", cfg.model.provider),
             base_url=m.get("base_url", cfg.model.base_url),
             provider_id=m.get("provider_id", ""),
-            max_output_tokens=_int(m, "max_output_tokens", cfg.model.max_output_tokens, "model"),
+            max_output_tokens=_int(
+                m, "max_output_tokens", cfg.model.max_output_tokens, "model"
+            ),
             context_limit=m_context_limit,
         ),
         tools=ToolsConfig(
             bash_shell=t.get("bash_shell", cfg.tools.bash_shell),
             permission_mode=perm,
-            max_tool_rounds=_int(t, "max_tool_rounds", cfg.tools.max_tool_rounds, "tools"),
+            max_tool_rounds=_int(
+                t, "max_tool_rounds", cfg.tools.max_tool_rounds, "tools"
+            ),
             workspace_root=t.get("workspace_root", cfg.tools.workspace_root),
         ),
         skills=SkillsConfig(
@@ -173,7 +185,9 @@ def _from_dict(data: dict) -> Config:
             enabled=cx.get("enabled", cfg.context.enabled),
             trigger_ratio=cx.get("trigger_ratio", cfg.context.trigger_ratio),
             keep_recent=_int(cx, "keep_recent", cfg.context.keep_recent, "context"),
-            model_context_limit=_int(cx, "model_context_limit", cfg.context.model_context_limit, "context"),
+            model_context_limit=_int(
+                cx, "model_context_limit", cfg.context.model_context_limit, "context"
+            ),
         ),
         profiles=_parse_profiles(data),
         active_profile=_resolve_active_profile(data),
@@ -193,12 +207,21 @@ def _apply_env(cfg: Config) -> Config:
     if v:
         tools = replace(tools, bash_shell=v)
     # Preserve profiles/active_profile/context — env overrides only touch model/tools.
-    return Config(model=model, tools=tools, skills=cfg.skills, session=cfg.session,
-                  cli=cfg.cli, context=cfg.context,
-                  profiles=cfg.profiles, active_profile=cfg.active_profile)
+    return Config(
+        model=model,
+        tools=tools,
+        skills=cfg.skills,
+        session=cfg.session,
+        cli=cfg.cli,
+        context=cfg.context,
+        profiles=cfg.profiles,
+        active_profile=cfg.active_profile,
+    )
 
 
-def load_config(search_from: Path | str = ".", user_dir: Path | str | None = None) -> Config:
+def load_config(
+    search_from: Path | str = ".", user_dir: Path | str | None = None
+) -> Config:
     """Load config merging: defaults < user < project < env.
 
     Layers (low->high): built-in defaults, user ~/.coderio, project ./.coderio, env vars.
@@ -206,7 +229,9 @@ def load_config(search_from: Path | str = ".", user_dir: Path | str | None = Non
     search_from = Path(search_from)
     if user_dir is None:
         user_dir = _default_user_dir()
-    data = _merge(_read_toml(Path(user_dir) / "config.toml"),
-                  _read_toml(_find_project_dir(search_from) / ".coderio" / "config.toml"))
+    data = _merge(
+        _read_toml(Path(user_dir) / "config.toml"),
+        _read_toml(_find_project_dir(search_from) / ".coderio" / "config.toml"),
+    )
     cfg = _from_dict(data)
     return _apply_env(cfg)

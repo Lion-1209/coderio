@@ -11,6 +11,7 @@ The fix: CoderioTUI.on_input_submitted only handles Input.Submitted from
 `#msg` (the chat input), ignoring submissions from any modal's Input. This
 test verifies that guard.
 """
+
 import pytest
 from textual.widgets import Input
 
@@ -33,7 +34,8 @@ async def test_main_input_submitted_dispatches_to_on_input():
         await pilot.press("enter")
         await pilot.pause()
     assert received == ["hello world"], (
-        f"main input submission must reach _on_input, got {received}")
+        f"main input submission must reach _on_input, got {received}"
+    )
 
 
 @pytest.mark.asyncio
@@ -52,6 +54,7 @@ async def test_non_main_input_submitted_does_not_dispatch():
         await pilot.pause()
         # Mount a foreign Input (simulates OnboardingScreen's #onboard-input)
         from textual.widgets import Input as _Input
+
         foreign = _Input(id="foreign-input")
         app.query_one("#history").mount(foreign)
         await pilot.pause()
@@ -65,4 +68,5 @@ async def test_non_main_input_submitted_does_not_dispatch():
         await pilot.pause()
     assert received == [], (
         "non-main Input.Submitted leaked to _on_input — this is the security "
-        "bug. captured: " + str(received))
+        "bug. captured: " + str(received)
+    )

@@ -17,7 +17,9 @@ def _make_skill_repo(path):
     subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
     sk = path / "my-skill"
     sk.mkdir()
-    (sk / "SKILL.md").write_text("---\nname: my-skill\ndescription: test\n---\nbody", encoding="utf-8")
+    (sk / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: test\n---\nbody", encoding="utf-8"
+    )
     subprocess.run(["git", "add", "-A"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=path, check=True)
     return path
@@ -38,7 +40,9 @@ def test_pull_updates_existing(tmp_path):
     install_skills(repo_url=str(repo), target_dir=target)
     sk2 = repo / "second-skill"
     sk2.mkdir()
-    (sk2 / "SKILL.md").write_text("---\nname: second-skill\ndescription: 2nd\n---\nbody", encoding="utf-8")
+    (sk2 / "SKILL.md").write_text(
+        "---\nname: second-skill\ndescription: 2nd\n---\nbody", encoding="utf-8"
+    )
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "add second"], cwd=repo, check=True)
     result = install_skills(repo_url=str(repo), target_dir=target)

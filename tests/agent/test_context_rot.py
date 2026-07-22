@@ -5,10 +5,12 @@ fingerprint-based tool-loop detector, without spinning up a full agent run
 (which would need a live model). The restart logic itself is best-effort and
 guarded by try/except, so it's tested indirectly via the signals it consumes.
 """
+
 from coderio.agent.loop import TurnResult
 
 
 # --- TurnResult ---
+
 
 def test_turn_result_defaults():
     """A normal completion has both rot signals False."""
@@ -50,6 +52,7 @@ def test_turn_result_slots():
 
 # --- context-rot signal logic (the condition run_agent checks) ---
 
+
 def test_context_rot_triggered_by_max_rounds():
     """The restart condition: hit_max_rounds OR in_tool_loop."""
     r = TurnResult("x", hit_max_rounds=True)
@@ -69,13 +72,16 @@ def test_context_rot_not_triggered_on_success():
 
 # --- _execute_turn tool-loop detection (via the fingerprint helper) ---
 
+
 def test_tool_call_fingerprint_stability():
     """The fingerprint helper used for loop detection is deterministic for
     identical (name, args) and distinct for different ones."""
+
     # Re-implement the fingerprint logic here (it's a closure inside _execute_turn,
     # so we replicate it to test the concept).
     def _fingerprint(name, args):
         return (name, tuple(sorted((str(k), str(v)) for k, v in (args or {}).items())))
+
     fp1 = _fingerprint("read_file", {"path": "a.py"})
     fp2 = _fingerprint("read_file", {"path": "a.py"})
     fp3 = _fingerprint("read_file", {"path": "b.py"})
@@ -87,8 +93,10 @@ def test_tool_call_fingerprint_stability():
 
 def test_tool_call_fingerprint_arg_order_independent():
     """Args dict ordering doesn't affect the fingerprint (sorted)."""
+
     def _fingerprint(name, args):
         return (name, tuple(sorted((str(k), str(v)) for k, v in (args or {}).items())))
+
     fp1 = _fingerprint("bash", {"command": "ls", "cwd": "/tmp"})
     fp2 = _fingerprint("bash", {"cwd": "/tmp", "command": "ls"})
     assert fp1 == fp2

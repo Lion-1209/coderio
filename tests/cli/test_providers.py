@@ -3,10 +3,15 @@ from coderio.cli.providers import PROVIDERS, get_provider, ProviderInfo
 
 def test_registry_has_expected_providers():
     ids = {p.id for p in PROVIDERS}
-    expected = frozenset({
-        "bigmodel_coding_plan", "stepfun_coding_plan",
-        "bigmodel_api", "stepfun_api", "openai_custom",
-    })
+    expected = frozenset(
+        {
+            "bigmodel_coding_plan",
+            "stepfun_coding_plan",
+            "bigmodel_api",
+            "stepfun_api",
+            "openai_custom",
+        }
+    )
     assert expected.issubset(ids)
 
 

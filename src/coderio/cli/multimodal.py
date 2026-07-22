@@ -8,6 +8,7 @@ builds a multimodal content-block list suitable for Anthropic-protocol models
 If no image is found, returns the plain text string (zero overhead for the
 common text-only case).
 """
+
 from __future__ import annotations
 
 import base64
@@ -20,16 +21,20 @@ from typing import Union
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 # @image.png  |  ./x.png  |  C:\x.png  |  /tmp/x.png — but not URLs (http/https)
 _IMAGE_PATTERN = re.compile(
-    r"(?:@|\./|/|[A-Za-z]:[\\/])?"          # prefix: @ or ./ or / or drive:\
-    r"[^\s'\"<>|]+?"                          # the path body (no spaces/quotes)
-    r"\.(?:png|jpg|jpeg|gif|webp|bmp)",       # image extension
+    r"(?:@|\./|/|[A-Za-z]:[\\/])?"  # prefix: @ or ./ or / or drive:\
+    r"[^\s'\"<>|]+?"  # the path body (no spaces/quotes)
+    r"\.(?:png|jpg|jpeg|gif|webp|bmp)",  # image extension
     re.IGNORECASE,
 )
 
 # MIME types
 _MIME = {
-    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
 }
 
 
@@ -80,8 +85,10 @@ def build_user_content(text: str) -> Union[str, list[dict]]:
         return text
     blocks: list[dict] = [{"type": "text", "text": text}]
     for path_str, media_type, b64 in images:
-        blocks.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": media_type, "data": b64},
-        })
+        blocks.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": b64},
+            }
+        )
     return blocks

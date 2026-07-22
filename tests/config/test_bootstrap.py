@@ -17,6 +17,6 @@ def test_creates_skeleton(tmp_path):
 def test_idempotent(tmp_path):
     ensure_user_dirs(user_dir=tmp_path)
     cfg = tmp_path / ".coderio" / "config.toml"
-    cfg.write_text("# custom\n[model]\ndefault = \"x\"\n", encoding="utf-8")
+    cfg.write_text('# custom\n[model]\ndefault = "x"\n', encoding="utf-8")
     ensure_user_dirs(user_dir=tmp_path)
     assert cfg.read_text(encoding="utf-8").startswith("# custom")

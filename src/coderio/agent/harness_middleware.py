@@ -16,6 +16,7 @@ constraint that must survive the migration. As a middleware, it intercepts:
 Verified feasible via PoC: after_model returning {'jump_to':'model',
 'messages':[...]} forces the deepagents loop to continue (the core harness mechanic).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -115,7 +116,11 @@ class HarnessMiddleware(AgentMiddleware):
         force-continue, or None to let the agent end normally. On escalation
         release, fires stream.on_harness_warn (if a stream is attached).
         """
-        messages = state.get("messages", []) if hasattr(state, "get") else getattr(state, "messages", [])
+        messages = (
+            state.get("messages", [])
+            if hasattr(state, "get")
+            else getattr(state, "messages", [])
+        )
         last = messages[-1] if messages else None
         # Only intercept when the model returned final text (no tool calls).
         if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):
@@ -132,7 +137,12 @@ class HarnessMiddleware(AgentMiddleware):
         if cont and inject:
             # The shared harness.py says "use bash" / "call bash"; deepagents' shell
             # tool is named 'execute'. Rewrite so the model calls the right tool.
-            inject = inject.replace("call bash", "call execute").replace("use bash", "use execute").replace("with bash", "with execute").replace("Run them with bash", "Run them with execute")
+            inject = (
+                inject.replace("call bash", "call execute")
+                .replace("use bash", "use execute")
+                .replace("with bash", "with execute")
+                .replace("Run them with bash", "Run them with execute")
+            )
             # Force-continue: inject the harness demand as a user message.
             return {"jump_to": "model", "messages": [HumanMessage(content=inject)]}
         if warn and self.stream is not None and hasattr(self.stream, "on_harness_warn"):

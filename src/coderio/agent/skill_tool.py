@@ -17,6 +17,7 @@ class ActivateSkillTool:
     the actual prompt refresh happens via the on_activate_skill callback in the
     loop (so the system prompt picks up the newly-active skill body).
     """
+
     name = "activate_skill"
     description = (
         "Activate a skill by name to load its full playbook into context. "
@@ -50,6 +51,7 @@ class DeactivateSkillTool:
     via the same on_activate_skill callback path (it rebuilds the system prompt
     from whatever skills remain active).
     """
+
     name = "deactivate_skill"
     description = (
         "Deactivate an active skill to free context. Use when active skill bodies "
@@ -64,6 +66,8 @@ class DeactivateSkillTool:
         removed = self.active.deactivate(name)
         if not removed:
             active_names = [s.name for s in self.active.all()]
-            return (f"Error: skill not active: {name}. "
-                    f"Active skills: {', '.join(active_names) or '(none)'}")
+            return (
+                f"Error: skill not active: {name}. "
+                f"Active skills: {', '.join(active_names) or '(none)'}"
+            )
         return f"Deactivated skill: {name}. Prompt will refresh on next turn."

@@ -4,6 +4,7 @@ These test the middleware in isolation — no deepagents graph, no model. They
 verify the adapter correctly translates deepagents tool names, feeds ground truth
 to the Harness, and intercepts termination via jump_to.
 """
+
 from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -12,7 +13,10 @@ from coderio.agent.harness_middleware import HarnessMiddleware, _to_coderio_name
 
 
 def _tool_call_msg(name, args, mid="c1", content=""):
-    return AIMessage(content=content, tool_calls=[{"name": name, "args": args, "id": mid, "type": "tool_call"}])
+    return AIMessage(
+        content=content,
+        tool_calls=[{"name": name, "args": args, "id": mid, "type": "tool_call"}],
+    )
 
 
 def _tool_call_request(name, args):
@@ -23,6 +27,7 @@ def _tool_call_request(name, args):
 
 
 # --- name translation ---
+
 
 def test_execute_maps_to_bash():
     assert _to_coderio_name("execute") == "bash"
@@ -38,6 +43,7 @@ def test_write_tools_pass_through():
 
 
 # --- wrap_tool_call: observe ground truth ---
+
 
 def test_wrap_tool_call_observes_write():
     mw = HarnessMiddleware()
@@ -71,18 +77,25 @@ def test_wrap_tool_call_no_nudge_after_execute():
     """Once verified (execute ran), a subsequent write doesn't re-nudge if todos exist."""
     mw = HarnessMiddleware()
     # first write → nudge
-    r1 = mw.wrap_tool_call(_tool_call_request("write_file", {"path": "a.py", "content": "x"}),
-                           lambda r: "Wrote 1 chars")
+    r1 = mw.wrap_tool_call(
+        _tool_call_request("write_file", {"path": "a.py", "content": "x"}),
+        lambda r: "Wrote 1 chars",
+    )
     assert "[nudge]" in r1
     # execute clears writes
-    mw.wrap_tool_call(_tool_call_request("execute", {"command": "python a.py"}), lambda r: "ok")
+    mw.wrap_tool_call(
+        _tool_call_request("execute", {"command": "python a.py"}), lambda r: "ok"
+    )
     # second write → no nudge (plan_nudged already True this turn)
-    r2 = mw.wrap_tool_call(_tool_call_request("write_file", {"path": "b.py", "content": "y"}),
-                           lambda r: "Wrote 1 chars")
+    r2 = mw.wrap_tool_call(
+        _tool_call_request("write_file", {"path": "b.py", "content": "y"}),
+        lambda r: "Wrote 1 chars",
+    )
     assert "[nudge]" not in r2
 
 
 # --- after_model: termination interception ---
+
 
 def _state_with_messages(msgs):
     return {"messages": msgs}
@@ -92,16 +105,22 @@ def test_after_model_intercepts_unverified_done():
     """Model wrote code (observed) then returns text-only (wants to end) → intercept."""
     mw = HarnessMiddleware()
     mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")
-    state = _state_with_messages([
-        HumanMessage(content="write a.py"),
-        _tool_call_msg("write_file", {"path": "a.py", "content": "x"}),
-        AIMessage(content="done", tool_calls=[]),  # wants to end, unverified
-    ])
+    state = _state_with_messages(
+        [
+            HumanMessage(content="write a.py"),
+            _tool_call_msg("write_file", {"path": "a.py", "content": "x"}),
+            AIMessage(content="done", tool_calls=[]),  # wants to end, unverified
+        ]
+    )
     update = mw.after_model(state, None)
     assert update is not None
     assert update.get("jump_to") == "model"
     assert update["messages"], "must inject a continuation message"
-    assert "bash" in update["messages"][0].content or "execute" in update["messages"][0].content or "verify" in update["messages"][0].content.lower()
+    assert (
+        "bash" in update["messages"][0].content
+        or "execute" in update["messages"][0].content
+        or "verify" in update["messages"][0].content.lower()
+    )
 
 
 def test_after_model_passes_when_verified():
@@ -147,7 +166,9 @@ def test_after_model_escalation_releases_with_warning():
 def test_after_model_text_only_no_writes_passes():
     """Pure Q&A (no writes) passes through — harness only cares about code writes."""
     mw = HarnessMiddleware()
-    state = _state_with_messages([AIMessage(content="The answer is 42.", tool_calls=[])])
+    state = _state_with_messages(
+        [AIMessage(content="The answer is 42.", tool_calls=[])]
+    )
     update = mw.after_model(state, None)
     assert update is None
 
@@ -155,6 +176,8 @@ def test_after_model_text_only_no_writes_passes():
 def test_disabled_middleware_passthrough():
     """When disabled, after_model and wrap_tool_call are no-ops."""
     mw = HarnessMiddleware(enabled=False)
-    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")  # no-op when disabled
+    mw.harness.observe(
+        "write_file", {"path": "a.py"}, "Wrote 10 chars"
+    )  # no-op when disabled
     state = _state_with_messages([AIMessage(content="done", tool_calls=[])])
     assert mw.after_model(state, None) is None

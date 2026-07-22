@@ -34,5 +34,12 @@ def to_langchain_tool(tool: "Tool", args_schema: type[BaseModel]) -> StructuredT
     )
 
 
-DESTRUCTIVE_TOOLS = {"write_file", "edit_file", "multi_edit", "bash", "web_fetch", "note"}
+DESTRUCTIVE_TOOLS = {
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "bash",
+    "web_fetch",
+    "note",
+}
 READONLY_TOOLS = {"read_file", "list_dir", "glob", "grep", "todo", "web_search"}

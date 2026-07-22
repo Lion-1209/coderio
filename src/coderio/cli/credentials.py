@@ -22,12 +22,14 @@ def _restrict_permissions(p: Path) -> None:
         try:
             subprocess.run(
                 ["icacls", str(p), "/inheritance:r"],
-                check=False, capture_output=True,
+                check=False,
+                capture_output=True,
             )
             if user:
                 subprocess.run(
                     ["icacls", str(p), "/grant:r", f"{user}:F"],
-                    check=False, capture_output=True,
+                    check=False,
+                    capture_output=True,
                 )
                 return
             return
@@ -43,7 +45,9 @@ def read_credentials(path: Path | str | None = None) -> dict[str, str]:
         return {}
     with open(p, "rb") as f:
         data = tomllib.load(f)
-    return {section: v.get("key", "") for section, v in data.items() if isinstance(v, dict)}
+    return {
+        section: v.get("key", "") for section, v in data.items() if isinstance(v, dict)
+    }
 
 
 def write_credentials(mapping: dict[str, str], path: Path | str | None = None) -> Path:

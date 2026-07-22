@@ -10,6 +10,7 @@ themselves — so all 12 tools stay unchanged (zero intrusion) and there's a
 single choke point. AutoPermissionGate also runs the policy, so --auto mode
 skips interactive confirmation but NEVER skips the workspace boundary.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,7 +31,9 @@ class WorkspacePolicy:
     """
 
     READ_TOOLS: frozenset[str] = frozenset({"read_file", "list_dir", "glob", "grep"})
-    WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit", "bash"})
+    WRITE_TOOLS: frozenset[str] = frozenset(
+        {"write_file", "edit_file", "multi_edit", "bash"}
+    )
 
     def __init__(self, root: Path | str = ""):
         # Default to the process CWD when no root is configured — this matches
@@ -57,12 +60,14 @@ class WorkspacePolicy:
             except (OSError, RuntimeError):
                 # Path can't be resolved (broken symlink, encoding issue) —
                 # fail closed: treat as outside rather than risk allowing it.
-                return (False, f"path '{raw_path}' could not be resolved (outside workspace?)")
+                return (
+                    False,
+                    f"path '{raw_path}' could not be resolved (outside workspace?)",
+                )
             try:
                 resolved.relative_to(self.root)
             except ValueError:
-                return (False,
-                        f"path '{raw_path}' is outside workspace ({self.root})")
+                return (False, f"path '{raw_path}' is outside workspace ({self.root})")
         return (True, "")
 
     @staticmethod

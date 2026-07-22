@@ -19,10 +19,13 @@ def test_load_defaults_when_no_files(tmp_path, monkeypatch):
 
 def test_user_config_overrides_defaults(tmp_path):
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         default = "gpt-4o"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.model.default == "gpt-4o"
@@ -61,7 +64,9 @@ def test_project_search_stops_at_home(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     realhome = tmp_path / "realhome"
     (realhome / ".coderio").mkdir(parents=True)
-    (realhome / ".coderio" / "config.toml").write_text('[model]\ndefault = "home-glm"\n', encoding="utf-8")
+    (realhome / ".coderio" / "config.toml").write_text(
+        '[model]\ndefault = "home-glm"\n', encoding="utf-8"
+    )
     # search_from is NESTED inside the (patched) home so the walk would reach home
     # unless it stops at the home boundary.
     proj = realhome / "projects" / "myproj"
@@ -76,7 +81,9 @@ def test_project_search_stops_at_home(tmp_path, monkeypatch):
 
 def test_parses_cli_section_and_provider_id(tmp_path):
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         provider_id = "bigmodel_coding_plan"
         default = "glm-5.2"
@@ -87,7 +94,8 @@ def test_parses_cli_section_and_provider_id(tmp_path):
         [cli]
         theme = "light"
         show_tool_output = false
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.model.provider_id == "bigmodel_coding_plan"
@@ -119,13 +127,16 @@ def test_missing_context_section_uses_defaults(tmp_path):
 def test_parses_context_section(tmp_path):
     """A [context] section overrides the defaults."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [context]
         enabled = false
         trigger_ratio = 0.8
         keep_recent = 12
         model_context_limit = 200000
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.context.enabled is False
@@ -143,13 +154,16 @@ def test_model_section_context_limit_legacy_path(tmp_path):
     correct compaction threshold after re-running setup.
     """
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         default = "step-3.7-flash"
         provider = "anthropic"
         provider_id = "stepfun_coding_plan"
         context_limit = 256000
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.model.context_limit == 256_000
@@ -158,10 +172,13 @@ def test_model_section_context_limit_legacy_path(tmp_path):
 def test_model_section_context_limit_defaults_zero(tmp_path):
     """No context_limit in [model] means 0 (not probed)."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         default = "step-3.7-flash"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.model.context_limit == 0
@@ -170,11 +187,14 @@ def test_model_section_context_limit_defaults_zero(tmp_path):
 def test_model_section_context_limit_rejects_non_int(tmp_path):
     """A typo'd context_limit must not crash config load."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         default = "x"
         context_limit = "lots"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.model.context_limit == 0
@@ -182,9 +202,12 @@ def test_model_section_context_limit_rejects_non_int(tmp_path):
 
 # --- profiles (multi-config) ---
 
+
 def test_parses_profiles_and_active(tmp_path):
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         active_profile = "智谱套餐"
 
         [[profiles]]
@@ -201,7 +224,8 @@ def test_parses_profiles_and_active(tmp_path):
         model = "gpt-4o"
         base_url = "https://api.openai.com/v1"
         kind = "openai_compatible"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert len(cfg.profiles) == 2
@@ -219,7 +243,9 @@ def test_parses_profiles_and_active(tmp_path):
 def test_profile_context_limit_rejects_non_int(tmp_path):
     """A non-int context_limit (user typo) must fall back to 0, not crash."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         active_profile = "x"
 
         [[profiles]]
@@ -227,7 +253,8 @@ def test_profile_context_limit_rejects_non_int(tmp_path):
         provider_id = "openai"
         model = "gpt-4o"
         context_limit = "lots"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.profiles[0].context_limit == 0
@@ -238,11 +265,14 @@ def test_no_profiles_is_backward_compatible(tmp_path):
     and leave profiles empty + active_profile empty — build_chat_model then uses
     the unchanged [model] path."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [model]
         provider_id = "bigmodel_coding_plan"
         default = "glm-5.2"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert cfg.profiles == []
@@ -254,13 +284,16 @@ def test_empty_active_profile_when_unset(tmp_path):
     """profiles present but active_profile absent → active_profile stays empty
     (build_chat_model defaults to the first profile)."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [[profiles]]
         name = "first"
         provider_id = "openai"
         model = "gpt-4o"
         kind = "openai_compatible"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert len(cfg.profiles) == 1
@@ -271,7 +304,9 @@ def test_malformed_profile_entries_skipped(tmp_path):
     """Incomplete [[profiles]] entries (missing required fields) are skipped
     rather than crashing the whole config load."""
     user_cfg = tmp_path / "userhome" / "config.toml"
-    write(user_cfg, """
+    write(
+        user_cfg,
+        """
         [[profiles]]
         name = "good"
         provider_id = "openai"
@@ -280,7 +315,8 @@ def test_malformed_profile_entries_skipped(tmp_path):
         [[profiles]]
         name = "missing-model"
         provider_id = "openai"
-    """)
+    """,
+    )
     proj = tmp_path / "proj"
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert len(cfg.profiles) == 1

@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 class ListDirArgs(BaseModel):
     path: str = Field(description="Directory to list.")
     recursive: bool = Field(default=False, description="Recurse into subdirectories.")
-    max_depth: int = Field(default=3, description="Max recursion depth (when recursive).")
+    max_depth: int = Field(
+        default=3, description="Max recursion depth (when recursive)."
+    )
 
 
 class ListDirTool:
@@ -39,7 +41,13 @@ class ListDirTool:
                 lines.append(f"{prefix}<error: {e}>")
                 return
             for entry in entries:
-                if entry.name in {"__pycache__", "venv", ".venv", ".git", "node_modules"}:
+                if entry.name in {
+                    "__pycache__",
+                    "venv",
+                    ".venv",
+                    ".git",
+                    "node_modules",
+                }:
                     continue
                 if entry.is_dir():
                     lines.append(f"{prefix}{entry.name}/")

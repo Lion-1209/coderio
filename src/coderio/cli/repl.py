@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.console import Console
-from rich.panel import Panel
 
 from coderio.agent.prompts import ActiveSkills
 from coderio.config import Config, load_config
@@ -11,7 +10,12 @@ from coderio.llm import build_chat_model
 from coderio.session.store import Session
 from coderio.skills.store import load_skill_store, SkillStore
 from coderio.tools import build_default_tools
-from coderio.tools.permission import PermissionGate, PermissionMode, RichPromptPermissionGate, AutoPermissionGate
+from coderio.tools.permission import (
+    PermissionGate,
+    PermissionMode,
+    RichPromptPermissionGate,
+    AutoPermissionGate,
+)
 from coderio.tools.workspace import WorkspacePolicy
 
 from coderio.cli.stream import RichStream
@@ -49,18 +53,25 @@ def build_runtime(
 
     if mode_override:
         from dataclasses import replace as _replace
+
         cfg = _replace(cfg, tools=_replace(cfg.tools, permission_mode=mode_override))
 
     if model_override:
         from dataclasses import replace as _replace
+
         cfg = _replace(cfg, model=_replace(cfg.model, default=model_override))
 
     if provider_override:
         from dataclasses import replace as _replace
+
         cfg = _replace(cfg, model=_replace(cfg.model, provider_id=provider_override))
 
     if cfg.skills.auto_load:
-        store = load_skill_store(BUNDLED_SKILLS, Path.home() / ".coderio" / "skills", Path(search_from) / ".coderio" / "skills")
+        store = load_skill_store(
+            BUNDLED_SKILLS,
+            Path.home() / ".coderio" / "skills",
+            Path(search_from) / ".coderio" / "skills",
+        )
     else:
         store = SkillStore()
 
@@ -70,7 +81,9 @@ def build_runtime(
 
     if session is None:
         save = save_dir or Path(cfg.session.save_dir).expanduser()
-        session = Session.create(save, {"model": cfg.model.default, "provider": cfg.model.provider})
+        session = Session.create(
+            save, {"model": cfg.model.default, "provider": cfg.model.provider}
+        )
 
     active = ActiveSkills()
     stream = RichStream(console or Console())
@@ -87,6 +100,7 @@ def _needs_onboarding(creds_path) -> bool:
     """
     from coderio.cli.credentials import read_credentials
     import os
+
     creds = read_credentials(creds_path)
     if creds:
         return False
@@ -94,13 +108,18 @@ def _needs_onboarding(creds_path) -> bool:
     if config_path.is_file():
         try:
             import tomllib
+
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
             if data.get("model", {}).get("provider_id"):
                 return False
         except Exception:
             pass
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("Z_API_KEY"):
+    if (
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("Z_API_KEY")
+    ):
         return False
     return True
 
@@ -113,4 +132,3 @@ def _resolve_resume(cfg: Config, resume: str | None, continue_last: bool) -> Ses
     if not recent:
         raise SystemExit("No previous session to continue.")
     return Session.load_by_id(save_dir, recent[0])
-

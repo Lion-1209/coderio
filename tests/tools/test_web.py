@@ -12,7 +12,9 @@ def test_web_search_returns_results(monkeypatch):
             return self
 
         def json(self):
-            return {"results": [{"title": "T", "url": "http://x", "content": "snippet"}]}
+            return {
+                "results": [{"title": "T", "url": "http://x", "content": "snippet"}]
+            }
 
         def raise_for_status(self):
             pass

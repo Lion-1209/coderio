@@ -25,7 +25,11 @@ class WebSearchTool:
         try:
             resp = httpx.get(
                 "https://api.tavily.com/search",
-                params={"api_key": self.api_key, "query": query, "max_results": max_results},
+                params={
+                    "api_key": self.api_key,
+                    "query": query,
+                    "max_results": max_results,
+                },
                 timeout=20,
             )
             resp.raise_for_status()

@@ -18,6 +18,7 @@ The compaction is conservative:
 Failure to summarize (model error / timeout) is non-fatal: the original convo is
 returned unchanged and a warning is emitted.
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,7 +70,11 @@ def _find_safe_split(convo: list[Message], keep_recent: int) -> int:
             continue
         # If convo[split-1] is an assistant with tool_calls, those tool results
         # start at convo[split] — splitting here orphans them.
-        if split > 0 and convo[split - 1].role == "assistant" and convo[split - 1].tool_calls:
+        if (
+            split > 0
+            and convo[split - 1].role == "assistant"
+            and convo[split - 1].tool_calls
+        ):
             split -= 1
             continue
         break
@@ -142,14 +147,18 @@ def compact_convo(
         summary_response = model.invoke(_SUMMARY_PROMPT + history_text)
         summary = getattr(summary_response, "content", str(summary_response))
         if isinstance(summary, list):
-            summary = " ".join(b.get("text", "") for b in summary
-                               if isinstance(b, dict) and b.get("type") == "text")
+            summary = " ".join(
+                b.get("text", "")
+                for b in summary
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
         if not summary or not summary.strip():
             _log.warning("compaction produced empty summary — keeping original convo")
             return convo
     except Exception as e:
-        _log.warning("compaction failed (%s: %s) — keeping original convo",
-                     type(e).__name__, e)
+        _log.warning(
+            "compaction failed (%s: %s) — keeping original convo", type(e).__name__, e
+        )
         return convo
 
     summary_msg = Message.system(

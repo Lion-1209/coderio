@@ -30,7 +30,13 @@ class GrepTool:
     )
     args_schema = GrepArgs
 
-    def run(self, pattern: str, path: str = ".", glob: str = "", output_mode: str = "content") -> str:
+    def run(
+        self,
+        pattern: str,
+        path: str = ".",
+        glob: str = "",
+        output_mode: str = "content",
+    ) -> str:
         if _rg_available():
             return self._with_rg(pattern, path, glob, output_mode)
         return self._python_fallback(pattern, path, glob, output_mode)
@@ -45,12 +51,16 @@ class GrepTool:
             cmd += ["--glob", glob]
         cmd += [pattern, path]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
             return (proc.stdout or "").strip() or "No matches"
         except FileNotFoundError:
             return self._python_fallback(pattern, path, glob, output_mode)
 
-    def _python_fallback(self, pattern: str, path: str, glob: str, output_mode: str) -> str:
+    def _python_fallback(
+        self, pattern: str, path: str, glob: str, output_mode: str
+    ) -> str:
         base = Path(path)
         if glob:
             files = list(base.rglob(glob))

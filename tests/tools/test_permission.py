@@ -41,6 +41,7 @@ def test_invalid_mode():
 
 # --- note tool: action-level permission (read/list are read-only) ---
 
+
 def test_note_read_bypasses_gate():
     """note(action='read') is read-only — must not prompt even in plan mode."""
     gate = _AlwaysAllow("plan")
@@ -62,7 +63,9 @@ def test_note_write_blocked_in_plan_mode():
 def test_note_append_blocked_in_plan_mode():
     """note(action='append') mutates state — should be blocked in plan mode."""
     gate = _AlwaysAllow("plan")
-    assert gate.check("note", {"action": "append", "name": "x", "content": "y"}) is False
+    assert (
+        gate.check("note", {"action": "append", "name": "x", "content": "y"}) is False
+    )
 
 
 def test_note_delete_blocked_in_plan_mode():
@@ -74,4 +77,6 @@ def test_note_delete_blocked_in_plan_mode():
 def test_note_write_prompts_in_confirm_mode():
     """note(action='write') in confirm mode should go through _ask (not bypass)."""
     gate = _AlwaysAllow("confirm")
-    assert gate.check("note", {"action": "write", "name": "x"}) is True  # _ask returns True
+    assert (
+        gate.check("note", {"action": "write", "name": "x"}) is True
+    )  # _ask returns True

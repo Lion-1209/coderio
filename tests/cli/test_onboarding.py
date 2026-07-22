@@ -79,6 +79,7 @@ def test_onboarding_persists_to_config(tmp_path, monkeypatch):
     assert result is not None
     assert config_path.is_file()
     import tomllib
+
     with open(config_path, "rb") as f:
         data = tomllib.load(f)
     assert data["model"]["provider_id"] == "bigmodel_coding_plan"
@@ -102,6 +103,7 @@ def test_ollama_no_key_required(tmp_path):
 def test_openai_provider_available():
     """OpenAI direct provider should be in the registry for international users."""
     from coderio.cli.providers import get_provider
+
     p = get_provider("openai")
     assert p is not None
     assert p.kind == "openai_compatible"
@@ -111,6 +113,7 @@ def test_openai_provider_available():
 def test_anthropic_provider_available():
     """Anthropic direct provider should be in the registry."""
     from coderio.cli.providers import get_provider
+
     p = get_provider("anthropic")
     assert p is not None
     assert p.kind == "anthropic"
@@ -120,6 +123,7 @@ def test_verify_key_failure_returns_false():
     """_verify_key should return (False, msg) for an invalid key."""
     # Use a clearly invalid key against a real endpoint — fast 401.
     from coderio.cli.providers import get_provider
+
     p = get_provider("openai")
     ok, msg = onboarding_mod._verify_key(p, "sk-invalid-key-test", "gpt-4o", p.base_url)
     assert ok is False

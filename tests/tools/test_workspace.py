@@ -5,6 +5,7 @@ read tools stay free (an agent must be able to read site-packages / system
 configs to do its job). AutoPermissionGate also enforces the policy — --auto
 skips confirmation, not the security floor.
 """
+
 import os
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from coderio.tools.permission import (
 
 
 # --- WorkspacePolicy unit tests ---
+
 
 def test_write_outside_root_blocked(tmp_path):
     """A write_file to ../escape.py must be blocked."""
@@ -76,8 +78,9 @@ def test_grep_glob_listdir_outside_allowed(tmp_path):
     """All read-class tools pass even with out-of-workspace paths."""
     p = WorkspacePolicy(root=tmp_path)
     for tool in ("grep", "glob", "list_dir"):
-        allowed, _ = p.check(tool, {"path": os.path.join(os.sep, "etc"),
-                                    "pattern": "x"})
+        allowed, _ = p.check(
+            tool, {"path": os.path.join(os.sep, "etc"), "pattern": "x"}
+        )
         assert allowed is True, f"{tool} should be unconstrained"
 
 
@@ -122,6 +125,7 @@ def test_empty_root_uses_cwd(tmp_path, monkeypatch):
 
 # --- PermissionGate integration tests ---
 
+
 def test_auto_mode_enforces_workspace(tmp_path):
     """REGRESSION (P0): AutoPermissionGate must STILL block workspace escapes.
 
@@ -159,6 +163,7 @@ def test_no_policy_means_no_path_check():
 def test_workspace_root_from_config(tmp_path):
     """The workspace_root config field flows through to the policy."""
     from coderio.config.models import ToolsConfig
+
     cfg = ToolsConfig(workspace_root=str(tmp_path))
     policy = WorkspacePolicy(root=cfg.workspace_root)
     assert policy.root == tmp_path.resolve()

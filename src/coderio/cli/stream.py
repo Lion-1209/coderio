@@ -47,10 +47,10 @@ class RichStream:
         self.show_tool_output = show_tool_output
 
         # Per-round thinking capture (for collapsed display + /think expand).
-        self._round_thinking = ""      # accumulates the current round's thinking
+        self._round_thinking = ""  # accumulates the current round's thinking
         self._round_think_start = 0.0  # when thinking started this round
-        self._last_thinking = ""       # the most recent completed round's full text
-        self._last_think_secs = 0.0    # duration of that round's thinking
+        self._last_thinking = ""  # the most recent completed round's full text
+        self._last_think_secs = 0.0  # duration of that round's thinking
 
     # --------------------------------------------------------------- busy indicator
     def _start_busy(self) -> None:
@@ -89,13 +89,19 @@ class RichStream:
         phase ends (first token, tool call, or finish)."""
         if not self._round_thinking.strip():
             return
-        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
+        secs = (
+            time.monotonic() - self._round_think_start
+            if self._round_think_start
+            else 0.0
+        )
         chars = len(self._round_thinking)
         self._last_thinking = self._round_thinking
         self._last_think_secs = secs
         # Collapsed summary line (full text via show_last_thinking()).
         self.console.print(
-            Text(f"💭 思考 · {secs:.1f}s · {chars} 字 · /think 展开", style="dim italic")
+            Text(
+                f"💭 思考 · {secs:.1f}s · {chars} 字 · /think 展开", style="dim italic"
+            )
         )
         self._round_thinking = ""
         self._round_think_start = 0.0
@@ -127,7 +133,9 @@ class RichStream:
         self._stop_busy()
         self.buffer += text
         if self._live is None:
-            self._live = Live(Text(self.buffer), console=self.console, refresh_per_second=15)
+            self._live = Live(
+                Text(self.buffer), console=self.console, refresh_per_second=15
+            )
             self._live.start()
         else:
             self._live.update(Text(self.buffer))
@@ -144,8 +152,14 @@ class RichStream:
         else:
             self._refresh_busy()
 
-    def on_tool_start(self, name: str, args: dict[str, Any], step: int = 1,
-                      tool_index: int = 0, tool_total: int = 0) -> None:
+    def on_tool_start(
+        self,
+        name: str,
+        args: dict[str, Any],
+        step: int = 1,
+        tool_index: int = 0,
+        tool_total: int = 0,
+    ) -> None:
         # A tool call also ends the thinking phase.
         self._flush_round_thinking()
         self._stop_live()
@@ -153,12 +167,16 @@ class RichStream:
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"
-        self.console.print(f"[bold green]⏺[/bold green] [green]{name}[/green]({args_str})")
+        self.console.print(
+            f"[bold green]⏺[/bold green] [green]{name}[/green]({args_str})"
+        )
 
     def on_tool_end(self, name: str, result: str) -> None:
         if not self.show_tool_output:
             first = result.splitlines()[0][:60] if result.splitlines() else ""
-            self.console.print(Text(f"  → {first}{'…' if len(result) > 60 else ''}", style="dim"))
+            self.console.print(
+                Text(f"  → {first}{'…' if len(result) > 60 else ''}", style="dim")
+            )
             return
         lines = result.splitlines()
         shown = "\n".join(lines[:3])

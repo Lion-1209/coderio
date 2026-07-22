@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 
 class ReadFileArgs(BaseModel):
     path: str = Field(description="Absolute or relative path to the file.")
-    offset: int = Field(default=0, description="1-based first line number to show (0=start).")
+    offset: int = Field(
+        default=0, description="1-based first line number to show (0=start)."
+    )
     limit: int = Field(default=2000, description="Maximum number of lines to return.")
 
 

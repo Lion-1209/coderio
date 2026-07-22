@@ -162,14 +162,21 @@ class Session:
                         # content may be str or a multimodal block list
                         c = rec.get("content", "")
                         if isinstance(c, list):
-                            c = " ".join(b.get("text", "") for b in c
-                                         if isinstance(b, dict) and b.get("type") == "text")
+                            c = " ".join(
+                                b.get("text", "")
+                                for b in c
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
                         first_user = str(c).strip().replace("\n", " ")
-            out.append({
-                "id": p.stem,
-                "first_user": first_user[:80],  # cap for the picker row
-                "message_count": count,
-                "model": model,
-                "mtime": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-            })
+            out.append(
+                {
+                    "id": p.stem,
+                    "first_user": first_user[:80],  # cap for the picker row
+                    "message_count": count,
+                    "model": model,
+                    "mtime": datetime.fromtimestamp(p.stat().st_mtime).strftime(
+                        "%Y-%m-%d %H:%M"
+                    ),
+                }
+            )
         return out

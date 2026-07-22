@@ -53,9 +53,14 @@ def test_e2e_read_file_and_resume(tmp_path):
     session = Session.create(tmp_path / "sessions", {"model": "test"})
     answer = run_agent(
         user_input="Summarize note.md",
-        model=model, tools=tools, gate=gate,
-        skill_store=store, active_skills=active,
-        session=session, stream=NullStream(), max_rounds=10,
+        model=model,
+        tools=tools,
+        gate=gate,
+        skill_store=store,
+        active_skills=active,
+        session=session,
+        stream=NullStream(),
+        max_rounds=10,
     )
     assert "Plan" in answer
     assert any(m.role == "tool" for m in session.messages)
@@ -93,11 +98,14 @@ def test_e2e_confirm_gate_for_bash():
 # is the layer that was missing when --tui was removed but kept erroring for the
 # user: no test actually invoked the entry point.
 
+
 def test_cli_help_exits_zero():
     """`coderio --help` must succeed. Guards the whole import + typer wiring."""
     r = subprocess.run(
         [sys.executable, "-m", "coderio.cli.app", "--help"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert r.returncode == 0, f"--help failed:\n{r.stderr}"
     assert "coderio" in r.stdout.lower()
@@ -111,7 +119,9 @@ def test_cli_has_no_tui_flag():
     """
     r = subprocess.run(
         [sys.executable, "-m", "coderio.cli.app", "--help"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert "--tui" not in r.stdout
     assert "--no-tui" not in r.stdout
@@ -121,7 +131,9 @@ def test_cli_unknown_flag_errors():
     """Sanity: an unknown flag must exit non-zero (typer rejects it)."""
     r = subprocess.run(
         [sys.executable, "-m", "coderio.cli.app", "--definitely-not-real"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert r.returncode != 0
 
@@ -130,6 +142,7 @@ def test_cli_unknown_flag_errors():
 # These verify the phase-1/2/3 architecture features work end-to-end through
 # run_agent (not just in isolation): the phase timeline is persisted, and the
 # context config flows through to _execute_turn.
+
 
 def test_e2e_phase_timeline_persisted_to_session(tmp_path):
     """A turn that does read→write→bash leaves a phase_timeline system message
@@ -151,21 +164,31 @@ def test_e2e_phase_timeline_persisted_to_session(tmp_path):
     session = Session.create(tmp_path / "sessions", {"model": "test"})
     run_agent(
         user_input="read target.py, update it, run tests",
-        model=model, tools=tools, gate=gate,
-        skill_store=store, active_skills=active,
-        session=session, stream=NullStream(), max_rounds=10,
+        model=model,
+        tools=tools,
+        gate=gate,
+        skill_store=store,
+        active_skills=active,
+        session=session,
+        stream=NullStream(),
+        max_rounds=10,
     )
     # The phase_timeline system message should be in the session.
-    sys_msgs = [m for m in session.messages if m.role == "system" and m.kind == "phase_timeline"]
+    sys_msgs = [
+        m for m in session.messages if m.role == "system" and m.kind == "phase_timeline"
+    ]
     assert len(sys_msgs) >= 1, "expected a phase_timeline system message"
     import json
+
     timeline = json.loads(sys_msgs[-1].content)
     states = [entry["state"] for entry in timeline]
     # The mock model writes without creating a todo first, so the write phase
     # is PLAN (write + no todos), not IMPLEMENT (write + todos). Either is valid
     # ground-truth derivation; what matters is the progression is captured.
     assert "explore" in states, f"explore missing from {states}"
-    assert "plan" in states or "implement" in states, f"write phase missing from {states}"
+    assert "plan" in states or "implement" in states, (
+        f"write phase missing from {states}"
+    )
     # verify is conditional on the bash command actually succeeding (exit 0).
     # In the test environment the mock model's bash command runs against a
     # tmp_path that bash can't necessarily reach, so verify may or may not
@@ -191,9 +214,14 @@ def test_e2e_context_config_flows_through(tmp_path):
     # No context_cfg passed — defaults to None, compaction disabled.
     answer = run_agent(
         user_input="read x.py",
-        model=model, tools=tools, gate=gate,
-        skill_store=store, active_skills=active,
-        session=session, stream=NullStream(), max_rounds=5,
+        model=model,
+        tools=tools,
+        gate=gate,
+        skill_store=store,
+        active_skills=active,
+        session=session,
+        stream=NullStream(),
+        max_rounds=5,
     )
     assert "Read it" in answer
 
@@ -201,6 +229,7 @@ def test_e2e_context_config_flows_through(tmp_path):
 def test_e2e_disabled_context_config_does_not_crash(tmp_path):
     """A ContextConfig with enabled=False should behave like compaction off."""
     from coderio.config import ContextConfig
+
     f = tmp_path / "y.py"
     f.write_text("y = 2\n", encoding="utf-8")
     model = _model_returning(
@@ -212,9 +241,14 @@ def test_e2e_disabled_context_config_does_not_crash(tmp_path):
     session = Session.create(tmp_path / "sessions", {"model": "test"})
     answer = run_agent(
         user_input="read y.py",
-        model=model, tools=tools, gate=PermissionGate("auto"),
-        skill_store=SkillStore(), active_skills=ActiveSkills(),
-        session=session, stream=NullStream(), max_rounds=5,
+        model=model,
+        tools=tools,
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(),
+        active_skills=ActiveSkills(),
+        session=session,
+        stream=NullStream(),
+        max_rounds=5,
         context_cfg=ContextConfig(enabled=False),
     )
     assert "ok" in answer
@@ -242,21 +276,34 @@ def test_e2e_grounding_gate_remembers_reads_across_turns(tmp_path):
     # Turn 1
     run_agent(
         user_input="read target.py",
-        model=model, tools=tools, gate=PermissionGate("auto"),
-        skill_store=SkillStore(), active_skills=ActiveSkills(),
-        session=session, stream=NullStream(), max_rounds=5,
+        model=model,
+        tools=tools,
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(),
+        active_skills=ActiveSkills(),
+        session=session,
+        stream=NullStream(),
+        max_rounds=5,
     )
     # Turn 2 — cites target.py without re-reading; should NOT be blocked by gate
     answer = run_agent(
         user_input="what does target.py contain?",
-        model=model, tools=tools, gate=PermissionGate("auto"),
-        skill_store=SkillStore(), active_skills=ActiveSkills(),
-        session=session, stream=NullStream(), max_rounds=5,
+        model=model,
+        tools=tools,
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(),
+        active_skills=ActiveSkills(),
+        session=session,
+        stream=NullStream(),
+        max_rounds=5,
     )
     assert "x is 1" in answer
     # The gate should NOT have injected a "[harness]" message in turn 2
-    gate_injects = [m for m in session.messages
-                    if m.role == "user" and str(m.content).startswith("[harness]")]
+    gate_injects = [
+        m
+        for m in session.messages
+        if m.role == "user" and str(m.content).startswith("[harness]")
+    ]
     # Any gate inject would be from turn 2 (turn 1 had no citations in its output)
     # If the gate remembered the read, there are ZERO injects.
     assert gate_injects == [], f"GroundingGate forgot cross-turn read: {gate_injects}"
@@ -279,9 +326,14 @@ def test_e2e_empty_response_retries_then_succeeds(tmp_path):
     session = Session.create(tmp_path / "sessions", {"model": "test"})
     answer = run_agent(
         user_input="read x.py and describe it",
-        model=model, tools=tools, gate=PermissionGate("auto"),
-        skill_store=SkillStore(), active_skills=ActiveSkills(),
-        session=session, stream=NullStream(), max_rounds=5,
+        model=model,
+        tools=tools,
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(),
+        active_skills=ActiveSkills(),
+        session=session,
+        stream=NullStream(),
+        max_rounds=5,
     )
     # The turn should NOT have ended on the empty response — it retried and got
     # the real output.

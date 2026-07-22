@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -27,6 +27,7 @@ class Profile:
     re-running onboarding. The API key itself lives in the credentials file
     (keyed by provider_id), not here — same as the legacy [model] path.
     """
+
     name: str
     provider_id: str
     model: str
@@ -81,20 +82,21 @@ class ContextConfig:
     message and the most recent ``keep_recent`` are kept verbatim. Disabled
     when ``enabled=False`` (no compaction attempts, original behavior).
     """
+
     enabled: bool = True
-    trigger_ratio: float = 0.6         # compact at 60% of the context window (lowered
-                                       # from 0.75 — a 30-read_file analysis session
-                                       # hit 61k tokens without triggering; 60% gives
-                                       # earlier, healthier compaction)
-    keep_recent: int = 8               # messages preserved verbatim at the tail
+    trigger_ratio: float = 0.6  # compact at 60% of the context window (lowered
+    # from 0.75 — a 30-read_file analysis session
+    # hit 61k tokens without triggering; 60% gives
+    # earlier, healthier compaction)
+    keep_recent: int = 8  # messages preserved verbatim at the tail
     model_context_limit: int = 200_000  # assumed window size when the active
-                                        # profile has no probed context_limit.
-                                        # Raised from 128K (too aggressive — a
-                                        # 256K model was compacting at 76K) to
-                                        # 200K, the floor for modern models
-                                        # (Claude, GPT-4o, step-3.7). The real
-                                        # value comes from probe_context_limit
-                                        # at setup time, stored per-profile.
+    # profile has no probed context_limit.
+    # Raised from 128K (too aggressive — a
+    # 256K model was compacting at 76K) to
+    # 200K, the floor for modern models
+    # (Claude, GPT-4o, step-3.7). The real
+    # value comes from probe_context_limit
+    # at setup time, stored per-profile.
 
 
 @dataclass

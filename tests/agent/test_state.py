@@ -3,15 +3,19 @@
 Phase 1 of the harness architecture improvements: observability for execution
 phases, derived from harness ground truth.
 """
+
 from coderio.agent.state import AgentState, AgentStateTracker
 
 
 # --- AgentStateTracker: phase derivation ---
 
+
 def test_derive_phase_explore_default():
     """No writes, no todos, no verification → EXPLORE."""
     t = AgentStateTracker()
-    assert t.derive_phase([], todos_exist=False, just_verified=False) == AgentState.EXPLORE
+    assert (
+        t.derive_phase([], todos_exist=False, just_verified=False) == AgentState.EXPLORE
+    )
 
 
 def test_derive_phase_plan_when_write_without_todos():
@@ -37,6 +41,7 @@ def test_derive_phase_verify_takes_priority():
 
 # --- AgentStateTracker: transition debounce ---
 
+
 def test_transition_records_only_on_change():
     """Repeated same-phase transitions don't bloat the timeline (debounce)."""
     t = AgentStateTracker()
@@ -56,7 +61,11 @@ def test_transition_records_changes():
     t.transition(AgentState.VERIFY, step=3)
     assert len(t.timeline) == 4
     assert [s.state for s in t.timeline] == [
-        AgentState.EXPLORE, AgentState.PLAN, AgentState.IMPLEMENT, AgentState.VERIFY]
+        AgentState.EXPLORE,
+        AgentState.PLAN,
+        AgentState.IMPLEMENT,
+        AgentState.VERIFY,
+    ]
 
 
 def test_finish_always_records():
@@ -78,6 +87,7 @@ def test_finish_after_idle_records_first_snapshot():
 
 
 # --- AgentStateTracker: serialization ---
+
 
 def test_round_trip_serialization():
     """Timeline survives to_payload → from_payload (for jsonl persistence)."""

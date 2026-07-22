@@ -45,9 +45,12 @@ class TurnResult:
     and ``in_tool_loop`` both False; either True suggests the agent got stuck
     and a fresh-context retry might help.
     """
+
     __slots__ = ("text", "hit_max_rounds", "in_tool_loop")
 
-    def __init__(self, text: str, hit_max_rounds: bool = False, in_tool_loop: bool = False):
+    def __init__(
+        self, text: str, hit_max_rounds: bool = False, in_tool_loop: bool = False
+    ):
         self.text = text
         self.hit_max_rounds = hit_max_rounds
         self.in_tool_loop = in_tool_loop
@@ -75,11 +78,16 @@ def _seed_read_state(harness, messages) -> None:
     if harness is None or not getattr(harness, "enabled", False):
         return
     from coderio.agent.harness import _norm_path
+
     for m in messages:
         if m.role == "assistant" and m.tool_calls:
             for tc in m.tool_calls:
                 if tc.name == "read_file":
-                    p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
+                    p = (
+                        (tc.args or {}).get("path")
+                        or (tc.args or {}).get("file_path")
+                        or ""
+                    )
                     if p:
                         harness.state.content_read_files.add(_norm_path(p))
 
@@ -122,7 +130,7 @@ def _build_max_rounds_notice(harness, max_rounds: int) -> str:
         pending = list(harness.state.writes_since_verify)
         if pending:
             out += (
-                f"\n\n⚠ 注意：以下文件已写入但未经验证（未跑测试/构建）：\n"
+                "\n\n⚠ 注意：以下文件已写入但未经验证（未跑测试/构建）：\n"
                 + "\n".join(f"  - {p}" for p in pending)
                 + "\n建议手动验证后再继续。"
             )
@@ -184,7 +192,9 @@ def _to_langchain_messages(system_prompt: str, convo: list[Message]) -> list:
                 ]
             msgs.append(AIMessage(content=m.content, tool_calls=tcs or []))
         elif m.role == "tool":
-            msgs.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id or ""))
+            msgs.append(
+                ToolMessage(content=m.content, tool_call_id=m.tool_call_id or "")
+            )
         elif m.role == "system":
             # Phase timelines are observability metadata — never shown to the model.
             # Context summaries (kind="context_summary") ARE shown (that's their purpose).
@@ -220,14 +230,23 @@ def _invoke_tool(tool, name: str, args: dict) -> str:
     except TypeError as e:
         # Most common case: the model passed an arg the tool doesn't accept
         # (e.g. bash(path=...) when bash takes cwd). Retryable — fix the call.
-        return (f"[retryable] tool {name!r} rejected the arguments ({e}). "
-                f"Check the tool's accepted parameters and retry with valid args.")
-    except (PermissionError, FileNotFoundError, IsADirectoryError, NotADirectoryError) as e:
+        return (
+            f"[retryable] tool {name!r} rejected the arguments ({e}). "
+            f"Check the tool's accepted parameters and retry with valid args."
+        )
+    except (
+        PermissionError,
+        FileNotFoundError,
+        IsADirectoryError,
+        NotADirectoryError,
+    ) as e:
         # Non-retryable: the environment refuses this operation. Re-trying with
         # tweaked args won't help — the model should pick another path or method.
-        return (f"[non-retryable] tool {name!r} cannot proceed: "
-                f"{type(e).__name__}: {e}. This is an environmental constraint — "
-                f"do not repeat the same call; choose a different path or approach.")
+        return (
+            f"[non-retryable] tool {name!r} cannot proceed: "
+            f"{type(e).__name__}: {e}. This is an environmental constraint — "
+            f"do not repeat the same call; choose a different path or approach."
+        )
     except Exception as e:  # noqa: BLE001 — tool failures must not kill the turn
         # Unknown failure — conservatively retryable. Surface the type so the
         # model can reason about it (a ValueError vs OSError mean different things).
@@ -248,7 +267,11 @@ class _BoundModelCache:
 
     def get(self, langchain_tools: list, signature: tuple) -> Any:
         if self._signature != signature or self._bound is None:
-            self._bound = self.model.bind_tools(langchain_tools) if langchain_tools else self.model
+            self._bound = (
+                self.model.bind_tools(langchain_tools)
+                if langchain_tools
+                else self.model
+            )
             self._signature = signature
         return self._bound
 
@@ -288,19 +311,25 @@ def run_step(
         if any(k in msg for k in ("authentication", "401", "api key", "unauthorized")):
             raise RuntimeError(
                 "API 认证失败：API key 无效或已过期。请运行 coderio config 检查配置，"
-                "或设置 ANTHROPIC_API_KEY 环境变量。") from e
+                "或设置 ANTHROPIC_API_KEY 环境变量。"
+            ) from e
         if any(k in msg for k in ("rate_limit", "429", "rate limit", "quota")):
             raise RuntimeError(
                 "API 速率限制：请求过于频繁或额度用完（SDK 已自动重试 3 次仍失败）。"
-                "请稍后重试，或检查账户额度。") from e
-        if any(k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")):
+                "请稍后重试，或检查账户额度。"
+            ) from e
+        if any(
+            k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")
+        ):
             raise RuntimeError(
                 f"网络错误：无法连接到模型端点 ({type(e).__name__})，"
-                "已自动重试 3 次。请检查网络连接和 base_url 配置。") from e
+                "已自动重试 3 次。请检查网络连接和 base_url 配置。"
+            ) from e
         if any(k in msg for k in ("not found", "404", "model")):
             raise RuntimeError(
                 f"模型错误：模型名可能无效 ({type(e).__name__}: {e})。"
-                "请运行 coderio config 检查 model 配置。") from e
+                "请运行 coderio config 检查 model 配置。"
+            ) from e
         raise  # unknown error — let the TUI's generic handler surface it
     usage = getattr(aggregated, "usage_metadata", None) or {}
     if usage and hasattr(stream, "add_usage"):
@@ -309,14 +338,23 @@ def run_step(
     # (e.g. max_tokens) — tell the user instead of silently producing partial work.
     meta = getattr(aggregated, "response_metadata", {}) or {}
     stop_reason = meta.get("stop_reason")
-    if stop_reason and stop_reason not in ("end_turn", "stop", "tool_use", None) \
-            and hasattr(stream, "on_truncated"):
+    if (
+        stop_reason
+        and stop_reason not in ("end_turn", "stop", "tool_use", None)
+        and hasattr(stream, "on_truncated")
+    ):
         stream.on_truncated(stop_reason)
     if aggregated is not None and getattr(aggregated, "tool_calls", None):
-        return AIMessage(content=_content_to_text(getattr(aggregated, "content", "")),
-                         tool_calls=list(aggregated.tool_calls),
-                         usage_metadata=usage or None)
-    text = _content_to_text(getattr(aggregated, "content", "")) if aggregated is not None else ""
+        return AIMessage(
+            content=_content_to_text(getattr(aggregated, "content", "")),
+            tool_calls=list(aggregated.tool_calls),
+            usage_metadata=usage or None,
+        )
+    text = (
+        _content_to_text(getattr(aggregated, "content", ""))
+        if aggregated is not None
+        else ""
+    )
     return AIMessage(content=text, tool_calls=[])
 
 
@@ -357,6 +395,7 @@ def _execute_turn(
     tool results (PlanGate). Pass None to keep the original behavior unchanged
     (this is what the S2 crew does — it has its own verify→fix loop).
     """
+
     def _emit(msg):
         convo.append(msg)
         if on_message is not None:
@@ -377,22 +416,30 @@ def _execute_turn(
 
     active_prompt = system_prompt
     last_input_tokens = 0  # updated each round from the model's usage_metadata
-    empty_retries = 0      # empty-response retry counter (see _MAX_EMPTY_RETRIES)
+    empty_retries = 0  # empty-response retry counter (see _MAX_EMPTY_RETRIES)
     for step_num in range(1, max_rounds + 1):
         # Context compaction: if the previous round's input_tokens exceeded the
         # trigger ratio, summarize old messages before this round's model call.
         # Uses the provider-reported count (exact, not a tokenizer guess). Skipped
         # on round 1 (no prior usage data) and when context_cfg is None/disabled.
-        if (context_cfg is not None and getattr(context_cfg, "enabled", False)
-                and step_num > 1 and last_input_tokens > 0):
+        if (
+            context_cfg is not None
+            and getattr(context_cfg, "enabled", False)
+            and step_num > 1
+            and last_input_tokens > 0
+        ):
             from coderio.agent.compact import compact_convo, should_compact
-            if should_compact(last_input_tokens,
-                              context_cfg.model_context_limit,
-                              context_cfg.trigger_ratio):
+
+            if should_compact(
+                last_input_tokens,
+                context_cfg.model_context_limit,
+                context_cfg.trigger_ratio,
+            ):
                 if hasattr(stream, "on_phase_change"):
                     stream.on_phase_change("compacting", step_num, "压缩上下文")
-                compacted = compact_convo(convo, model,
-                                          keep_recent=context_cfg.keep_recent)
+                compacted = compact_convo(
+                    convo, model, keep_recent=context_cfg.keep_recent
+                )
                 _apply_compaction(compacted, convo, on_compact)
 
         # Signal the UI to start its busy indicator BEFORE the model call. The
@@ -424,12 +471,17 @@ def _execute_turn(
             #   (2) Then inject a "please continue" nudge (Kimi Code's pattern).
             if not text.strip():
                 empty_retries += 1
-                if empty_retries == 1 and context_cfg is not None \
-                        and getattr(context_cfg, "enabled", False):
+                if (
+                    empty_retries == 1
+                    and context_cfg is not None
+                    and getattr(context_cfg, "enabled", False)
+                ):
                     from coderio.agent.compact import compact_convo
+
                     try:
-                        compacted = compact_convo(convo, model,
-                                                  keep_recent=context_cfg.keep_recent)
+                        compacted = compact_convo(
+                            convo, model, keep_recent=context_cfg.keep_recent
+                        )
                         _apply_compaction(compacted, convo, on_compact)
                     except Exception:
                         pass  # compaction failed — fall through to the nudge retry
@@ -441,12 +493,18 @@ def _execute_turn(
                     continue
                 # Too many empty retries — emit a visible notice and end the turn
                 # so the user knows what happened (vs. the UI silently freezing).
-                notice = ("(模型连续返回空响应，已重试 "
-                          f"{_MAX_EMPTY_RETRIES} 次仍无输出。可能是上下文过长或模型异常。"
-                          "请用 /clear 清理上下文后重试。)")
+                notice = (
+                    "(模型连续返回空响应，已重试 "
+                    f"{_MAX_EMPTY_RETRIES} 次仍无输出。可能是上下文过长或模型异常。"
+                    "请用 /clear 清理上下文后重试。)"
+                )
                 stream.on_tool_start("_empty_response", {})
                 stream.on_tool_end("_empty_response", notice)
-                _emit(Message.tool_result(tool_call_id="_empty", name="_empty_response", content=notice))
+                _emit(
+                    Message.tool_result(
+                        tool_call_id="_empty", name="_empty_response", content=notice
+                    )
+                )
             # --- Harness termination control (spec §3) ---
             # The model wants to stop, but the harness decides whether that's allowed.
             # Based on observed tool calls (ground truth), not the model's self-report.
@@ -473,20 +531,38 @@ def _execute_turn(
             _emit(Message.assistant(text))
             stream.on_finish()
             return TurnResult(text, in_tool_loop=_detected_loop)
-        _emit(Message.assistant(
-            _content_to_text(getattr(ai, "content", "")),
-            tool_calls=[ToolCall(id=tc["id"], name=tc["name"], args=dict(tc.get("args", {})))
-                        for tc in tool_calls],
-        ))
+        _emit(
+            Message.assistant(
+                _content_to_text(getattr(ai, "content", "")),
+                tool_calls=[
+                    ToolCall(
+                        id=tc["id"], name=tc["name"], args=dict(tc.get("args", {}))
+                    )
+                    for tc in tool_calls
+                ],
+            )
+        )
         for tool_index, tc in enumerate(tool_calls):
             name = tc["name"]
             args = dict(tc.get("args", {}))
-            stream.on_tool_start(name, args, step=step_num, tool_index=tool_index, tool_total=len(tool_calls))
+            stream.on_tool_start(
+                name,
+                args,
+                step=step_num,
+                tool_index=tool_index,
+                tool_total=len(tool_calls),
+            )
             if not gate.check(name, args):
-                result = f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
+                result = (
+                    f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
+                )
             else:
                 tool = skill_index.get(name)
-                result = _invoke_tool(tool, name, args) if tool else f"Error: unknown tool {name!r}"
+                result = (
+                    _invoke_tool(tool, name, args)
+                    if tool
+                    else f"Error: unknown tool {name!r}"
+                )
             # --- Harness observation + PlanGate augmentation (spec §3) ---
             # observe() records ground truth (writes / verifications) for the gates;
             # after_tool_call() may append a soft nudge to the result (never blocks).
@@ -509,7 +585,10 @@ def _execute_turn(
             # Both activate_skill and deactivate_skill change which skill bodies
             # are in the system prompt — refresh it so the next round sees the
             # updated active set.
-            if name in ("activate_skill", "deactivate_skill") and on_activate_skill is not None:
+            if (
+                name in ("activate_skill", "deactivate_skill")
+                and on_activate_skill is not None
+            ):
                 new_prompt = on_activate_skill()
                 if new_prompt:
                     active_prompt = new_prompt
@@ -555,13 +634,23 @@ def run_agent(
 
     # Stage auto-inject uses the TEXT part of the input (user_input may be a
     # multimodal content-block list; detect_stage needs a plain string).
-    _input_text = user_input if isinstance(user_input, str) else " ".join(
-        b.get("text", "") for b in user_input if isinstance(b, dict) and b.get("type") == "text"
+    _input_text = (
+        user_input
+        if isinstance(user_input, str)
+        else " ".join(
+            b.get("text", "")
+            for b in user_input
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
     )
     if stage_auto_inject:
         if stage := detect_stage(_input_text):
             skill_name = stage_skill(stage)
-            if skill_name and skill_store.has(skill_name) and not active_skills.is_active(skill_name):
+            if (
+                skill_name
+                and skill_store.has(skill_name)
+                and not active_skills.is_active(skill_name)
+            ):
                 active_skills.activate(skill_store.get(skill_name))
 
     system_prompt = build_system_prompt(skill_store, active_skills)
@@ -585,6 +674,7 @@ def run_agent(
         },
     )
     from coderio.tools.base import to_langchain_tool as _adapt
+
     langchain_tools = langchain_tools + [
         _adapt(activate_tool, activate_tool.args_schema),
         _adapt(deactivate_tool, deactivate_tool.args_schema),
@@ -600,13 +690,21 @@ def run_agent(
     if harness_enabled:
         from coderio.agent.harness import Harness, HarnessState
         from coderio.agent.state import AgentStateTracker
-        todo_store = next((t.store for t in tools if getattr(t, "name", "") == "todo"), None)
+
+        todo_store = next(
+            (t.store for t in tools if getattr(t, "name", "") == "todo"), None
+        )
         # If no TodoStore is reachable, the gates degrade gracefully (todos empty
         # -> plan gate always nudges, completion gate always skips). Build anyway.
         from coderio.tools.todo import TodoStore as _TS
+
         state_tracker = AgentStateTracker()
-        harness = Harness(state=HarnessState(), todos=todo_store or _TS(),
-                          state_tracker=state_tracker, stream=stream)
+        harness = Harness(
+            state=HarnessState(),
+            todos=todo_store or _TS(),
+            state_tracker=state_tracker,
+            stream=stream,
+        )
         # SESSION-LEVEL read-state seed: GroundingGate enforces "claims about
         # code must be grounded in actual source read", but the model legitimately
         # cites files read in PRIOR turns of the same session. Pre-fill from
@@ -616,11 +714,19 @@ def run_agent(
     # convo feeds the model; on_message persists every produced message to the session.
     convo = list(session.messages)
     turn_result = _execute_turn(
-        model=model, bound_cache=bound_cache, langchain_tools=langchain_tools,
-        system_prompt=system_prompt, convo=convo, skill_index=skill_index,
-        gate=gate, stream=stream, max_rounds=max_rounds,
-        on_message=session.append, on_activate_skill=_refresh_prompt,
-        harness=harness, context_cfg=context_cfg,
+        model=model,
+        bound_cache=bound_cache,
+        langchain_tools=langchain_tools,
+        system_prompt=system_prompt,
+        convo=convo,
+        skill_index=skill_index,
+        gate=gate,
+        stream=stream,
+        max_rounds=max_rounds,
+        on_message=session.append,
+        on_activate_skill=_refresh_prompt,
+        harness=harness,
+        context_cfg=context_cfg,
         on_compact=session.append,
     )
 
@@ -629,10 +735,14 @@ def run_agent(
     def _persist_timeline(tracker):
         if tracker is not None and tracker.timeline:
             import json
+
             tracker.finish(hint=turn_result.text[:80] if turn_result.text else "")
-            session.append(Message.system(
-                json.dumps(tracker.to_payload(), ensure_ascii=False),
-                kind="phase_timeline"))
+            session.append(
+                Message.system(
+                    json.dumps(tracker.to_payload(), ensure_ascii=False),
+                    kind="phase_timeline",
+                )
+            )
 
     _persist_timeline(state_tracker)
 
@@ -643,13 +753,16 @@ def run_agent(
     # loop forever; if the retry also fails, accept the original result.
     if turn_result.hit_max_rounds or turn_result.in_tool_loop:
         from coderio.agent.compact import compact_convo
+
         # Build a checkpoint summary from the bloated convo, then retry with a
         # fresh conversation carrying just the summary.
         try:
             checkpoint = compact_convo(convo, model, keep_recent=6)
             if len(checkpoint) < len(convo):  # only restart if compaction shrank it
                 if hasattr(stream, "on_phase_change"):
-                    stream.on_phase_change("restart", 0, "检测到上下文衰败，正在从压缩上下文重试")
+                    stream.on_phase_change(
+                        "restart", 0, "检测到上下文衰败，正在从压缩上下文重试"
+                    )
                 # Append a restart-checkpoint marker so the retry's session shows
                 # why the context jumped. The summary itself is context_summary kind.
                 for m in checkpoint:
@@ -658,11 +771,17 @@ def run_agent(
                 # Retry: rebuild convo from the compacted version (fresh tracker).
                 convo2 = list(checkpoint)
                 from coderio.agent.state import AgentStateTracker as _AST
+
                 tracker2 = _AST()
                 if harness is not None:
                     from coderio.agent.harness import HarnessState as _HS
-                    harness2 = Harness(state=_HS(), todos=harness.todos,
-                                       state_tracker=tracker2, stream=stream)
+
+                    harness2 = Harness(
+                        state=_HS(),
+                        todos=harness.todos,
+                        state_tracker=tracker2,
+                        stream=stream,
+                    )
                     # Re-seed session-level read-state: the restart's convo2 has
                     # lost tool_call history to compaction, so without this the
                     # GroundingGate would force-re-read every cited file.
@@ -670,11 +789,19 @@ def run_agent(
                 else:
                     harness2 = None
                 turn_result = _execute_turn(
-                    model=model, bound_cache=bound_cache, langchain_tools=langchain_tools,
-                    system_prompt=system_prompt, convo=convo2, skill_index=skill_index,
-                    gate=gate, stream=stream, max_rounds=max_rounds,
-                    on_message=session.append, on_activate_skill=_refresh_prompt,
-                    harness=harness2, context_cfg=context_cfg,
+                    model=model,
+                    bound_cache=bound_cache,
+                    langchain_tools=langchain_tools,
+                    system_prompt=system_prompt,
+                    convo=convo2,
+                    skill_index=skill_index,
+                    gate=gate,
+                    stream=stream,
+                    max_rounds=max_rounds,
+                    on_message=session.append,
+                    on_activate_skill=_refresh_prompt,
+                    harness=harness2,
+                    context_cfg=context_cfg,
                     on_compact=session.append,
                 )
                 _persist_timeline(tracker2)

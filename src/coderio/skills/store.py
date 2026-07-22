@@ -43,17 +43,25 @@ class SkillStore:
         # The first group is the core CODE-workflow chain (the pipeline skeleton).
         groups = {
             "CODE 工作流主链（编码时按阶段激活）": [
-                "clarifying-questions", "spec-writing", "task-breakdown",
-                "executing-plans", "verify-and-fix", "commit-message",
+                "clarifying-questions",
+                "spec-writing",
+                "task-breakdown",
+                "executing-plans",
+                "verify-and-fix",
+                "commit-message",
             ],
             "CODE 执行段（写完代码后按需）": [
-                "testing", "debugging", "code-review",
+                "testing",
+                "debugging",
+                "code-review",
             ],
             "横切（任何阶段按需）": [
-                "naming", "error-handling",
+                "naming",
+                "error-handling",
             ],
             "上手/元": [
-                "onboarding-unknown-codebase", "lion-writing-skills",
+                "onboarding-unknown-codebase",
+                "lion-writing-skills",
             ],
         }
         lines = []

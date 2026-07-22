@@ -6,7 +6,9 @@ from pathlib import Path
 def _make(tmp_path, name, desc, body):
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8")
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8"
+    )
 
 
 def test_prompt_lists_available_skills(tmp_path):
@@ -37,9 +39,9 @@ def test_core_chain_bodies_not_injected_by_default(tmp_path):
     store = SkillStore()
     store._load_layer(tmp_path, "user")
     prompt = build_system_prompt(store, ActiveSkills())
-    assert "CLARIFY BODY" not in prompt   # body NOT injected by default
+    assert "CLARIFY BODY" not in prompt  # body NOT injected by default
     assert "SPEC BODY" not in prompt
-    assert "clarify" in prompt            # but description IS listed
+    assert "clarify" in prompt  # but description IS listed
     assert "spec" in prompt
 
 
@@ -52,7 +54,7 @@ def test_activated_skill_body_is_injected(tmp_path):
     active = ActiveSkills()
     active.activate(store.get("clarifying-questions"))
     prompt = build_system_prompt(store, active)
-    assert "CLARIFY BODY" in prompt       # activated → body present
+    assert "CLARIFY BODY" in prompt  # activated → body present
 
 
 def _empty_store():
@@ -122,11 +124,14 @@ def test_system_prompt_is_small_under_progressive_disclosure():
     prompt = build_system_prompt(_bundled_store(), ActiveSkills())
     assert len(prompt) < 15000, (
         f"System prompt is {len(prompt)} chars — too big. Skill bodies may have "
-        "regressed to bulk injection instead of on-demand activate_skill.")
+        "regressed to bulk injection instead of on-demand activate_skill."
+    )
+
 
 def _bundled_store():
     from coderio.skills.store import load_skill_store
     from pathlib import Path
+
     bundled = Path(__file__).resolve().parents[2] / "src" / "coderio" / "skills"
     return load_skill_store(bundled, None, None)
 
@@ -173,4 +178,5 @@ def test_skill_descriptions_are_trimmed():
     assert vf is not None
     assert len(vf.description) < 60, (
         f"verify-and-fix description not trimmed (len={len(vf.description)}); "
-        "expected Lion-Skills 0.3.0 (~26 chars)")
+        "expected Lion-Skills 0.3.0 (~26 chars)"
+    )

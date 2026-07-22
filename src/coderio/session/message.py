@@ -41,7 +41,9 @@ class Message:
         return cls(role="user", content=content)
 
     @classmethod
-    def assistant(cls, content: str, tool_calls: list[ToolCall] | None = None) -> "Message":
+    def assistant(
+        cls, content: str, tool_calls: list[ToolCall] | None = None
+    ) -> "Message":
         return cls(role="assistant", content=content, tool_calls=tool_calls)
 
     @classmethod
@@ -71,7 +73,9 @@ class Message:
         return cls(
             role=d["role"],
             content=d.get("content", ""),
-            tool_calls=[ToolCall.from_dict(tc) for tc in d.get("tool_calls")] if d.get("tool_calls") else None,
+            tool_calls=[ToolCall.from_dict(tc) for tc in d.get("tool_calls")]
+            if d.get("tool_calls")
+            else None,
             tool_call_id=d.get("tool_call_id"),
             name=d.get("name"),
             kind=d.get("kind", ""),

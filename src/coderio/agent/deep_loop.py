@@ -15,6 +15,7 @@ coderio's tool names. So run_deep_agent uses deepagents' built-in toolset
 (plus any coderio extras passed via extra_tools) rather than coderio's
 build_default_tools. This is by design — the deepagents engine owns its FS.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,7 +38,9 @@ def _content_to_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
         )
     return str(content) if content else ""
 
@@ -57,20 +60,26 @@ class _WinLocalShellBackend:
 
     def __init__(self, **kwargs):
         from deepagents.backends import LocalShellBackend
+
         self._inner = LocalShellBackend(**kwargs)
 
     def execute(self, command, **kwargs):
         import subprocess
+
         inner = self._inner
         timeout = kwargs.get("timeout", 120)
-        env = inner.env if hasattr(inner, "env") else None
         import os as _os
+
         run_env = _os.environ.copy() if inner.inherit_env else {}
         if inner.env:
             run_env.update(inner.env)
         try:
             result = subprocess.run(
-                command, shell=True, capture_output=True, timeout=timeout, env=run_env,
+                command,
+                shell=True,
+                capture_output=True,
+                timeout=timeout,
+                env=run_env,
             )
             out = (result.stdout or b"").decode("utf-8", errors="replace")
             err = (result.stderr or b"").decode("utf-8", errors="replace")
@@ -78,13 +87,26 @@ class _WinLocalShellBackend:
             if err:
                 combined += ("\n[stderr]\n" + err) if out else ("[stderr]\n" + err)
             from deepagents.backends.protocol import ExecuteResponse
-            return ExecuteResponse(output=combined or "<no output>", exit_code=result.returncode, truncated=False)
+
+            return ExecuteResponse(
+                output=combined or "<no output>",
+                exit_code=result.returncode,
+                truncated=False,
+            )
         except subprocess.TimeoutExpired:
             from deepagents.backends.protocol import ExecuteResponse
-            return ExecuteResponse(output=f"Error: command timed out after {timeout}s", exit_code=-1, truncated=False)
+
+            return ExecuteResponse(
+                output=f"Error: command timed out after {timeout}s",
+                exit_code=-1,
+                truncated=False,
+            )
         except Exception as e:
             from deepagents.backends.protocol import ExecuteResponse
-            return ExecuteResponse(output=f"Error: {type(e).__name__}: {e}", exit_code=-1, truncated=False)
+
+            return ExecuteResponse(
+                output=f"Error: {type(e).__name__}: {e}", exit_code=-1, truncated=False
+            )
 
     def __getattr__(self, name):
         # Delegate all other backend methods (read/write/edit/glob/grep/ls/...) to the inner backend.
@@ -136,10 +158,13 @@ def run_deep_agent(
     if system_prompt is None:
         from coderio.agent.prompts import ActiveSkills, build_system_prompt
         from coderio.skills.store import SkillStore
+
         sp = build_system_prompt(SkillStore(), ActiveSkills())
-        system_prompt = (sp.replace("run bash commands", "run shell commands via the `execute` tool")
-                          .replace("use bash to execute", "use `execute` to run")
-                          .replace("call bash", "call `execute`"))
+        system_prompt = (
+            sp.replace("run bash commands", "run shell commands via the `execute` tool")
+            .replace("use bash to execute", "use `execute` to run")
+            .replace("call bash", "call `execute`")
+        )
 
     # The harness middleware observes tool calls and intercepts unverified "done".
     middleware = [HarnessMiddleware(stream=stream, enabled=harness_enabled)]
@@ -173,7 +198,10 @@ def run_deep_agent(
 
     # Drive the graph, mapping deepagents stream events → coderio StreamHandler.
     final_text = ""
-    config = {"recursion_limit": recursion_limit, "configurable": {"thread_id": f"deep-{id(user_input)}"}}
+    config = {
+        "recursion_limit": recursion_limit,
+        "configurable": {"thread_id": f"deep-{id(user_input)}"},
+    }
     inputs = {"messages": [HumanMessage(content=user_input)]}
 
     if hasattr(stream, "on_step_start"):
@@ -215,13 +243,29 @@ def _emit_message(m, stream, session) -> None:
         if tool_calls:
             # Emit tool-start for each call.
             from coderio.session import ToolCall
+
             tcs = []
             for tc in tool_calls:
-                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                args = dict(tc.get("args", {})) if isinstance(tc, dict) else dict(getattr(tc, "args", {}))
+                name = (
+                    tc.get("name", "")
+                    if isinstance(tc, dict)
+                    else getattr(tc, "name", "")
+                )
+                args = (
+                    dict(tc.get("args", {}))
+                    if isinstance(tc, dict)
+                    else dict(getattr(tc, "args", {}))
+                )
                 stream.on_tool_start(name, args)
-                tcs.append(ToolCall(id=tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
-                                    name=name, args=args))
+                tcs.append(
+                    ToolCall(
+                        id=tc.get("id", "")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "id", ""),
+                        name=name,
+                        args=args,
+                    )
+                )
             session.append(Message.assistant(text, tool_calls=tcs))
         elif text:
             session.append(Message.assistant(text))

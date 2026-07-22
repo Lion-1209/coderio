@@ -34,7 +34,9 @@ def _load_store() -> SkillStore:
 def main(
     ctx: typer.Context,
     resume: str = typer.Option(None, "--resume", help="Resume a session by id."),
-    continue_last: bool = typer.Option(False, "--continue", help="Resume most recent session."),
+    continue_last: bool = typer.Option(
+        False, "--continue", help="Resume most recent session."
+    ),
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
 ):
@@ -47,9 +49,12 @@ def main(
         return
     ensure_user_dirs()
     from coderio.cli.tui import run_tui
+
     run_tui(
-        provider_override=provider, model_override=model,
-        resume=resume, continue_last=continue_last,
+        provider_override=provider,
+        model_override=model,
+        resume=resume,
+        continue_last=continue_last,
     )
 
 
@@ -67,11 +72,14 @@ def skills_list():
 
 @skills_app.command("install")
 def skills_install(
-    repo: str = typer.Option(None, "--repo", help="Git repo URL (default: Lion-Skills)."),
+    repo: str = typer.Option(
+        None, "--repo", help="Git repo URL (default: Lion-Skills)."
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite non-git target."),
 ):
     """Install/update skills from a git repo (default: Lion-Skills)."""
     from coderio.cli.skills_cmd import install_skills
+
     cfg = load_config()
     repo_url = repo or cfg.skills.repo_url
     result = install_skills(repo_url, _user_skills_dir(), force=force)
@@ -105,6 +113,7 @@ def config_cmd():
     effective_base_url = cfg.model.base_url
     if cfg.model.provider_id:
         from coderio.cli.providers import get_provider
+
         info = get_provider(cfg.model.provider_id)
         if info is not None:
             effective_base_url = info.base_url or "(user-supplied at runtime)"
@@ -130,6 +139,7 @@ def main_entry() -> None:
     # here makes `coderio --help` and `coderio config` work in any locale —
     # matching the behavior Linux/macOS users get by default.
     import sys
+
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is not None and hasattr(stream, "reconfigure"):
@@ -140,7 +150,7 @@ def main_entry() -> None:
     app()
 
 
-from coderio.crew.cli_cmd import register as register_crew
+from coderio.crew.cli_cmd import register as register_crew  # noqa: E402
 
 register_crew(app)
 

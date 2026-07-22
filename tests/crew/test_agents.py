@@ -7,13 +7,28 @@ BUNDLED = Path(__file__).resolve().parents[2] / "src" / "coderio" / "skills"
 
 def _store():
     from coderio.skills.store import load_skill_store
+
     return load_skill_store(BUNDLED, None, None)
 
 
 def test_six_roles_in_order():
     roles = build_agent_roles(_store())
-    assert [r.stage for r in roles] == ["clarify", "spec", "task", "execute", "verify", "commit"]
-    assert [r.name for r in roles] == ["Clarifier", "SpecWriter", "TaskPlanner", "Implementer", "Verifier", "Committer"]
+    assert [r.stage for r in roles] == [
+        "clarify",
+        "spec",
+        "task",
+        "execute",
+        "verify",
+        "commit",
+    ]
+    assert [r.name for r in roles] == [
+        "Clarifier",
+        "SpecWriter",
+        "TaskPlanner",
+        "Implementer",
+        "Verifier",
+        "Committer",
+    ]
 
 
 def test_clarifier_has_no_write_tools():
@@ -31,7 +46,9 @@ def test_implementer_has_all_tools():
     roles = build_agent_roles(_store())
     impl = next(r for r in roles if r.stage == "execute")
     tool_names = {t.name for t in impl.tools}
-    assert frozenset({"bash", "grep", "glob", "write_file", "read_file", "edit_file"}).issubset(tool_names)
+    assert frozenset(
+        {"bash", "grep", "glob", "write_file", "read_file", "edit_file"}
+    ).issubset(tool_names)
 
 
 def test_verifier_cannot_write():
@@ -55,7 +72,14 @@ def test_committer_only_git_read_and_bash():
 def test_human_pause_only_at_clarify_and_spec():
     roles = build_agent_roles(_store())
     pauses = {r.stage: r.human_pause for r in roles}
-    assert pauses == {"clarify": True, "spec": True, "task": False, "execute": False, "verify": False, "commit": False}
+    assert pauses == {
+        "clarify": True,
+        "spec": True,
+        "task": False,
+        "execute": False,
+        "verify": False,
+        "commit": False,
+    }
 
 
 def test_reads_and_writes():

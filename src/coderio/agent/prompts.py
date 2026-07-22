@@ -8,6 +8,7 @@ from coderio.skills.store import SkillStore
 @dataclass
 class ActiveSkills:
     """Tracks currently-active skills for the session (spec §2.4)."""
+
     _active: dict = field(default_factory=dict)  # name -> Skill
 
     def activate(self, skill) -> bool:
@@ -42,11 +43,16 @@ def _os_context() -> str:
     bash on Linux/macOS). Telling the model the wrong OS causes it to emit
     wrong path styles or platform-specific idioms."""
     import sys
+
     if sys.platform == "win32":
-        return ("You are coderio, a coding agent working in the user's project on Windows.\n"
-                "You have tools to read/write/edit files, run bash commands (Git Bash), search, manage")
-    return ("You are coderio, a coding agent working in the user's project.\n"
-            "You have tools to read/write/edit files, run bash commands, search, manage")
+        return (
+            "You are coderio, a coding agent working in the user's project on Windows.\n"
+            "You have tools to read/write/edit files, run bash commands (Git Bash), search, manage"
+        )
+    return (
+        "You are coderio, a coding agent working in the user's project.\n"
+        "You have tools to read/write/edit files, run bash commands, search, manage"
+    )
 
 
 _BASE_INSTRUCTIONS = """\
@@ -203,14 +209,15 @@ def build_system_prompt(store: SkillStore, active: ActiveSkills) -> str:
             "Available skills — ACTIVATE the matching one before starting non-trivial work "
             "(call activate_skill(name) to load its full playbook). Skills give you a "
             "structured methodology; without one you're freestyling and likely missing "
-            "systemic issues. Match by the task, not by guessing:\n"
-            + descs
+            "systemic issues. Match by the task, not by guessing:\n" + descs
         )
 
     # Explicitly user/model-activated skills: their bodies ARE injected (the model
     # asked for them, so they're now in context).
     active_bodies = [s.body for s in active.all()]
     if active_bodies:
-        parts.append("Active skill playbooks (loaded into context):\n\n"
-                     + "\n\n---\n\n".join(active_bodies))
+        parts.append(
+            "Active skill playbooks (loaded into context):\n\n"
+            + "\n\n---\n\n".join(active_bodies)
+        )
     return "\n\n".join(parts)

@@ -3,6 +3,7 @@
 Verifies the compaction algorithm preserves tool_call/tool_result pairs, handles
 model failures gracefully, and the should_compact threshold logic.
 """
+
 from coderio.agent.compact import (
     compact_convo,
     should_compact,
@@ -13,8 +14,10 @@ from coderio.session.message import Message, ToolCall
 
 # --- Fake model for summary calls ---
 
+
 class _FakeModel:
     """Returns a canned summary. Records the prompt it received."""
+
     def __init__(self, summary_text="这是摘要", fail=False):
         self._summary = summary_text
         self._fail = fail
@@ -24,9 +27,11 @@ class _FakeModel:
         self.received_prompt = prompt
         if self._fail:
             raise RuntimeError("simulated model failure")
+
         # langchain-like response object
         class _Resp:
             content = self._summary
+
         return _Resp()
 
 
@@ -47,15 +52,22 @@ def _make_convo_with_tool_calls() -> list[Message]:
         msgs.append(Message.user(f"用户消息 {i}"))
         msgs.append(Message.assistant(f"助手回复 {i}"))
     # Recent tool activity (must be kept verbatim)
-    msgs.append(Message.assistant("读取文件", tool_calls=[
-        ToolCall(id="c1", name="read_file", args={"path": "a.py"})]))
-    msgs.append(Message.tool_result(tool_call_id="c1", name="read_file", content="file body"))
+    msgs.append(
+        Message.assistant(
+            "读取文件",
+            tool_calls=[ToolCall(id="c1", name="read_file", args={"path": "a.py"})],
+        )
+    )
+    msgs.append(
+        Message.tool_result(tool_call_id="c1", name="read_file", content="file body")
+    )
     msgs.append(Message.user("继续"))
     msgs.append(Message.assistant("好的"))
     return msgs
 
 
 # --- should_compact ---
+
 
 def test_should_compact_above_threshold():
     assert should_compact(100_000, context_limit=128_000, trigger_ratio=0.75) is True
@@ -75,6 +87,7 @@ def test_should_compact_disabled_when_ratio_zero():
 
 # --- _find_safe_split (tool_call pair protection) ---
 
+
 def test_safe_split_keeps_tool_call_pair_together():
     """Split point must not land between an assistant(tool_calls) and its tool result."""
     convo = _make_convo_with_tool_calls()
@@ -89,8 +102,9 @@ def test_safe_split_keeps_tool_call_pair_together():
                 tool_call_ids_in_kept.add(tc.id)
     for m in kept:
         if m.role == "tool":
-            assert m.tool_call_id in tool_call_ids_in_kept, \
+            assert m.tool_call_id in tool_call_ids_in_kept, (
                 f"tool result {m.tool_call_id} orphaned by split at {split}"
+            )
 
 
 def test_safe_split_never_negative():
@@ -101,6 +115,7 @@ def test_safe_split_never_negative():
 
 
 # --- compact_convo: core behavior ---
+
 
 def test_compact_short_convo_returns_unchanged():
     """Too few messages → no compaction, original convo returned."""
@@ -150,8 +165,9 @@ def test_compact_preserves_tool_call_pairs_in_kept():
                 issued_ids.add(tc.id)
     for m in result:
         if m.role == "tool":
-            assert m.tool_call_id in issued_ids, \
+            assert m.tool_call_id in issued_ids, (
                 "compaction produced an orphan tool result"
+            )
 
 
 def test_compact_does_not_mutate_input():

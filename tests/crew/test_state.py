@@ -1,6 +1,9 @@
 from coderio.crew.state import (
-    ProjectState, CrewState, crew_state_to_project_state,
-    _overwrite, _append_list,
+    ProjectState,
+    CrewState,
+    crew_state_to_project_state,
+    _overwrite,
+    _append_list,
 )
 
 
@@ -43,6 +46,7 @@ def test_errors_list_is_independent():
 
 
 # --- CrewState (LangGraph) reducers + converter ---
+
 
 def test_overwrite_reducer_replaces():
     """A role's write replaces the field's prior value (not append)."""

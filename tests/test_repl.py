@@ -5,14 +5,21 @@ from coderio.cli.repl import build_runtime, build_gate, _resolve_resume
 from coderio.config import Config
 from coderio.session import Message
 from coderio.session.store import Session
-from coderio.tools.permission import RichPromptPermissionGate, AutoPermissionGate, PermissionGate, PermissionMode
+from coderio.tools.permission import (
+    RichPromptPermissionGate,
+    AutoPermissionGate,
+    PermissionGate,
+    PermissionMode,
+)
 
 
 def test_build_runtime_assembles_pieces(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     cfg, store, model, tools, gate, session, active, stream = build_runtime(
-        search_from=str(tmp_path), save_dir=tmp_path / "no-creds", mode_override="confirm",
+        search_from=str(tmp_path),
+        save_dir=tmp_path / "no-creds",
+        mode_override="confirm",
     )
     assert cfg.tools.permission_mode == "confirm"
     assert len(tools) >= 9
@@ -25,12 +32,15 @@ def test_default_mode_uses_concrete_gate_not_abstract(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _, _, _, _, gate, _, _, _ = build_runtime(
-        search_from=str(tmp_path), save_dir=tmp_path / "no-creds", mode_override="confirm",
+        search_from=str(tmp_path),
+        save_dir=tmp_path / "no-creds",
+        mode_override="confirm",
     )
     assert isinstance(gate, RichPromptPermissionGate)
 
     import sys
     from io import StringIO
+
     old, sys.stdin = sys.stdin, StringIO("\n")
     try:
         result = gate.check("bash", {"command": "ls"})

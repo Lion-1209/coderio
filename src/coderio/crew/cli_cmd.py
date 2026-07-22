@@ -60,6 +60,7 @@ def run_crew(
     else:
         gate = _build_crew_gate(cfg, console)
     from coderio.cli.stream import RichStream
+
     stream = RichStream(console)
 
     console.print(
@@ -72,7 +73,9 @@ def run_crew(
     )
 
     def on_pause(stage: str, output: str) -> str:
-        console.print(Panel(output, title=f"[{stage}] 产出 — 请回应", border_style="yellow"))
+        console.print(
+            Panel(output, title=f"[{stage}] 产出 — 请回应", border_style="yellow")
+        )
         return console.input("[bold]你的回应 (回车=接受默认):[/bold] ")
 
     orch = CrewOrchestrator(
@@ -93,7 +96,7 @@ def run_crew(
     status_cfg = {
         "success": ("✓ crew 完成", "green"),
         "partial": ("⚠ crew 完成（验证未通过，请人工复核）", "yellow"),
-        "failed":  ("✗ crew 失败", "red"),
+        "failed": ("✗ crew 失败", "red"),
     }
     title, border = status_cfg.get(state.status, status_cfg["success"])
     console.print(
@@ -110,7 +113,9 @@ def register(app):
     @app.command("crew")
     def crew_cmd(
         request: str = typer.Argument(..., help="需求描述，用引号包起来"),
-        auto_mode: bool = typer.Option(False, "--auto", help="全自动，跳过 clarify/spec 暂停"),
+        auto_mode: bool = typer.Option(
+            False, "--auto", help="全自动，跳过 clarify/spec 暂停"
+        ),
     ):
         """跑完整的多 agent 流水线 (clarify→spec→task→execute→verify→commit)。"""
         run_crew(request, auto_mode)

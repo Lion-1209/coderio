@@ -32,7 +32,9 @@ def test_grep_content(tmp_path):
 def test_grep_files_only(tmp_path):
     _setup(tmp_path)
     tool = GrepTool()
-    out = tool.run(pattern="import", path=str(tmp_path), output_mode="files_with_matches")
+    out = tool.run(
+        pattern="import", path=str(tmp_path), output_mode="files_with_matches"
+    )
     assert "a.py" in out
 
 

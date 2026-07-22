@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from coderio.skills.store import SkillStore
-from coderio.agent.skill_tool import ActivateSkillTool, DeactivateSkillTool, ActiveSkills
+from coderio.agent.skill_tool import (
+    ActivateSkillTool,
+    DeactivateSkillTool,
+    ActiveSkills,
+)
 
 
 def _make(tmp_path):

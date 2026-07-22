@@ -64,6 +64,7 @@ class CrewState(TypedDict, total=False):
     `total=False` so run() can seed only a subset (request + fix_attempts=0);
     LangGraph treats absent keys per their reducer.
     """
+
     request: Annotated[str, _overwrite]
     current_stage: Annotated[str, _overwrite]
     clarification: Annotated[str, _overwrite]

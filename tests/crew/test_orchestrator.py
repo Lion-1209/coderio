@@ -26,6 +26,7 @@ def _model_returning_per_call(*responses):
 
 def _store_with_skills():
     from coderio.skills.store import load_skill_store
+
     bundled = Path(__file__).resolve().parents[2] / "skills"
     return load_skill_store(bundled, 0, None)
 
@@ -40,8 +41,11 @@ def test_orchestrator_runs_six_stages_in_order():
         AIMessage(content="commit msg done", tool_calls=[]),
     )
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     state = orch.run("build a snake game")
     assert state.clarification == "clarification done"
@@ -69,8 +73,12 @@ def test_orchestrator_calls_pause_callback_at_clarify_and_spec():
         AIMessage(content="x", tool_calls=[]),
     )
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=False, on_pause=on_pause,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=False,
+        on_pause=on_pause,
     )
     state = orch.run("req")
     assert pauses == ["clarify", "spec"]
@@ -90,8 +98,12 @@ def test_auto_mode_skips_pauses():
         AIMessage(content="x", tool_calls=[]),
     )
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True, on_pause=lambda s, o: pauses.append(s),
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
+        on_pause=lambda s, o: pauses.append(s),
     )
     state = orch.run("req")
     assert pauses == []
@@ -106,18 +118,26 @@ def test_read_context_injected_into_prompt():
         AIMessage(content="x", tool_calls=[]),
     )
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     state = orch.run("req")
-    role_prompt = orch._build_prompt(next(r for r in orch.roles if r.stage == "spec"), state)
+    role_prompt = orch._build_prompt(
+        next(r for r in orch.roles if r.stage == "spec"), state
+    )
     assert "prior clar" in role_prompt
 
 
 def test_verification_passed_heuristic():
     orch = CrewOrchestrator(
-        model=MagicMock(), store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=MagicMock(),
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     assert orch._verification_passed("验证结果：PASS，满足要求")
     assert orch._verification_passed("通过")
@@ -133,17 +153,18 @@ def test_verification_structured_marker_wins_over_keywords():
     explicitly and the misleading 'failed' in the prose is ignored.
     """
     orch = CrewOrchestrator(
-        model=MagicMock(), store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=MagicMock(),
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     # PASS verdict despite 'failed' appearing in the prose (the classic false positive).
     assert orch._verification_passed(
         "Ran the full suite; failed to reproduce any bug.\n[CREW_VERIFY] PASS"
     )
     # FAIL verdict explicitly.
-    assert not orch._verification_passed(
-        "2 tests still red.\n[CREW_VERIFY] FAIL"
-    )
+    assert not orch._verification_passed("2 tests still red.\n[CREW_VERIFY] FAIL")
     # Marker present but verdict unreadable → FAIL-CLOSED (no longer defaults to
     # pass). The old fail-open behavior let an unreadable verdict count as pass,
     # masking real verification failures.
@@ -170,8 +191,12 @@ def test_verify_fail_triggers_fix_loop():
     ]
     model = _model_returning_per_call(*responses)
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True, max_fix_loops=2,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
+        max_fix_loops=2,
     )
     state = orch.run("req")
     assert state.fix_attempts == 1
@@ -196,15 +221,20 @@ def test_fix_loop_respects_max():
     ]
     model = _model_returning_per_call(*responses)
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True, max_fix_loops=1,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
+        max_fix_loops=1,
     )
     state = orch.run("req")
     assert state.fix_attempts == 1
     assert state.commit_message == "commit"
     assert state.status == "partial", (
         "budget-exhausted + verification still failing must be 'partial', not "
-        "'success' — the old fail-open logic masked this as a clean success")
+        "'success' — the old fail-open logic masked this as a clean success"
+    )
 
 
 def test_passing_verify_yields_success_status():
@@ -219,8 +249,11 @@ def test_passing_verify_yields_success_status():
     ]
     model = _model_returning_per_call(*responses)
     orch = CrewOrchestrator(
-        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=model,
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     state = orch.run("req")
     assert state.status == "success"
@@ -231,8 +264,11 @@ def test_fix_feedback_injected_into_implementer_prompt():
     state = ProjectState(request="req")
     state.fix_feedback = "FAIL: 测试缺失，需补测试"
     orch = CrewOrchestrator(
-        model=MagicMock(), store=_store_with_skills(), gate=AutoPermissionGate(),
-        stream=NullStream(), auto_mode=True,
+        model=MagicMock(),
+        store=_store_with_skills(),
+        gate=AutoPermissionGate(),
+        stream=NullStream(),
+        auto_mode=True,
     )
     impl_role = next(r for r in orch.roles if r.stage == "execute")
     prompt = orch._build_prompt(impl_role, state)

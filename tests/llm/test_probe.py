@@ -4,13 +4,13 @@ The probe is best-effort: any failure returns 0, never raises. These tests
 cover the happy path (extracting context_length from various provider response
 shapes) and the failure paths (network errors, missing fields, weird types).
 """
+
 from coderio.llm.probe import probe_context_limit, _extract_context_limit
 
 
 def test_extract_from_openai_compatible_top_level():
     """StepFun/DeepSeek/Together often put context_length at top level."""
-    payload = {"id": "step-3.7-flash", "object": "model",
-               "context_length": 256000}
+    payload = {"id": "step-3.7-flash", "object": "model", "context_length": 256000}
     assert _extract_context_limit(payload) == 256000
 
 
@@ -22,8 +22,9 @@ def test_extract_from_anthropic_nested_data():
 
 def test_extract_from_openai_list_shape():
     """OpenAI /v1/models returns {'data': [{...}, ...]}."""
-    payload = {"data": [{"id": "gpt-4o", "context_length": 128000},
-                        {"id": "gpt-4o-mini"}]}
+    payload = {
+        "data": [{"id": "gpt-4o", "context_length": 128000}, {"id": "gpt-4o-mini"}]
+    }
     assert _extract_context_limit(payload) == 128000
 
 
@@ -70,9 +71,11 @@ def test_probe_returns_zero_on_network_failure(monkeypatch):
 
     def _raise(*a, **kw):
         raise urllib.error.URLError("connection refused")
+
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _raise)
-    n = probe_context_limit("openai_compatible",
-                            "https://api.example.com/v1", "key", "model-x")
+    n = probe_context_limit(
+        "openai_compatible", "https://api.example.com/v1", "key", "model-x"
+    )
     assert n == 0
 
 
@@ -94,6 +97,7 @@ def test_probe_returns_zero_on_http_error(monkeypatch):
 
     def _404(*a, **kw):
         raise urllib.error.HTTPError("url", 404, "Not Found", {}, None)
+
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _404)
     n = probe_context_limit("anthropic", "https://api.anthropic.com", "key", "x")
     assert n == 0
@@ -108,7 +112,8 @@ def test_probe_happy_path_openai_compatible(monkeypatch):
 
         def __init__(self):
             self._payload = json.dumps(
-                {"id": "step-3.7-flash", "context_length": 256000}).encode()
+                {"id": "step-3.7-flash", "context_length": 256000}
+            ).encode()
 
         def read(self):
             return self._payload
@@ -123,12 +128,11 @@ def test_probe_happy_path_openai_compatible(monkeypatch):
         # Verify the URL was constructed for OpenAI-compatible path
         assert "/v1/models/step-3.7-flash" in req.full_url, req.full_url
         return _Resp()
+
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _ok)
     n = probe_context_limit(
-        "openai_compatible",
-        "https://api.stepfun.com/v1",
-        "sk-test",
-        "step-3.7-flash")
+        "openai_compatible", "https://api.stepfun.com/v1", "sk-test", "step-3.7-flash"
+    )
     assert n == 256000
 
 
@@ -154,9 +158,11 @@ def test_probe_happy_path_anthropic(monkeypatch):
         captured["url"] = req.full_url
         captured["headers"] = req.headers
         return _Resp()
+
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _ok)
     n = probe_context_limit(
-        "anthropic", "https://api.anthropic.com", "sk-ant", "claude-x")
+        "anthropic", "https://api.anthropic.com", "sk-ant", "claude-x"
+    )
     assert n == 200000
     # Anthropic uses x-api-key header (urllib normalizes header name casing)
     headers_lower = {k.lower(): v for k, v in captured["headers"].items()}

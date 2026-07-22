@@ -3,6 +3,7 @@
 These test Harness in isolation — no loop, no model. The loop-integration tests
 (those that check the harness actually intercepts run_agent) live in test_loop.py.
 """
+
 from coderio.agent.harness import Harness, HarnessState
 from coderio.tools.todo import TodoStore, Todo
 
@@ -233,7 +234,9 @@ def test_verify_gate_failed_pytest_does_not_clear():
     """
     h = _harness()
     h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
-    h.observe("bash", {"command": "pytest -q"}, "FAILED tests/test_foo.py\n[exit_code: 1]")
+    h.observe(
+        "bash", {"command": "pytest -q"}, "FAILED tests/test_foo.py\n[exit_code: 1]"
+    )
     cont, inject, warn = h.check_termination("done")
     assert cont is True, "failed pytest must NOT satisfy VerifyGate"
 
@@ -261,6 +264,7 @@ def test_verify_gate_missing_exit_code_back_compat():
 def test_parse_exit_code():
     """Unit test for the exit-code extraction helper."""
     from coderio.agent.harness import _parse_exit_code
+
     assert _parse_exit_code("out\n[exit_code: 0]") == 0
     assert _parse_exit_code("out\n[exit_code: 1]") == 1
     assert _parse_exit_code("out\n[exit_code: -1]") == -1
@@ -278,19 +282,27 @@ def test_is_success_rejects_permission_denied():
     triggering the VerifyGate on a file that was never actually written.
     """
     from coderio.agent.harness import _is_success
+
     assert _is_success("Wrote 50 chars to a.py") is True
     assert _is_success("Error: file not found") is False
-    assert _is_success("Permission denied: tool 'write_file' blocked in plan mode.") is False
+    assert (
+        _is_success("Permission denied: tool 'write_file' blocked in plan mode.")
+        is False
+    )
     assert _is_success("") is False
 
 
 def test_permission_denied_write_not_recorded():
     """REGRESSION (P0): permission-denied writes don't enter writes_since_verify."""
     h = _harness()
-    h.observe("write_file", {"path": "a.py"},
-              "Permission denied: tool 'write_file' blocked in plan mode.")
+    h.observe(
+        "write_file",
+        {"path": "a.py"},
+        "Permission denied: tool 'write_file' blocked in plan mode.",
+    )
     assert h.state.writes_since_verify == [], (
-        "permission-denied write should not be tracked as an unverified write")
+        "permission-denied write should not be tracked as an unverified write"
+    )
 
 
 # ----------------------------------------------- check_termination — CompletionGate
@@ -371,9 +383,7 @@ def test_grounding_gate_passes_when_file_was_read():
     """Cite a file you actually read this turn → no interception."""
     h = _harness()
     h.observe("read_file", {"path": "src/agent/loader.py"}, "<file contents>")
-    cont, inject, warn = h.check_termination(
-        "读了 loader.py:81，确认已接入。"
-    )
+    cont, inject, warn = h.check_termination("读了 loader.py:81，确认已接入。")
     assert (cont, inject, warn) == (False, None, None)
 
 
@@ -413,7 +423,9 @@ def test_grounding_gate_grep_does_not_ground_citation():
     lines, never the full file. Citing the file after grep should be ungrounded.
     This closes the bypass where grep pattern='loop' satisfied 'loop.py:42'."""
     h = _harness()
-    h.observe("grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ...")
+    h.observe(
+        "grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ..."
+    )
     cont, inject, warn = h.check_termination("loop.py:42 处理 ReAct 循环。")
     assert cont is True  # gate forces a real read_file
     assert inject is not None
@@ -444,9 +456,7 @@ def test_grounding_gate_partial_read():
     """Citing two files but only read one → block on the unread one."""
     h = _harness()
     h.observe("read_file", {"path": "a.py"}, "<contents>")
-    cont, inject, warn = h.check_termination(
-        "a.py 正确，但 b.py:10 有 bug。"
-    )
+    cont, inject, warn = h.check_termination("a.py 正确，但 b.py:10 有 bug。")
     assert cont is True
     assert inject is not None and "b.py" in inject
     assert "a.py" not in inject  # don't nag about the one we read
@@ -458,6 +468,7 @@ def test_grounding_gate_does_not_false_positive_on_prose():
     'step 2', 'the loader', 'go to main', 'config.harness' (no .py) should NOT
     be treated as file citations. Only dotted code extensions count."""
     from coderio.agent.harness import _cited_files
+
     assert _cited_files("请跳到 step 2，然后看 the loader 的逻辑") == []
     assert _cited_files("config.harness 字段在 ModelsConfig 里") == []
     # but a real file path IS caught (with its :line citation)
@@ -475,6 +486,7 @@ def test_was_read_is_case_and_slash_insensitive():
     case drifts. Observed in real sessions: 'Loop.py' read 5x in one turn.
     """
     from coderio.agent.harness import _norm_path
+
     h = _harness()
     # observe a read with mixed case + backslashes
     h.observe("read_file", {"path": "src\\coderio\\agent\\Loop.py"}, "1	contents")
@@ -515,6 +527,7 @@ def test_grounding_gate_regex_ignores_code_attributes():
     (from `self._live = None` in stream.py's code), which the GroundingGate
     flagged as an unread file, forcing a spurious re-read."""
     from coderio.agent.harness import _cited_files
+
     # Code context — should NOT match the attribute portion
     assert _cited_files("stream.py 里 self._live = None") == ["stream.py"]
     assert _cited_files("the obj._attr.py pattern") == []
@@ -529,20 +542,25 @@ def test_grounding_gate_regex_ignores_code_attributes():
 
 # ----------------------------------------------- phase tracking (AgentStateTracker)
 
+
 class _CapturingStream:
     """Minimal StreamHandler stand-in that records on_phase_change calls."""
+
     def __init__(self):
         self.calls: list[tuple[str, int, str]] = []
+
     def on_phase_change(self, state: str, step: int, hint: str) -> None:
         self.calls.append((state, step, hint))
 
 
 def _harness_with_tracker():
     from coderio.agent.state import AgentStateTracker
+
     stream = _CapturingStream()
     tracker = AgentStateTracker()
-    h = Harness(state=HarnessState(), todos=TodoStore(),
-                state_tracker=tracker, stream=stream)
+    h = Harness(
+        state=HarnessState(), todos=TodoStore(), state_tracker=tracker, stream=stream
+    )
     return h, tracker, stream
 
 
@@ -585,7 +603,7 @@ def test_phase_tracking_noop_without_tracker():
     """A Harness without state_tracker (back-compat) doesn't crash on observe."""
     h = _harness()  # no state_tracker, no stream
     h.observe("read_file", {"path": "a.py"}, "contents")  # must not raise
-    h.observe("write_file", {"path": "b.py"}, "Wrote")    # must not raise
+    h.observe("write_file", {"path": "b.py"}, "Wrote")  # must not raise
 
 
 def test_phase_debounce_across_repeated_reads():

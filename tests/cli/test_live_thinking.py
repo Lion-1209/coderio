@@ -5,6 +5,7 @@ nothing during the (possibly 10-25s) thinking phase — it looked frozen. Now
 on_thinking creates an EXPANDED Collapsible on the first chunk and appends each
 chunk as it arrives, so the user sees reasoning grow in real time.
 """
+
 import pytest
 
 from coderio.cli.tui import CoderioTUI
@@ -39,7 +40,9 @@ async def test_first_thinking_chunk_creates_expanded_block():
         assert cols[0].collapsed is False  # EXPANDED — visible immediately
         # The thinking text must be somewhere in the Collapsible's content
         all_texts = _think_body_texts(app)
-        assert any("我需要先看看代码" in t for t in all_texts), f"thinking text not in {all_texts}"
+        assert any("我需要先看看代码" in t for t in all_texts), (
+            f"thinking text not in {all_texts}"
+        )
 
 
 @pytest.mark.asyncio
@@ -53,7 +56,9 @@ async def test_subsequent_chunks_append_live():
         app.on_thinking("第一段")
         app._drain_render_queue()
         # Force a time gap so the throttle allows the second chunk through
-        import time as _t; _t.sleep(0.07)
+        import time as _t
+
+        _t.sleep(0.07)
         app.on_thinking("第二段")
         app._drain_render_queue()
         cols = list(app.query(Collapsible))
@@ -142,6 +147,7 @@ async def test_rapid_thinking_chunks_do_not_fragment():
     think_update against the not-yet-mounted-but-already-queued widget.
     """
     import time as _t
+
     app = CoderioTUI()
     async with app.run_test() as pilot:
         await pilot.pause()

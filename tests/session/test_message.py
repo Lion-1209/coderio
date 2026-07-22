@@ -14,7 +14,9 @@ def test_user_message_roundtrip():
 
 
 def test_assistant_with_tool_calls():
-    m = Message.assistant("", tool_calls=[ToolCall(id="c1", name="read_file", args={"path": "a.py"})])
+    m = Message.assistant(
+        "", tool_calls=[ToolCall(id="c1", name="read_file", args={"path": "a.py"})]
+    )
     d = m.to_dict()
     assert d["tool_calls"][0]["name"] == "read_file"
     assert d["tool_calls"][0]["args"] == {"path": "a.py"}
@@ -30,12 +32,15 @@ def test_tool_result_message():
 
 
 def test_json_serializable():
-    m = Message.assistant("hi", tool_calls=[ToolCall(id="c1", name="bash", args={"command": "ls"})])
+    m = Message.assistant(
+        "hi", tool_calls=[ToolCall(id="c1", name="bash", args={"command": "ls"})]
+    )
     line = json.dumps(m.to_dict(), ensure_ascii=False)
     assert "hi" in line
 
 
 # --- system role (phase timeline / context summary) ---
+
 
 def test_system_message_roundtrip():
     """A system-role message (phase timeline / context summary) survives a round trip."""
@@ -67,12 +72,16 @@ def test_old_jsonl_without_kind_loads_fine():
 def test_phase_timeline_json_is_serializable():
     """The timeline payload (a list of dicts) must be JSON-serializable for storage."""
     from coderio.agent.state import AgentStateTracker, AgentState
+
     t = AgentStateTracker()
     t.transition(AgentState.EXPLORE, step=1, hint="read")
     t.finish(step=2, hint="done")
     payload = t.to_payload()
-    line = json.dumps(Message.system(
-        json.dumps(payload, ensure_ascii=False), kind="phase_timeline").to_dict(),
-        ensure_ascii=False)
+    line = json.dumps(
+        Message.system(
+            json.dumps(payload, ensure_ascii=False), kind="phase_timeline"
+        ).to_dict(),
+        ensure_ascii=False,
+    )
     assert "explore" in line
     assert "complete" in line

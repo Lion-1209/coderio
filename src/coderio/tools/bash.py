@@ -18,7 +18,9 @@ _WIN_CANDIDATES = (
 class BashArgs(BaseModel):
     command: str = Field(description="The shell command to execute.")
     timeout: int = Field(default=120, description="Timeout in seconds.")
-    run_in_background: bool = Field(default=False, description="Run detached; returns a pid.")
+    run_in_background: bool = Field(
+        default=False, description="Run detached; returns a pid."
+    )
     cwd: str = Field(default="", description="Working directory for the command.")
 
 
@@ -41,11 +43,13 @@ def detect_shell(configured: str) -> str:
     if sys.platform == "win32":
         raise FileNotFoundError(
             "bash not found. Install Git Bash (https://git-scm.com) "
-            "and/or set [tools].bash_shell in config.toml.")
+            "and/or set [tools].bash_shell in config.toml."
+        )
     raise FileNotFoundError(
         "bash not found. Install it via your package manager "
         "(e.g. apt install bash / brew install bash) "
-        "and/or set [tools].bash_shell in config.toml.")
+        "and/or set [tools].bash_shell in config.toml."
+    )
 
 
 class BashTool:
@@ -64,7 +68,13 @@ class BashTool:
             return self._shell
         return detect_shell(self._shell)
 
-    def run(self, command: str, timeout: int = 120, run_in_background: bool = False, cwd: str = "") -> str:
+    def run(
+        self,
+        command: str,
+        timeout: int = 120,
+        run_in_background: bool = False,
+        cwd: str = "",
+    ) -> str:
         shell = self._resolve()
         work = cwd or os.getcwd()
         if run_in_background:

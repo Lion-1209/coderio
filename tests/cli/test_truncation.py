@@ -14,6 +14,7 @@ and dock:bottom for positioning (no layers needed). With layers gone, Static
 These tests verify: after scroll_end, BOTH the Panel's bottom border AND the
 final content line are visible, on wide and narrow terminals, for long content.
 """
+
 import asyncio
 
 import pytest
@@ -31,7 +32,8 @@ LONG_BODY = (
     "# 最终回答\n\n"
     + "\n".join(
         f"第 {i} 行内容：这是测试行的内容，用来撑满超过一屏，描述细节和实现要点。"
-        for i in range(1, 41))
+        for i in range(1, 41)
+    )
     + "\n\n## 测试覆盖\n这里是被截断的内容，应该可见。"
     + "\n\n## 最后\n这里是真正的结尾，最后一句应该可见。"
 )
@@ -53,8 +55,7 @@ async def _mount_panel_and_scroll(app, body: str = LONG_BODY):
 
 
 def _screen_text(app) -> str:
-    strips = app.screen._compositor.render_strips(
-        Size(app.size.width, app.size.height))
+    strips = app.screen._compositor.render_strips(Size(app.size.width, app.size.height))
     return "".join(seg.text for strip in strips for seg in strip)
 
 
@@ -67,7 +68,7 @@ async def test_bottom_border_and_tail_visible_wide():
         await pilot.pause()
         await _mount_panel_and_scroll(app)
         screen = _screen_text(app)
-        assert ("╰" in screen or "└" in screen), "bottom border clipped"
+        assert "╰" in screen or "└" in screen, "bottom border clipped"
         assert TAIL_SENTINEL in screen, "final content not visible"
 
 
@@ -80,7 +81,7 @@ async def test_bottom_border_and_tail_visible_narrow():
         await pilot.pause()
         await _mount_panel_and_scroll(app)
         screen = _screen_text(app)
-        assert ("╰" in screen or "└" in screen), "bottom border clipped"
+        assert "╰" in screen or "└" in screen, "bottom border clipped"
         assert TAIL_SENTINEL in screen, "final content not visible"
 
 
@@ -104,7 +105,7 @@ async def test_short_output_border_visible():
         await pilot.pause()
         await _mount_panel_and_scroll(app, short)
         screen = _screen_text(app)
-        assert ("╰" in screen or "└" in screen), "short output border clipped"
+        assert "╰" in screen or "└" in screen, "short output border clipped"
 
 
 @pytest.mark.asyncio

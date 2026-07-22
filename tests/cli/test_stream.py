@@ -47,7 +47,9 @@ def test_step_start_arms_busy_indicator():
     s = RichStream(console)
     assert s._busy_live is None
     s.on_step_start()
-    assert s._busy_live is not None, "busy indicator should be running after on_step_start"
+    assert s._busy_live is not None, (
+        "busy indicator should be running after on_step_start"
+    )
     assert s._busy_start > 0
     s.on_finish()
 
@@ -82,6 +84,7 @@ def test_busy_elapsed_timer_advances():
     """The elapsed timer must reflect real time, so the user sees motion (this is
     the fix for 'UI looks frozen during long silent waits')."""
     import time as _time
+
     console = _console()
     s = RichStream(console)
     s.on_step_start()
@@ -103,6 +106,7 @@ def test_busy_timer_text_advances_without_on_thinking():
     silent-wait case the user reported)."""
     import re
     import time as _time
+
     console = _console()
     s = RichStream(console)
     s.on_step_start()
@@ -113,5 +117,11 @@ def test_busy_timer_text_advances_without_on_thinking():
     m2 = re.search(r"([\d.]+)s", t2)
     v1 = float(m1.group(1))
     v2 = float(m2.group(1))
-    assert v2 > v1, "timer text must advance during silent wait: " + str(v1) + "s -> " + str(v2) + "s"
+    assert v2 > v1, (
+        "timer text must advance during silent wait: "
+        + str(v1)
+        + "s -> "
+        + str(v2)
+        + "s"
+    )
     s.on_finish()

@@ -6,7 +6,9 @@ from coderio.skills.store import SkillStore, load_skill_store
 def make_skill(d, name, desc="a skill"):
     p = d / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f"---\nname: {name}\ndescription: {desc}\n---\nbody of {name}", encoding="utf-8")
+    p.write_text(
+        f"---\nname: {name}\ndescription: {desc}\n---\nbody of {name}", encoding="utf-8"
+    )
 
 
 def test_three_layer_priority(tmp_path):

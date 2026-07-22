@@ -27,9 +27,14 @@ def _build_client(kind: str, *, model: str, base_url: str, api_key, max_tokens: 
     (profile, registry provider_id, custom provider_id, S0 fallback) gets the
     same resilience instead of each call site setting them ad hoc.
     """
-    common = dict(model=model, base_url=base_url, api_key=api_key,
-                  max_tokens=max_tokens, max_retries=_MAX_RETRIES,
-                  timeout=_REQUEST_TIMEOUT)
+    common = dict(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        max_tokens=max_tokens,
+        max_retries=_MAX_RETRIES,
+        timeout=_REQUEST_TIMEOUT,
+    )
     if kind == "anthropic":
         return ChatAnthropic(**common)
     return ChatOpenAI(**common)
@@ -86,10 +91,14 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
     if profile is not None:
         from coderio.cli.providers import get_provider
         from coderio.cli.credentials import get_key
+
         info = get_provider(profile.provider_id)
         key = get_key(profile.provider_id, creds_path) or _pick_api_key(
-            info.kind if info else profile.kind)
-        model_name = profile.model or (info.default_model if info and info.default_model else "")
+            info.kind if info else profile.kind
+        )
+        model_name = profile.model or (
+            info.default_model if info and info.default_model else ""
+        )
         # Registry providers supply their own base_url/kind; custom profiles
         # carry their own (mirrors the [model] layer 1 vs 2 split).
         base_url = info.base_url if info and info.base_url else profile.base_url
@@ -97,9 +106,15 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
         if not base_url:
             raise ValueError(
                 f"profile '{profile.name}': provider_id '{profile.provider_id}' "
-                f"has no base_url. Set base_url in the profile or use a known provider_id.")
-        return _build_client(kind, model=model_name, base_url=base_url,
-                             api_key=key, max_tokens=max_tokens)
+                f"has no base_url. Set base_url in the profile or use a known provider_id."
+            )
+        return _build_client(
+            kind,
+            model=model_name,
+            base_url=base_url,
+            api_key=key,
+            max_tokens=max_tokens,
+        )
 
     if m.provider_id:
         from coderio.cli.providers import get_provider
@@ -107,27 +122,51 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
 
         info = get_provider(m.provider_id)
         key = get_key(m.provider_id, creds_path) or _pick_api_key(
-            info.kind if info else m.provider)
+            info.kind if info else m.provider
+        )
         model_name = m.default or (info.default_model if info else "")
         if info:
             # Known provider — use registry base_url/kind.
-            return _build_client(info.kind, model=model_name, base_url=info.base_url,
-                                 api_key=key, max_tokens=max_tokens)
+            return _build_client(
+                info.kind,
+                model=model_name,
+                base_url=info.base_url,
+                api_key=key,
+                max_tokens=max_tokens,
+            )
         # Custom provider_id not in registry — use config.toml base_url/provider.
         kind = m.provider or "openai_compatible"
         if not m.base_url:
             raise ValueError(
                 f"provider_id '{m.provider_id}' is not a known provider and "
                 f"no base_url is set in config.toml. Either use a known provider_id, "
-                f"or set [model] base_url and provider in config.toml.")
+                f"or set [model] base_url and provider in config.toml."
+            )
         if kind == "anthropic":
-            return _build_client(kind, model=model_name, base_url=m.base_url,
-                                 api_key=key, max_tokens=max_tokens)
-        return _build_client(kind, model=model_name, base_url=m.base_url,
-                             api_key=key, max_tokens=max_tokens)
+            return _build_client(
+                kind,
+                model=model_name,
+                base_url=m.base_url,
+                api_key=key,
+                max_tokens=max_tokens,
+            )
+        return _build_client(
+            kind,
+            model=model_name,
+            base_url=m.base_url,
+            api_key=key,
+            max_tokens=max_tokens,
+        )
 
     api_key = _pick_api_key(m.provider)
     if m.provider in ("openai_compatible", "anthropic"):
-        return _build_client(m.provider, model=m.default, base_url=m.base_url,
-                             api_key=api_key, max_tokens=max_tokens)
-    raise ValueError(f"Unknown provider: {m.provider!r} (expected 'openai_compatible' or 'anthropic')")
+        return _build_client(
+            m.provider,
+            model=m.default,
+            base_url=m.base_url,
+            api_key=api_key,
+            max_tokens=max_tokens,
+        )
+    raise ValueError(
+        f"Unknown provider: {m.provider!r} (expected 'openai_compatible' or 'anthropic')"
+    )
