@@ -15,6 +15,14 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
 
+    env:
+      # Windows runners default to cp1252; Rich/Textual output contains CJK
+      # text (Chinese UI strings) that charmap can't encode. Force UTF-8 so
+      # `coderio --help` and subprocess-based tests don't crash with
+      # UnicodeEncodeError on windows-latest.
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
     steps:
       - uses: actions/checkout@v4
 

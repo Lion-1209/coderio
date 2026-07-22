@@ -124,6 +124,19 @@ def config_cmd():
 
 
 def main_entry() -> None:
+    # Ensure stdout/stderr use UTF-8 on Windows. The default Windows console
+    # encoding (cp1252) can't represent CJK characters in the Rich/Typer output
+    # (Chinese UI strings, skill names), causing UnicodeEncodeError. Reconfiguring
+    # here makes `coderio --help` and `coderio config` work in any locale —
+    # matching the behavior Linux/macOS users get by default.
+    import sys
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass  # already reconfigured or unsupported — ignore
     app()
 
 
