@@ -12,6 +12,7 @@ from coderio.session.store import Session
 from coderio.skills.store import load_skill_store, SkillStore
 from coderio.tools import build_default_tools
 from coderio.tools.permission import PermissionGate, PermissionMode, RichPromptPermissionGate, AutoPermissionGate
+from coderio.tools.workspace import WorkspacePolicy
 
 from coderio.cli.stream import RichStream
 
@@ -19,12 +20,19 @@ BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 
 def build_gate(cfg: Config, console=None):
+    """Construct the permission gate with a workspace policy attached.
+
+    The policy enforces path boundaries in ALL modes (including AUTO) — auto
+    mode skips interactive confirmation, not the security floor. The root
+    defaults to the process CWD when workspace_root is unset.
+    """
+    policy = WorkspacePolicy(root=cfg.tools.workspace_root)
     mode = cfg.tools.permission_mode
     if mode == PermissionMode.AUTO:
-        return AutoPermissionGate()
+        return AutoPermissionGate(policy=policy)
     if mode == PermissionMode.PLAN:
-        return PermissionGate(PermissionMode.PLAN)
-    return RichPromptPermissionGate(console=console)
+        return PermissionGate(PermissionMode.PLAN, policy=policy)
+    return RichPromptPermissionGate(console=console, policy=policy)
 
 
 def build_runtime(

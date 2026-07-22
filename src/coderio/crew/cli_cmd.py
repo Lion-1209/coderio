@@ -17,17 +17,24 @@ from coderio.tools.permission import (
     PermissionMode,
     RichPromptPermissionGate,
 )
+from coderio.tools.workspace import WorkspacePolicy
 
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 
 def _build_crew_gate(cfg, console):
+    """Construct the crew permission gate with workspace policy attached.
+
+    Same security floor as the REPL gate: workspace boundary is enforced in
+    ALL modes, so --auto can't write outside the workspace.
+    """
+    policy = WorkspacePolicy(root=cfg.tools.workspace_root)
     mode = cfg.tools.permission_mode
     if mode == PermissionMode.AUTO:
-        return AutoPermissionGate()
+        return AutoPermissionGate(policy=policy)
     if mode == PermissionMode.PLAN:
-        return PermissionGate(PermissionMode.PLAN)
-    return RichPromptPermissionGate(console=console)
+        return PermissionGate(PermissionMode.PLAN, policy=policy)
+    return RichPromptPermissionGate(console=console, policy=policy)
 
 
 def run_crew(
@@ -44,7 +51,14 @@ def run_crew(
         creds_path = Path.home() / ".coderio" / "credentials"
     store = load_skill_store(BUNDLED_SKILLS, Path.home() / ".coderio" / "skills", None)
     model = build_chat_model(cfg, creds_path=creds_path)
-    gate = AutoPermissionGate() if auto_mode else _build_crew_gate(cfg, console)
+    # --auto uses AutoPermissionGate BUT still attaches the workspace policy —
+    # auto skips clarify/spec pauses + interactive confirmations, NOT the
+    # workspace security floor.
+    if auto_mode:
+        policy = WorkspacePolicy(root=cfg.tools.workspace_root)
+        gate = AutoPermissionGate(policy=policy)
+    else:
+        gate = _build_crew_gate(cfg, console)
     from coderio.cli.stream import RichStream
     stream = RichStream(console)
 

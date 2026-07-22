@@ -12,6 +12,7 @@ from coderio.tools.permission import (
     RichPromptPermissionGate,
     AutoPermissionGate,
 )
+from coderio.tools.workspace import WorkspacePolicy
 from coderio.tools.read_file import ReadFileTool, ReadFileArgs
 from coderio.tools.write_file import WriteFileTool, WriteFileArgs
 from coderio.tools.edit_file import EditFileTool, EditFileArgs
@@ -28,6 +29,7 @@ from coderio.tools.note import NoteTool, NoteArgs
 __all__ = [
     "Tool", "to_langchain_tool", "DESTRUCTIVE_TOOLS", "READONLY_TOOLS",
     "PermissionGate", "PermissionMode", "RichPromptPermissionGate", "AutoPermissionGate",
+    "WorkspacePolicy",
     "TodoStore", "build_default_tools", "to_langchain_tools",
 ]
 

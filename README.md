@@ -32,6 +32,7 @@
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器
 - **两种模式**：交互式单 agent（日常）+ 6-agent crew 流水线（大需求，LangGraph 编排）
 - **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn
+- **工作区沙箱（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 
 ---
@@ -67,6 +68,7 @@ context_limit = 128000                  # （可选）onboarding 自动探测写
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto
+workspace_root = ""                     # 受信工作区根目录（空=用启动目录）；写工具路径必须在此目录内
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）
