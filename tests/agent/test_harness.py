@@ -222,6 +222,77 @@ def test_verify_gate_git_status_does_not_clear():
     assert cont is True, "git status should NOT satisfy VerifyGate"
 
 
+def test_verify_gate_failed_pytest_does_not_clear():
+    """REGRESSION (P0): a FAILED pytest run must NOT clear unverified writes.
+
+    Old behavior: any bash command that 'looked like' verification (matched
+    pytest/python/etc) cleared writes_since_verify, regardless of whether the
+    tests actually passed. So `pytest` returning 5 failures + exit_code 1 was
+    treated as 'verification passed', letting the agent claim completion over
+    broken code. Fix: parse [exit_code: N] from the result; only exit 0 clears.
+    """
+    h = _harness()
+    h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
+    h.observe("bash", {"command": "pytest -q"}, "FAILED tests/test_foo.py\n[exit_code: 1]")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is True, "failed pytest must NOT satisfy VerifyGate"
+
+
+def test_verify_gate_passing_pytest_clears():
+    """A passing pytest (exit_code 0) DOES clear — happy path still works."""
+    h = _harness()
+    h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
+    h.observe("bash", {"command": "pytest -q"}, "3 passed\n[exit_code: 0]")
+    cont, inject, warn = h.check_termination("done")
+    assert cont is False, "passing pytest should satisfy VerifyGate"
+
+
+def test_verify_gate_missing_exit_code_back_compat():
+    """When the result has no [exit_code] marker (old/foreign tool), fall back
+    to the pre-fix behavior (treat as neutral pass). Avoids breaking providers
+    or tools that don't report exit codes."""
+    h = _harness()
+    h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
+    h.observe("bash", {"command": "pytest -q"}, "3 passed")  # no exit_code
+    cont, inject, warn = h.check_termination("done")
+    assert cont is False, "no exit_code marker -> back-compat neutral pass"
+
+
+def test_parse_exit_code():
+    """Unit test for the exit-code extraction helper."""
+    from coderio.agent.harness import _parse_exit_code
+    assert _parse_exit_code("out\n[exit_code: 0]") == 0
+    assert _parse_exit_code("out\n[exit_code: 1]") == 1
+    assert _parse_exit_code("out\n[exit_code: -1]") == -1
+    assert _parse_exit_code("no marker here") is None
+    assert _parse_exit_code("") is None
+    assert _parse_exit_code(None) is None
+
+
+def test_is_success_rejects_permission_denied():
+    """REGRESSION (P0): a permission-denied write must NOT count as a success.
+
+    Old _is_success only checked `not result.startswith('Error')`, but the
+    PermissionGate's rejection text starts with 'Permission denied:' — so a
+    blocked write_file/edit_file was recorded into writes_since_verify,
+    triggering the VerifyGate on a file that was never actually written.
+    """
+    from coderio.agent.harness import _is_success
+    assert _is_success("Wrote 50 chars to a.py") is True
+    assert _is_success("Error: file not found") is False
+    assert _is_success("Permission denied: tool 'write_file' blocked in plan mode.") is False
+    assert _is_success("") is False
+
+
+def test_permission_denied_write_not_recorded():
+    """REGRESSION (P0): permission-denied writes don't enter writes_since_verify."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"},
+              "Permission denied: tool 'write_file' blocked in plan mode.")
+    assert h.state.writes_since_verify == [], (
+        "permission-denied write should not be tracked as an unverified write")
+
+
 # ----------------------------------------------- check_termination — CompletionGate
 def test_completion_gate_blocks_pending_todos():
     store = TodoStore()

@@ -223,7 +223,7 @@ def test_verify_gate_passes_after_bash(tmp_path):
     f = tmp_path / "a.txt"
     model = _model_returning(
         _tool_call_msg("write_file", {"path": str(f), "content": "hi"}),
-        _tool_call_msg("bash", {"command": f"cat {f}"}),
+        _tool_call_msg("bash", {"command": f"python -c \"print(open(r'{f}').read())\""}),
         AIMessage(content="Done and verified.", tool_calls=[]),
     )
     session = Session.create(tmp_path, {"meta": "test"})

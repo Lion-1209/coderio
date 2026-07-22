@@ -106,9 +106,33 @@ def _is_success(result: str) -> bool:
 
     All three write tools report failures as ``"Error: ..."`` (verified against
     write_file.py / edit_file.py / multi_edit.py). A failed write changed nothing
-    on disk, so it must not trigger the verify gate.
+    on disk, so it must not trigger the verify gate. Permission rejections from
+    the PermissionGate start with ``"Permission denied:"`` — those also changed
+    nothing, so they must not count as writes either.
     """
-    return not result.startswith("Error")
+    if not result:
+        return False
+    return not (result.startswith("Error") or result.startswith("Permission denied"))
+
+
+# Matches the trailing ``[exit_code: N]`` marker the BashTool appends to its
+# result string. Used by the VerifyGate logic to distinguish a PASSED run
+# (exit 0) from a FAILED one (non-zero) — the old code treated any bash call
+# that "looked like" a test as verification passed, even when the tests failed.
+_EXIT_CODE_RE = re.compile(r"\[exit_code:\s*(-?\d+)\]")
+
+
+def _parse_exit_code(result: str) -> int | None:
+    """Extract the exit code from a BashTool result, or None if absent.
+
+    The BashTool appends ``\\n[exit_code: N]`` to every command result. When
+    present, a non-zero value means the verification FAILED (tests errored,
+    build broke, lint failed) and must NOT clear the unverified-writes list.
+    """
+    m = _EXIT_CODE_RE.search(result or "")
+    if m:
+        return int(m.group(1))
+    return None
 
 
 # Commands that are clearly verification (testing/linting/building code), not
@@ -238,13 +262,30 @@ class Harness:
                         self.state.content_read_files.add(_norm_path(v))
         elif name == VERIFY_TOOL:
             # A bash call clears "unverified writes" ONLY if it plausibly runs
-            # or tests the written code. A bare `echo done` or `ls` should NOT
-            # satisfy the gate — that defeats the entire VerifyGate purpose.
+            # or tests the written code AND the run actually succeeded (exit 0).
+            # Two failure modes the old code missed:
+            #   (1) a bare `echo done` / `ls` — doesn't test anything → reject.
+            #       (_command_verifies_written already handles this.)
+            #   (2) `pytest` ran but FAILED (exit != 0) → the code is NOT verified.
+            #       The old code treated "ran = verified", letting the agent claim
+            #       completion after a failing test run. Now we parse exit_code:
+            #       only exit 0 clears the unverified-writes list.
             command = str(args.get("command", ""))
             if _command_verifies_written(command, self.state.writes_since_verify):
-                self.state.writes_since_verify.clear()
-                self.state.verify_attempts = 0
-                just_verified = True
+                exit_code = _parse_exit_code(result)
+                if exit_code is not None and exit_code != 0:
+                    # Verification FAILED. Do NOT clear writes_since_verify — the
+                    # agent must fix the code and re-run. Increment the verify
+                    # attempt counter so the gate can escalate if the model keeps
+                    # failing to fix it (instead of looping forever).
+                    self.state.verify_attempts += 1
+                else:
+                    # Either exit 0 (passed) or no exit_code marker at all (old
+                    # providers/tools that don't report it — preserve back-compat
+                    # by treating absence as a neutral pass, same as before).
+                    self.state.writes_since_verify.clear()
+                    self.state.verify_attempts = 0
+                    just_verified = True
         # Derive + fire phase change after state is updated.
         self._track_phase(just_verified=just_verified, hint=name)
 

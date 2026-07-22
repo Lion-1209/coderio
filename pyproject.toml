@@ -26,7 +26,7 @@ classifiers = [
 authors = [
     { name = "coderio contributors" },
 ]
-project-urls = { Homepage = "https://github.com/coderio/coderio", Issues = "https://github.com/coderio/coderio/issues" }
+project-urls = { Homepage = "https://github.com/Lion-1209/coderio", Issues = "https://github.com/Lion-1209/coderio/issues" }
 dependencies = [
     "httpx>=0.27",
     "langchain-anthropic>=0.2",
@@ -50,9 +50,6 @@ coderio = "coderio.cli.app:main_entry"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/coderio"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/coderio/skills" = "coderio/skills"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -22,10 +22,11 @@
 
 ## 特性
 
-- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）
+- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；GroundingGate 跨 session 记忆已读文件 + 路径归一化（Windows 大小写不敏感）
 - **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
-- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败
+- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败；空响应时主动压缩再重试（而非无意义重发"请继续"）
 - **context-rot 自动重启**：检测到 agent 陷入工具调用循环或耗尽轮数上限时，从压缩后的干净上下文自动重试一次
+- **自动探测上下文窗口**：首次配置时自动查询 provider 的 `/v1/models/{id}` 端点探测真实 context window（如 step-3.7-flash 的 256K），持久化到配置——压缩阈值精确匹配实际模型，不再用硬编码默认值
 - **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器
@@ -40,7 +41,7 @@
 ### 安装
 
 ```bash
-git clone <repo-url> coderio
+git clone https://github.com/Lion-1209/coderio.git
 cd coderio
 python -m venv .venv
 
@@ -55,22 +56,23 @@ python -m venv .venv
 
 ### 配置
 
-首次运行会触发 onboarding 向导（选 provider、选模型、填 API key），配置自动写入 `~/.coderio/config.toml` 和 `~/.coderio/credentials`。也可手动配置：
+首次运行会触发 onboarding 向导（选 provider、选模型、填 API key），配置自动写入 `~/.coderio/config.toml` 和 `~/.coderio/credentials`。向导验证 key 时会自动探测模型的上下文窗口大小并持久化，压缩阈值精确匹配实际模型。也可手动配置：
 
 ```bash
 # ~/.coderio/config.toml
 [model]
 provider_id = "bigmodel_coding_plan"   # 智谱/阶跃/OpenAI/Anthropic/Ollama/自定义
 default = "glm-5.2"
+context_limit = 128000                  # （可选）onboarding 自动探测写入，0 = 用下面的默认值
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）
-trigger_ratio = 0.75                    # 达到上下文窗口 75% 时触发
+trigger_ratio = 0.6                     # 达到上下文窗口 60% 时触发
 keep_recent = 8                         # 保留最近 N 条消息不压缩
-model_context_limit = 128000            # 模型上下文窗口大小（token）
+model_context_limit = 200000            # fallback：当 profile 未探测到 context_limit 时用
 ```
 
 支持的 provider：
@@ -157,9 +159,9 @@ Agent 层 (agent/)      ReAct 循环 + harness 状态控制 + 提示词构建
 
 | 门 | 强度 | 机制 |
 |----|------|------|
-| **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；2 次后放行 + 红色警告 |
+| **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；解析 bash exit_code，**测试失败（非 0）不算验证通过**；2 次后放行 + 红色警告 |
 | **CompletionGate** | 硬 | 有未完成 todo 就声明"完成"→ 拦截 |
-| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上） |
+| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上）；**跨 session 记忆已读文件**，路径归一化（Loop.py == loop.py） |
 | **PlanGate** | 软提醒 | 没 todo 就写代码 → 工具结果追加 nudge |
 
 ### 上下文治理（三层防线）
@@ -168,7 +170,8 @@ Agent 层 (agent/)      ReAct 循环 + harness 状态控制 + 提示词构建
 
 | 层 | 触发 | 机制 |
 |----|------|------|
-| **上下文压缩** | input_tokens > 窗口的 75% | 旧消息总结成 system 摘要，保留近期消息 + tool_call 配对完整性 |
+| **上下文压缩** | input_tokens > 窗口的 60% | 旧消息总结成 system 摘要，保留近期消息 + tool_call 配对完整性 |
+| **空响应压缩** | 模型返回空响应（通常上下文过载） | 先压缩上下文再重试，而非无意义重发"请继续" |
 | **context-rot 检测** | 同一工具调用重复 >3 次 / 达到 max_rounds | 标记为 `TurnResult.in_tool_loop` / `hit_max_rounds` |
 | **自动重启** | 检测到 context-rot | 从压缩后的干净上下文重跑同一 prompt（最多 1 次） |
 
