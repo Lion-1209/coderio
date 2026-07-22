@@ -22,6 +22,41 @@ def _resolve_save_dir(save_dir: str | Path) -> Path:
     return p
 
 
+def _truncate_at_last_summary(messages: list[Message]) -> list[Message]:
+    """Drop conversation messages superseded by the last context_summary.
+
+    When compaction runs, a ``kind="context_summary"`` system message is appended
+    to the session. The conversation messages (user/assistant/tool) that came
+    BEFORE it have been folded into that summary and are no longer needed —
+    re-loading them would bloat the context the compaction just shrank.
+
+    This function finds the LAST context_summary in the list and keeps:
+      - ALL system messages (phase_timeline, the summary itself, etc.) regardless
+        of position — observability timelines survive compaction.
+      - all user/assistant/tool messages AT OR AFTER the last summary.
+
+    Messages before the last summary that are user/assistant/tool are dropped.
+    If there is no summary, the list is returned unchanged (no compaction
+    happened, nothing to truncate).
+    """
+    last_summary_idx = -1
+    for i, m in enumerate(messages):
+        if m.role == "system" and m.kind == "context_summary":
+            last_summary_idx = i
+    if last_summary_idx < 0:
+        return messages  # no compaction in this session
+    kept: list[Message] = []
+    for i, m in enumerate(messages):
+        if i < last_summary_idx:
+            # Before the last summary: keep only system messages (timelines).
+            if m.role == "system":
+                kept.append(m)
+        else:
+            # At or after the last summary: keep everything.
+            kept.append(m)
+    return kept
+
+
 class Session:
     def __init__(self, path: Path, id: str, meta: dict, messages: list[Message]):
         self.path = path
@@ -66,6 +101,13 @@ class Session:
                     meta = {k: v for k, v in d.items() if k != "type"}
                 else:
                     messages.append(Message.from_dict(d))
+        # Compaction truncation: if the session contains one or more
+        # context_summary system messages, drop the conversation messages
+        # (user/assistant/tool) that PRECEDE the LAST summary — they have been
+        # superseded by it and re-loading them would bloat the context the
+        # compaction just shrank. System messages (phase_timeline) are kept
+        # regardless so observability timelines survive compaction.
+        messages = _truncate_at_last_summary(messages)
         return cls(path=path, id=sid, meta=meta, messages=messages)
 
     @classmethod

@@ -86,6 +86,7 @@ class CrewOrchestrator:
             "request": request,
             "current_stage": "clarification",
             "fix_attempts": 0,
+            "status": "success",  # default; downgraded to "partial"/"failed" below
         }
         while True:
             result = self._graph.invoke(state, config=cfg)
@@ -100,7 +101,20 @@ class CrewOrchestrator:
             output = payload.get("output", "") if isinstance(payload, dict) else str(payload)
             answer = self.on_pause(stage, output) if self.on_pause else ""
             state = Command(resume=answer)
-        return crew_state_to_project_state(result)
+        ps = crew_state_to_project_state(result)
+        # Derive the final outcome status from ground truth: if the verifier's
+        # last verdict did not pass, the result is at best partial — the crew
+        # committed the best-effort code after exhausting the fix budget. This
+        # lets the CLI show a yellow/red outcome instead of misleading green.
+        # (We re-run _verification_passed on the FINAL verification text rather
+        # than trusting an intermediate signal, because the fix loop may have
+        # flipped it to passing on the last attempt.)
+        if not self._verification_passed(ps.verification):
+            ps.status = "partial"
+        if ps.errors:
+            # Catastrophic errors (e.g. a role raised) override to failed.
+            ps.status = "failed"
+        return ps
 
     # ------------------------------------------------------------ graph build
     def _build_graph(self):
@@ -179,12 +193,22 @@ class CrewOrchestrator:
     # ------------------------------------------------------------ routing
     def verify_router(self, state: CrewState) -> str:
         """Conditional edge after verify: loop back to execute on failure
-        (under the fix budget), otherwise proceed to commit."""
+        (under the fix budget), otherwise proceed to commit.
+
+        When the fix budget is exhausted but verification still fails, the crew
+        still proceeds to commit (so the user gets the best-effort result), but
+        we set status="partial" in the state so the CLI can show a yellow/red
+        outcome instead of a misleading green "crew 完成"."""
         if self._verification_passed(state.get("verification", "")):
             return "commit"
         if state.get("fix_attempts", 0) < self.max_fix_loops:
             return "execute"
-        return "commit"  # budget exhausted — proceed even if still failing
+        # Budget exhausted — proceed to commit, but mark as partial. The verify
+        # node already wrote fix_feedback; this status tells the CLI to warn.
+        # NOTE: LangGraph conditional edges can't update state, so the status is
+        # set inside the commit node (see _make_role_node for commit), which
+        # reads fix_attempts + verification to decide.
+        return "commit"
 
     # ------------------------------------------------------------ helpers (preserved)
     # Structured verify signal. The verifier is instructed (in _build_prompt) to
@@ -200,11 +224,16 @@ class CrewOrchestrator:
     def _verification_passed(self, verification: str) -> bool:
         """Decide pass/fail. Structured marker wins; keyword scan is the fallback.
 
-        Both paths default to PASSED on ambiguity (no clear signal) to avoid
-        spurious fix loops that waste rounds re-running the implementer.
+        FAIL-CLOSED: empty/missing/ambiguous verification defaults to FAILED,
+        not passed. The old fail-open behavior (default-to-pass on any ambiguity)
+        let the crew claim success over unverified code — the verifier returning
+        empty, or emitting a verdict the parser couldn't read, both counted as
+        "passed". Now the crew only proceeds past verify when there's a CLEAR
+        pass signal; anything else triggers the fix loop, and if the budget is
+        exhausted the status is marked "partial" so the user knows.
         """
         if not verification:
-            return True
+            return False  # empty verification is NOT a pass (fail-closed)
         v = verification.lower()
 
         # 1) Structured marker: "[CREW_VERIFY] PASS" or "... FAIL" anywhere in text.
@@ -215,12 +244,17 @@ class CrewOrchestrator:
                 return False
             if any(verdict.startswith(t) for t in self._PASS_TOKENS):
                 return True
-            # Marker present but verdict unreadable — treat as ambiguous → pass.
+            # Marker present but verdict unreadable — fail-closed, NOT pass.
+            return False
 
-        # 2) Fallback: conservative keyword scan. Only FAIL on a CLEAR fail token;
-        # ambiguous/positive output both count as passed.
+        # 2) Fallback: keyword scan. A CLEAR pass token is required to pass;
+        # anything without a pass token (including pure-neutral descriptions) is
+        # treated as ambiguous -> fail-closed -> triggers the fix loop.
+        has_pass = any(s in v for s in self._PASS_TOKENS)
         has_fail = any(s in v for s in self._FAIL_TOKENS)
-        return not has_fail
+        if has_fail:
+            return False
+        return has_pass  # only pass on a clear positive signal
 
     def _build_prompt(self, role: AgentRole, state) -> str:
         """Build a role's system prompt from the shared state.

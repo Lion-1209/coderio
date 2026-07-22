@@ -12,6 +12,15 @@ class ProjectState:
     _build_prompt/_run_role helpers consume (they use attribute access). The
     LangGraph graph uses CrewState (a TypedDict) internally for its state-channel
     mechanism; _state_to_projectstate bridges the two.
+
+    ``status`` reflects the final outcome of the crew run:
+      - "success": verify passed (or no verify needed) → commit is authoritative.
+      - "partial": verify failed but the fix budget was exhausted, so the crew
+        committed the best-effort result. The user should review before trusting.
+      - "failed": verify failed and the crew could not produce any commit, OR an
+        unexpected error aborted the run. Check `errors` for details.
+    This lets the CLI distinguish green/yellow/red outcomes instead of always
+    showing "✓ crew 完成" regardless of what happened under the hood.
     """
 
     request: str
@@ -27,6 +36,7 @@ class ProjectState:
     errors: list[str] = field(default_factory=list)
     fix_feedback: str = ""
     fix_attempts: int = 0
+    status: str = "success"  # "success" | "partial" | "failed"
 
 
 # --- LangGraph state ---------------------------------------------------------
@@ -67,6 +77,7 @@ class CrewState(TypedDict, total=False):
     errors: Annotated[list[str], _append_list]
     fix_feedback: Annotated[str, _overwrite]
     fix_attempts: Annotated[int, _overwrite]
+    status: Annotated[str, _overwrite]
 
 
 def crew_state_to_project_state(d: dict) -> ProjectState:
@@ -89,4 +100,5 @@ def crew_state_to_project_state(d: dict) -> ProjectState:
         errors=list(d.get("errors", [])),
         fix_feedback=d.get("fix_feedback", ""),
         fix_attempts=d.get("fix_attempts", 0),
+        status=d.get("status", "success"),
     )

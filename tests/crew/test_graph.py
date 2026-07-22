@@ -59,12 +59,14 @@ def test_verify_router_commit_when_budget_exhausted():
     assert orch.verify_router(state) == "commit"  # 1 >= max_fix_loops(1)
 
 
-def test_verify_router_passes_on_ambiguous_output():
-    """Ambiguous output (no explicit fail signal) counts as passed — avoids
-    spurious fix loops (this is the documented heuristic)."""
+def test_verify_router_loops_on_ambiguous_output():
+    """REGRESSION (fail-closed): ambiguous output (no explicit PASS signal) is
+    treated as a FAILURE, not a silent pass. The old fail-open behavior let
+    '看起来完成了' (no pass/fail token) count as passed, masking real issues.
+    Now it triggers the fix loop (or exhausts to partial-commit)."""
     orch = _orch()
     state: CrewState = {"verification": "看起来完成了", "fix_attempts": 0}
-    assert orch.verify_router(state) == "commit"
+    assert orch.verify_router(state) == "execute"  # ambiguous -> fail -> fix loop
 
 
 def test_auto_mode_pause_nodes_are_noop():

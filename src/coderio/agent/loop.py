@@ -258,6 +258,7 @@ def _execute_turn(
     on_activate_skill=None,
     harness=None,
     context_cfg=None,
+    on_compact=None,
 ) -> TurnResult:
     """Run one agent turn: loop run_step + tool execution until final text or max_rounds.
 
@@ -267,6 +268,13 @@ def _execute_turn(
     (run_agent writes to the session jsonl; S2 just uses convo). Returns a
     TurnResult carrying the final text plus context-rot signals
     (hit_max_rounds / in_tool_loop) for the caller's restart logic.
+
+    `on_compact(summary_msg)`: when set, called once with the context_summary
+    Message each time compaction shrinks the convo. The caller persists it to
+    the session (append-only) so the NEXT turn's rebuild can truncate the
+    superseded history instead of re-loading the bloated original. Without this,
+    compaction only saves memory within the current turn — the next turn
+    rebuilds from the uncompacted session and the savings are lost.
 
     `harness` (Harness | None): when provided and enabled, the harness layer exerts
     structural control over termination (VerifyGate/CompletionGate) and augments
@@ -338,6 +346,16 @@ def _execute_turn(
                     # In-place replace so the reference held by this function
                     # stays valid; _emit and harness both read `convo`.
                     convo[:] = compacted
+                    # Persist the summary to the session so the NEXT turn's
+                    # rebuild can truncate the superseded history. Without this,
+                    # the compaction only helps the current turn in memory; the
+                    # next run_agent rebuilds convo from session.messages and
+                    # gets the full uncompacted history back.
+                    if on_compact is not None:
+                        for m in compacted:
+                            if m.role == "system" and m.kind == "context_summary":
+                                on_compact(m)
+                                break  # compact_convo returns exactly one summary
 
         # Signal the UI to start its busy indicator BEFORE the model call. The
         # step number lets the UI show progress ("步骤 2") so the user knows the
@@ -378,6 +396,11 @@ def _execute_turn(
                             # Preserve the original tool_call/tool_result pairing
                             # for messages kept (compact_convo already handles this).
                             convo[:] = compacted
+                            if on_compact is not None:
+                                for m in compacted:
+                                    if m.role == "system" and m.kind == "context_summary":
+                                        on_compact(m)
+                                        break
                     except Exception:
                         pass  # compaction failed — fall through to the nudge retry
                 if empty_retries <= _MAX_EMPTY_RETRIES:
@@ -595,6 +618,7 @@ def run_agent(
         gate=gate, stream=stream, max_rounds=max_rounds,
         on_message=session.append, on_activate_skill=_refresh_prompt,
         harness=harness, context_cfg=context_cfg,
+        on_compact=session.append,
     )
 
     # Persist the phase timeline at turn end (system-role message, filtered from
@@ -655,6 +679,7 @@ def run_agent(
                     gate=gate, stream=stream, max_rounds=max_rounds,
                     on_message=session.append, on_activate_skill=_refresh_prompt,
                     harness=harness2, context_cfg=context_cfg,
+                    on_compact=session.append,
                 )
                 _persist_timeline(tracker2)
         except Exception:

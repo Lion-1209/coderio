@@ -71,12 +71,23 @@ def run_crew(
     )
     state = orch.run(request)
 
+    # Display outcome reflects actual status: green only when verify passed,
+    # yellow when the crew committed best-effort code after the fix budget was
+    # exhausted (partial), red when catastrophic errors occurred. The old code
+    # showed an unconditional green "✓ crew 完成" — misleading when the verifier
+    # had actually failed.
+    status_cfg = {
+        "success": ("✓ crew 完成", "green"),
+        "partial": ("⚠ crew 完成（验证未通过，请人工复核）", "yellow"),
+        "failed":  ("✗ crew 失败", "red"),
+    }
+    title, border = status_cfg.get(state.status, status_cfg["success"])
     console.print(
         Panel(
             f"澄清: {state.clarification[:80]}\nspec: {state.spec[:80]}\n任务: {state.task_list[:80]}"
             f"\n实现: {state.implementation[:80]}\n验证: {state.verification[:80]}\n提交: {state.commit_message}",
-            title="✓ crew 完成",
-            border_style="green",
+            title=title,
+            border_style=border,
         )
     )
 

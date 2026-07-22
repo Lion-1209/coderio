@@ -36,7 +36,7 @@ def test_orchestrator_runs_six_stages_in_order():
         AIMessage(content="spec done", tool_calls=[]),
         AIMessage(content="task list done", tool_calls=[]),
         AIMessage(content="implementation done", tool_calls=[]),
-        AIMessage(content="verification done", tool_calls=[]),
+        AIMessage(content="[CREW_VERIFY] PASS — all checks ok", tool_calls=[]),
         AIMessage(content="commit msg done", tool_calls=[]),
     )
     orch = CrewOrchestrator(
@@ -48,8 +48,9 @@ def test_orchestrator_runs_six_stages_in_order():
     assert state.spec == "spec done"
     assert state.task_list == "task list done"
     assert state.implementation == "implementation done"
-    assert state.verification == "verification done"
+    assert "PASS" in state.verification
     assert state.commit_message == "commit msg done"
+    assert state.status == "success"
 
 
 def test_orchestrator_calls_pause_callback_at_clarify_and_spec():
@@ -143,10 +144,16 @@ def test_verification_structured_marker_wins_over_keywords():
     assert not orch._verification_passed(
         "2 tests still red.\n[CREW_VERIFY] FAIL"
     )
-    # Marker present but verdict unreadable → ambiguous → pass (no spurious loop).
-    assert orch._verification_passed("[CREW_VERIFY] ???")
-    # No marker at all → fallback keyword scan still works (backward compat).
+    # Marker present but verdict unreadable → FAIL-CLOSED (no longer defaults to
+    # pass). The old fail-open behavior let an unreadable verdict count as pass,
+    # masking real verification failures.
+    assert not orch._verification_passed("[CREW_VERIFY] ???")
+    # No marker at all → keyword fallback; only a CLEAR pass token counts as pass.
     assert not orch._verification_passed("测试未通过")
+    # Empty verification → fail-closed (not a silent pass).
+    assert not orch._verification_passed("")
+    # Keyword fallback with a clear pass token.
+    assert orch._verification_passed("all tests passed, looks good")
 
 
 def test_verify_fail_triggers_fix_loop():
@@ -174,7 +181,9 @@ def test_verify_fail_triggers_fix_loop():
 
 
 def test_fix_loop_respects_max():
-    """Exhausting max_fix_loops proceeds to commit even if still failing."""
+    """Exhausting max_fix_loops proceeds to commit even if still failing — but
+    status is marked 'partial' so the CLI can warn (REGRESSION: was always
+    'success' under the old fail-open logic)."""
     responses = [
         AIMessage(content="clar", tool_calls=[]),
         AIMessage(content="spec", tool_calls=[]),
@@ -193,6 +202,28 @@ def test_fix_loop_respects_max():
     state = orch.run("req")
     assert state.fix_attempts == 1
     assert state.commit_message == "commit"
+    assert state.status == "partial", (
+        "budget-exhausted + verification still failing must be 'partial', not "
+        "'success' — the old fail-open logic masked this as a clean success")
+
+
+def test_passing_verify_yields_success_status():
+    """Happy path: verify passes -> status is 'success'."""
+    responses = [
+        AIMessage(content="clar", tool_calls=[]),
+        AIMessage(content="spec", tool_calls=[]),
+        AIMessage(content="tasks", tool_calls=[]),
+        AIMessage(content="impl", tool_calls=[]),
+        AIMessage(content="[CREW_VERIFY] PASS", tool_calls=[]),
+        AIMessage(content="commit msg", tool_calls=[]),
+    ]
+    model = _model_returning_per_call(*responses)
+    orch = CrewOrchestrator(
+        model=model, store=_store_with_skills(), gate=AutoPermissionGate(),
+        stream=NullStream(), auto_mode=True,
+    )
+    state = orch.run("req")
+    assert state.status == "success"
 
 
 def test_fix_feedback_injected_into_implementer_prompt():
