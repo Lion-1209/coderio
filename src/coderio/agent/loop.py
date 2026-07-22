@@ -53,6 +53,82 @@ class TurnResult:
         self.in_tool_loop = in_tool_loop
 
 
+def _fingerprint(name: str, args: dict) -> tuple:
+    """Normalize a tool call to a hashable fingerprint for loop detection.
+
+    A stuck agent re-reads the exact same file with the exact same args, so
+    the full frozen (key, value) dict is the right granularity. Promoted from
+    a closure inside _execute_turn to a module-level function to reduce that
+    function's cyclomatic complexity and make the fingerprint logic testable
+    in isolation."""
+    return (name, tuple(sorted((str(k), str(v)) for k, v in (args or {}).items())))
+
+
+def _seed_read_state(harness, messages) -> None:
+    """Pre-fill harness.state.content_read_files from a message list.
+
+    Shared by run_agent (seeds from session.messages, the authoritative
+    never-compacted source) and _execute_turn (defensive seed from convo).
+    Both used to inline this loop — extracting it removes duplication and
+    ensures both paths normalize identically via _norm_path.
+    """
+    if harness is None or not getattr(harness, "enabled", False):
+        return
+    from coderio.agent.harness import _norm_path
+    for m in messages:
+        if m.role == "assistant" and m.tool_calls:
+            for tc in m.tool_calls:
+                if tc.name == "read_file":
+                    p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
+                    if p:
+                        harness.state.content_read_files.add(_norm_path(p))
+
+
+def _apply_compaction(compacted: list, convo: list, on_compact) -> bool:
+    """Apply a compaction result in-place and persist the summary.
+
+    Replaces ``convo[:] = compacted`` + the on_compact persistence loop that
+    was duplicated in two places (token-trigger and empty-response-trigger).
+    Returns True if compaction was applied (compacted is shorter), False if
+    it was a no-op (returned unchanged — too few messages to compact).
+    """
+    if len(compacted) >= len(convo):
+        return False
+    convo[:] = compacted
+    if on_compact is not None:
+        for m in compacted:
+            if m.role == "system" and m.kind == "context_summary":
+                on_compact(m)
+                break  # compact_convo returns exactly one summary
+    return True
+
+
+def _build_max_rounds_notice(harness, max_rounds: int) -> str:
+    """Build the 'hit max rounds' termination message.
+
+    Extracted from _execute_turn to reduce its complexity. Includes a warning
+    about unverified writes when the harness has pending writes_since_verify
+    (the VerifyGate never got its chance before the round limit hit).
+    """
+    out = (
+        f"已达最大轮数上限（{max_rounds} 轮），本轮停止。\n\n"
+        "可能的原因：任务较大、陷入工具调用循环、或遇到持续失败的重试。\n"
+        "可以尝试：\n"
+        "  • /clear 开启新会话后用更具体的指令重新开始\n"
+        "  • 在 config.toml 里调大 [tools] max_tool_rounds\n"
+        "  • 把大任务拆成更小的步骤分多轮完成"
+    )
+    if harness is not None and getattr(harness, "enabled", False):
+        pending = list(harness.state.writes_since_verify)
+        if pending:
+            out += (
+                f"\n\n⚠ 注意：以下文件已写入但未经验证（未跑测试/构建）：\n"
+                + "\n".join(f"  - {p}" for p in pending)
+                + "\n建议手动验证后再继续。"
+            )
+    return out
+
+
 def _content_to_text(content) -> str:
     """Normalize an AIMessage.content (str OR list of Anthropic content blocks) to text.
 
@@ -287,42 +363,17 @@ def _execute_turn(
             on_message(msg)
 
     # Pre-fill the harness's read-state from conversation history so GroundingGate
-    # doesn't falsely flag files read in PRIOR turns as "unread this turn". Without
-    # this, a multi-turn "analyze this project" session hits a read→cite→blocked→
-    # re-read loop: turn 1 reads 20 files, turn 2's fresh HarnessState forgets them,
-    # the gate forces re-reading every cited file. Both Step-Realtime-CLI and Kimi
-    # Code keep read-state per-session (via conversation memory); coderio's per-turn
-    # HarnessState must be seeded from history to match that expectation.
-    #
-    # NOTE: this is a SECONDARY seed — run_agent() already pre-fills from
-    # session.messages (the authoritative, never-compacted source). This block
-    # additionally covers any read_file calls accumulated in `convo` during THIS
-    # _execute_turn invocation before the first model call (defensive — currently
-    # always a no-op since the loop hasn't started yet, but kept for robustness
-    # against future re-entry patterns). Both paths normalize via _norm_path so
-    # 'Loop.py' and 'loop.py' dedup correctly on case-insensitive filesystems.
-    if harness is not None and getattr(harness, "enabled", False):
-        from coderio.agent.harness import _norm_path
-        for m in convo:
-            if m.role == "assistant" and m.tool_calls:
-                for tc in m.tool_calls:
-                    if tc.name == "read_file":
-                        p = tc.args.get("path") or tc.args.get("file_path") or ""
-                        if p:
-                            harness.state.content_read_files.add(_norm_path(p))
+    # doesn't falsely flag files read in PRIOR turns as "unread this turn". This
+    # is a SECONDARY seed — run_agent() already pre-fills from session.messages
+    # (the authoritative, never-compacted source). This block covers any read_file
+    # calls accumulated in `convo` during THIS _execute_turn invocation.
+    _seed_read_state(harness, convo)
 
     # Tool-loop detection: track how many times each (name, args) signature has
     # repeated. If one repeats > _MAX_REPEATED_TOOL_CALLS, the agent is stuck
     # re-doing the same thing — flag it as context-rot for the restart logic.
     _tool_call_counts: dict[tuple, int] = {}
     _detected_loop = False
-
-    def _fingerprint(name: str, args: dict) -> tuple:
-        # Normalize args to a hashable fingerprint. Drop volatile values that
-        # legitimately change between calls (e.g. a counter) — but for our
-        # purposes the full frozen args dict is the right granularity: a stuck
-        # agent re-reads the exact same file with the exact same args.
-        return (name, tuple(sorted((str(k), str(v)) for k, v in (args or {}).items())))
 
     active_prompt = system_prompt
     last_input_tokens = 0  # updated each round from the model's usage_metadata
@@ -342,20 +393,7 @@ def _execute_turn(
                     stream.on_phase_change("compacting", step_num, "压缩上下文")
                 compacted = compact_convo(convo, model,
                                           keep_recent=context_cfg.keep_recent)
-                if len(compacted) < len(convo):
-                    # In-place replace so the reference held by this function
-                    # stays valid; _emit and harness both read `convo`.
-                    convo[:] = compacted
-                    # Persist the summary to the session so the NEXT turn's
-                    # rebuild can truncate the superseded history. Without this,
-                    # the compaction only helps the current turn in memory; the
-                    # next run_agent rebuilds convo from session.messages and
-                    # gets the full uncompacted history back.
-                    if on_compact is not None:
-                        for m in compacted:
-                            if m.role == "system" and m.kind == "context_summary":
-                                on_compact(m)
-                                break  # compact_convo returns exactly one summary
+                _apply_compaction(compacted, convo, on_compact)
 
         # Signal the UI to start its busy indicator BEFORE the model call. The
         # step number lets the UI show progress ("步骤 2") so the user knows the
@@ -392,15 +430,7 @@ def _execute_turn(
                     try:
                         compacted = compact_convo(convo, model,
                                                   keep_recent=context_cfg.keep_recent)
-                        if len(compacted) < len(convo):
-                            # Preserve the original tool_call/tool_result pairing
-                            # for messages kept (compact_convo already handles this).
-                            convo[:] = compacted
-                            if on_compact is not None:
-                                for m in compacted:
-                                    if m.role == "system" and m.kind == "context_summary":
-                                        on_compact(m)
-                                        break
+                        _apply_compaction(compacted, convo, on_compact)
                     except Exception:
                         pass  # compaction failed — fall through to the nudge retry
                 if empty_retries <= _MAX_EMPTY_RETRIES:
@@ -483,24 +513,7 @@ def _execute_turn(
                 new_prompt = on_activate_skill()
                 if new_prompt:
                     active_prompt = new_prompt
-    out = (
-        f"已达最大轮数上限（{max_rounds} 轮），本轮停止。\n\n"
-        "可能的原因：任务较大、陷入工具调用循环、或遇到持续失败的重试。\n"
-        "可以尝试：\n"
-        "  • /clear 开启新会话后用更具体的指令重新开始\n"
-        "  • 在 config.toml 里调大 [tools] max_tool_rounds\n"
-        "  • 把大任务拆成更小的步骤分多轮完成"
-    )
-    # If there are unverified writes when we stop, warn the user — the VerifyGate
-    # never got its chance, so written code may not have been tested.
-    if harness is not None and getattr(harness, "enabled", False):
-        pending = list(harness.state.writes_since_verify)
-        if pending:
-            out += (
-                f"\n\n⚠ 注意：以下文件已写入但未经验证（未跑测试/构建）：\n"
-                + "\n".join(f"  - {p}" for p in pending)
-                + "\n建议手动验证后再继续。"
-            )
+    out = _build_max_rounds_notice(harness, max_rounds)
     _emit(Message.assistant(out))
     stream.on_finish()
     # hit_max_rounds=True signals context-rot to run_agent's restart logic.
@@ -585,7 +598,7 @@ def run_agent(
     harness = None
     state_tracker = None
     if harness_enabled:
-        from coderio.agent.harness import Harness, HarnessState, _norm_path
+        from coderio.agent.harness import Harness, HarnessState
         from coderio.agent.state import AgentStateTracker
         todo_store = next((t.store for t in tools if getattr(t, "name", "") == "todo"), None)
         # If no TodoStore is reachable, the gates degrade gracefully (todos empty
@@ -594,21 +607,11 @@ def run_agent(
         state_tracker = AgentStateTracker()
         harness = Harness(state=HarnessState(), todos=todo_store or _TS(),
                           state_tracker=state_tracker, stream=stream)
-        # SESSION-LEVEL read-state seed: GroundingGate is supposed to enforce
-        # "claims about code must be grounded in actual source read", but the
-        # model legitimately cites files read in PRIOR turns of the same session
-        # ("turn 1 read 20 files, turn 2 'review them' should not require re-reading").
-        # Pre-fill content_read_files from session.messages (the authoritative,
-        # never-compacted history — convo gets compacted mid-turn, losing the
-        # tool_call records). Both this seed and the per-turn seed in
-        # _execute_turn go through _norm_path so 'Loop.py' and 'loop.py' dedup.
-        for m in session.messages:
-            if m.role == "assistant" and m.tool_calls:
-                for tc in m.tool_calls:
-                    if tc.name == "read_file":
-                        p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
-                        if p:
-                            harness.state.content_read_files.add(_norm_path(p))
+        # SESSION-LEVEL read-state seed: GroundingGate enforces "claims about
+        # code must be grounded in actual source read", but the model legitimately
+        # cites files read in PRIOR turns of the same session. Pre-fill from
+        # session.messages (the authoritative, never-compacted history).
+        _seed_read_state(harness, session.messages)
 
     # convo feeds the model; on_message persists every produced message to the session.
     convo = list(session.messages)
@@ -657,20 +660,13 @@ def run_agent(
                 from coderio.agent.state import AgentStateTracker as _AST
                 tracker2 = _AST()
                 if harness is not None:
-                    from coderio.agent.harness import HarnessState as _HS, _norm_path as _NP
+                    from coderio.agent.harness import HarnessState as _HS
                     harness2 = Harness(state=_HS(), todos=harness.todos,
                                        state_tracker=tracker2, stream=stream)
-                    # Re-seed session-level read-state (same logic as run_agent's
-                    # primary harness): the restart's convo2 has lost tool_call
-                    # history to compaction, so without this the GroundingGate
-                    # would force-re-read every file the model cites in its retry.
-                    for m in session.messages:
-                        if m.role == "assistant" and m.tool_calls:
-                            for tc in m.tool_calls:
-                                if tc.name == "read_file":
-                                    p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
-                                    if p:
-                                        harness2.state.content_read_files.add(_NP(p))
+                    # Re-seed session-level read-state: the restart's convo2 has
+                    # lost tool_call history to compaction, so without this the
+                    # GroundingGate would force-re-read every cited file.
+                    _seed_read_state(harness2, session.messages)
                 else:
                     harness2 = None
                 turn_result = _execute_turn(

@@ -994,50 +994,30 @@ class CoderioTUI(App):
         """MAIN THREAD (set_interval): drain the render queue and execute all
         pending instructions, then scroll to bottom.
 
-        Two scroll strategies depending on what was rendered:
-          - STREAMING updates (text/think_update): fire ONE immediate scroll_end
-            via call_after_refresh. These fire every ~60ms during output, so a
-            single deferred scroll avoids timer pile-up.
-          - FINAL render (finalize/static/panel/think_fold): these mount new widgets
-            whose height needs multiple layout passes to settle, so use the
-            multi-stage delayed scroll (0.15/0.3/0.5s).
+        Dispatch is a dict lookup (self._RENDER_DISPATCH) mapping action name
+        to a handler method. Each handler returns a scroll category:
+          - "streaming": lightweight live update → single deferred scroll.
+          - "final": new widget mounted → multi-stage delayed scroll (layout
+            passes need time to settle on large Panels).
+          - "none": no scroll trigger (clear_live, exit).
+
+        This replaces a 9-branch if/elif chain (cyclomatic complexity ~18)
+        with a flat table lookup — same behavior, far easier to extend (add a
+        new render action by adding one dict entry + one method).
         """
         did_streaming = False
         did_final = False
         while self._render_q:
             action, *args = self._render_q.popleft()
+            handler = self._RENDER_DISPATCH.get(action)
+            if handler is None:
+                continue
             try:
-                if action == "text":
-                    self._render_live_output(args[0])
+                category = handler(self, args)
+                if category == "streaming":
                     did_streaming = True
-                elif action == "finalize":
-                    self._render_finalize(*args)
+                elif category == "final":
                     did_final = True
-                elif action == "think_start":
-                    self._render_think_start(args[0])
-                    did_streaming = True
-                elif action == "think_update":
-                    self._render_think_update(args[0])
-                    did_streaming = True
-                elif action == "think_fold":
-                    self._render_think_fold(*args)
-                    did_final = True
-                elif action == "static":
-                    self._add_text_main(args[0], args[1] if len(args) > 1 else "")
-                    did_final = True
-                elif action == "panel":
-                    self._add_static_main(args[0])
-                    did_final = True
-                elif action == "clear_live":
-                    if self._live_out_widget is not None:
-                        try:
-                            self._live_out_widget.remove()
-                        except Exception:
-                            pass
-                        self._live_out_widget = None
-                        self._live_rendered_len = 0
-                elif action == "exit":
-                    self.exit()
             except Exception:
                 pass
         # Scroll strategy: streaming = single deferred scroll; final = multi-stage
@@ -1056,6 +1036,76 @@ class CoderioTUI(App):
                 self.call_after_refresh(self._scroll_history_end)
             except Exception:
                 pass
+
+    # --- render-action handlers (each returns "streaming"|"final"|"none") ---
+    # Kept as small staticmethod-like functions so the dispatch table can
+    # reference them without constructing lambdas on every drain cycle.
+
+    @staticmethod
+    def _h_text(self, args):
+        self._render_live_output(args[0])
+        return "streaming"
+
+    @staticmethod
+    def _h_finalize(self, args):
+        self._render_finalize(*args)
+        return "final"
+
+    @staticmethod
+    def _h_think_start(self, args):
+        self._render_think_start(args[0])
+        return "streaming"
+
+    @staticmethod
+    def _h_think_update(self, args):
+        self._render_think_update(args[0])
+        return "streaming"
+
+    @staticmethod
+    def _h_think_fold(self, args):
+        self._render_think_fold(*args)
+        return "final"
+
+    @staticmethod
+    def _h_static(self, args):
+        self._add_text_main(args[0], args[1] if len(args) > 1 else "")
+        return "final"
+
+    @staticmethod
+    def _h_panel(self, args):
+        self._add_static_main(args[0])
+        return "final"
+
+    @staticmethod
+    def _h_clear_live(self, args):
+        if self._live_out_widget is not None:
+            try:
+                self._live_out_widget.remove()
+            except Exception:
+                pass
+            self._live_out_widget = None
+            self._live_rendered_len = 0
+        return "none"
+
+    @staticmethod
+    def _h_exit(self, args):
+        self.exit()
+        return "none"
+
+    # Dispatch table: action name -> handler. Built once at class definition.
+    # Handlers are staticmethods taking (self, args) so they can live in the
+    # table without binding overhead.
+    _RENDER_DISPATCH = {
+        "text": _h_text,
+        "finalize": _h_finalize,
+        "think_start": _h_think_start,
+        "think_update": _h_think_update,
+        "think_fold": _h_think_fold,
+        "static": _h_static,
+        "panel": _h_panel,
+        "clear_live": _h_clear_live,
+        "exit": _h_exit,
+    }
 
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
     def _scroll_history_end(self) -> None:
@@ -1573,6 +1623,27 @@ def _switch_active_profile(profile_name: str) -> str:
     return profile_name
 
 
+def _resolve_effective_context(cfg) -> "ContextConfig":
+    """Pick the effective context_limit for the active model.
+
+    Priority: active profile's probed value > [model].context_limit > the
+    ContextConfig default (200K). Extracted from on_input to reduce that
+    closure's complexity — it's a pure calculation with no side effects.
+
+    Without this, a 256K-context model is mistreated as the 200K default and
+    gets compacted at 120K instead of 153K.
+    """
+    from dataclasses import replace as _replace
+    eff_ctx = cfg.context
+    active_profile = next((p for p in (cfg.profiles or [])
+                           if p.name == cfg.active_profile), None)
+    if active_profile is not None and active_profile.context_limit > 0:
+        return _replace(eff_ctx, model_context_limit=active_profile.context_limit)
+    if getattr(cfg.model, "context_limit", 0) > 0:
+        return _replace(eff_ctx, model_context_limit=cfg.model.context_limit)
+    return eff_ctx
+
+
 def run_tui(
     provider_override: str | None = None,
     model_override: str | None = None,
@@ -1757,22 +1828,7 @@ def run_tui(
         if imgs:
             tui._add_text(f"📎 已附加 {len(imgs)} 张图片: " + ", ".join(p for p, _, _ in imgs), style="dim")
         user_content = build_user_content(line)
-        # Resolve the effective context_limit: the active profile's probed value
-        # (set at setup time via probe_context_limit) wins; the legacy [model]
-        # path's context_limit is the fallback for configs without profiles.
-        # If both are 0 (not probed / probe failed), fall back to
-        # ContextConfig.model_context_limit (the 200K default).
-        # Without this, a 256K-context model is mistreated as the 200K default
-        # and gets compacted at 120K instead of 153K.
-        from dataclasses import replace as _replace
-        eff_ctx = rt["cfg"].context
-        active_name = rt["cfg"].active_profile
-        active_profile = next((p for p in (rt["cfg"].profiles or [])
-                               if p.name == active_name), None)
-        if active_profile is not None and active_profile.context_limit > 0:
-            eff_ctx = _replace(eff_ctx, model_context_limit=active_profile.context_limit)
-        elif getattr(rt["cfg"].model, "context_limit", 0) > 0:
-            eff_ctx = _replace(eff_ctx, model_context_limit=rt["cfg"].model.context_limit)
+        eff_ctx = _resolve_effective_context(rt["cfg"])
         run_agent(
             user_input=user_content, model=rt["model"], tools=tools, gate=rt["gate"],
             skill_store=store, active_skills=active, session=rt["session"], stream=tui,
