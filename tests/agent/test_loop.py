@@ -566,6 +566,82 @@ def test_empty_response_triggers_compact_before_retry(tmp_path):
     assert "最终答案" in final
 
 
+def test_compaction_persists_summary_and_truncates_on_reload(tmp_path):
+    """END-TO-END (P1): compaction must persist the context_summary to the
+    session jsonl, AND reloading that session must truncate the superseded
+    history. This is the full data-flow test — the unit tests only verify
+    pieces (_truncate_at_last_summary in isolation, on_compact callback wiring).
+
+    Flow: seed a long session -> trigger compaction via empty-response path ->
+    assert summary is in session.messages -> reload from disk -> assert old
+    messages are gone.
+    """
+    from coderio.config import ContextConfig
+    from langchain_core.messages import AIMessage as _AIMsg
+
+    # Build a model mock whose .invoke() returns a real summary (used by
+    # compact_convo's model.invoke() call), and whose .stream() yields the
+    # conversation (empty first -> triggers compaction, then a real answer).
+    model = MagicMock()
+    model.bind_tools = MagicMock(return_value=model)
+    stream_calls = {"i": 0}
+    stream_responses = [
+        _AIMsg(content="", tool_calls=[]),       # round 1: empty -> compact
+        _AIMsg(content="final answer", tool_calls=[]),  # round 2: real answer
+    ]
+
+    def _stream(_msgs):
+        i = stream_calls["i"]
+        stream_calls["i"] += 1
+        yield stream_responses[min(i, len(stream_responses) - 1)]
+
+    model.stream = MagicMock(side_effect=_stream)
+    # compact_convo calls model.invoke() for the summary — must return content.
+    model.invoke = MagicMock(return_value=_AIMsg(content="这是压缩后的摘要内容"))
+
+    ctx_cfg = ContextConfig(enabled=True, trigger_ratio=0.6, keep_recent=4,
+                            model_context_limit=200_000)
+    session = Session.create(tmp_path, {"meta": "test"})
+    # Seed enough conversation messages that compact_convo can actually shrink
+    # (it needs len(convo) > keep_recent + 2 = 6). These represent a prior turn.
+    for i in range(8):
+        session.append(Message.user(f"旧问题 {i}"))
+        session.append(Message.assistant(f"旧回答 {i}"))
+
+    stream = _RecStream()
+    final = run_agent(
+        user_input="继续", model=model, tools=build_default_tools(),
+        gate=PermissionGate("auto"),
+        skill_store=SkillStore(), active_skills=ActiveSkills(),
+        session=session, stream=stream, max_rounds=5,
+        context_cfg=ctx_cfg,
+    )
+    assert "final answer" in final
+
+    # 1. The context_summary must now be in session.messages (persisted by
+    #    on_compact -> session.append).
+    summaries = [m for m in session.messages
+                 if m.role == "system" and m.kind == "context_summary"]
+    assert len(summaries) >= 1, (
+        "compaction did not persist context_summary to session — on_compact "
+        "wiring is broken")
+
+    # 2. Reload the session from disk — the truncation must kick in.
+    reloaded = Session.load(session.path)
+    reloaded_contents = [str(m.content) for m in reloaded.messages]
+    # Old conversation messages (pre-compaction) must be gone.
+    assert "旧问题 0" not in reloaded_contents, (
+        "superseded history not truncated on reload — Session.load truncation "
+        "is broken")
+    assert "旧回答 3" not in reloaded_contents
+    # The summary itself must survive (system message).
+    assert any("摘要" in c for c in reloaded_contents), (
+        "context_summary lost on reload")
+    # The final answer (post-compaction) must survive.
+    assert "final answer" in " ".join(reloaded_contents), (
+        "post-compaction messages lost on reload")
+
+
 def test_empty_response_shows_notice_not_silent_hang(tmp_path):
     """Regression: after several tool-call rounds, step-3.7-flash returned a bare
     empty message (no text, no tool_calls). _execute_turn treated it as 'done'
