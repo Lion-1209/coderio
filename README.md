@@ -41,6 +41,24 @@
 
 ### 安装
 
+**方式一：pip 一行安装（推荐，非开发者）**
+
+```bash
+pip install "coderio @ git+https://github.com/Lion-1209/coderio.git"
+```
+
+装完直接 `coderio` 启动。
+
+**方式二：下载 Release wheel（离线/内网）**
+
+到 [Releases 页面](https://github.com/Lion-1209/coderio/releases) 下载最新的 `coderio-*.whl`，然后：
+
+```bash
+pip install coderio-0.1.0-py3-none-any.whl
+```
+
+**方式三：从源码安装（开发者）**
+
 ```bash
 git clone https://github.com/Lion-1209/coderio.git
 cd coderio
