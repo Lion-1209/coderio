@@ -175,6 +175,9 @@ def _cmd_resume(ctx, arg: str) -> CommandResult:
 
 def _cmd_mode(ctx, arg: str) -> CommandResult:
     mode = arg.strip()
+    # /mode with no argument → open the visual picker (like /profile does).
+    if not mode:
+        return CommandResult(message="__OPEN_MODE_PICKER__")
     if mode not in {"confirm", "auto", "plan"}:
         return CommandResult(message=f"Invalid mode {mode!r}. Use: confirm | plan | auto")
     return CommandResult(

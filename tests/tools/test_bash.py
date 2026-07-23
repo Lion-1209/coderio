@@ -61,8 +61,8 @@ def test_timeout_kills_hanging_process():
     # Must return well within the 60s sleep — if it takes >15s, the kill
     # didn't work and we're back to the old hang.
     assert elapsed < 15, (
-        f"timeout kill took {elapsed:.1f}s — process tree kill failed "
-        "(the old Windows subprocess.run bug is back)")
+        f"timeout kill took {elapsed:.1f}s — process tree kill failed (the old Windows subprocess.run bug is back)"
+    )
 
 
 def test_timeout_kills_child_process_tree():
@@ -81,5 +81,4 @@ def test_timeout_kills_child_process_tree():
     out = tool.run(command="bash -c 'sleep 30'", timeout=2)
     elapsed = time.monotonic() - start
     assert "timed out" in out.lower()
-    assert elapsed < 15, (
-        f"process tree kill took {elapsed:.1f}s — grandchild not killed")
+    assert elapsed < 15, f"process tree kill took {elapsed:.1f}s — grandchild not killed"

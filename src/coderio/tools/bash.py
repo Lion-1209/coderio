@@ -35,7 +35,8 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
         h_job = kernel32.CreateJobObjectW(None, None)
         if h_job:
             kernel32.SetInformationJobObject(
-                h_job, 9,  # JobObjectExtendedLimitInformation = 9
+                h_job,
+                9,  # JobObjectExtendedLimitInformation = 9
                 ctypes.byref(ctypes.c_ulong(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)),
                 ctypes.sizeof(ctypes.c_ulong),
             )
@@ -53,6 +54,7 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
             os.killpg(os.getpgid(pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+
 
 _WIN_CANDIDATES = (
     "C:\\Program Files\\Git\\bin\\bash.exe",

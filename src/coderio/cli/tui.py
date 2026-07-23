@@ -836,6 +836,74 @@ class ProfilePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ModePickerScreen(ModalScreen[str | None]):
+    """Visual permission-mode picker (/mode with no argument).
+
+    Lists the three modes (confirm / plan / auto) as a ListView with the
+    current mode marked ★. ↑↓ navigates, Enter selects (dismisses with the
+    mode name), Esc cancels. Same UX pattern as ProfilePickerScreen.
+    """
+
+    CSS = """
+    ModePickerScreen { align: center middle; }
+    #mode-box {
+        width: 60%; height: auto; max-height: 60%; border: round $accent;
+        background: $surface; padding: 1 2;
+    }
+    #mode-title { text-align: center; margin-bottom: 1; }
+    #mode-list { height: auto; max-height: 8; }
+    ModePickerScreen ListItem { padding: 0 1; }
+    ModePickerScreen ListItem > Widget :hover { background: $boost; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "取消", show=True),
+    ]
+
+    # mode -> human-readable description shown as a dim subtitle.
+    _MODE_INFO = {
+        "confirm": "每次写操作前确认（最安全）",
+        "plan": "阻止写操作，只读 + 规划",
+        "auto": "自动执行，不确认（需信任）",
+    }
+
+    def __init__(self, active_mode: str = "") -> None:
+        super().__init__()
+        self._active_mode = active_mode
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mode-box"):
+            yield Static(
+                "[bold magenta]切换权限模式[/bold magenta]  ↑↓ 选择 · Enter 切换 · Esc 取消",
+                id="mode-title",
+            )
+            yield ListView(id="mode-list")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#mode-list", ListView)
+        for mode in ("confirm", "plan", "auto"):
+            star = "★ " if mode == self._active_mode else "  "
+            desc = self._MODE_INFO.get(mode, "")
+            lv.append(
+                ListItem(
+                    Static(f"{star}{mode}  [dim]{desc}[/dim]"),
+                    name=mode,
+                )
+            )
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        lv.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Enter on a row → switch to that mode."""
+        self.dismiss(event.item.name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -1348,7 +1416,30 @@ class CoderioTUI(App):
                     self._live_output_last_flush = 0.0
                     if self._status_bar:
                         self._status_bar.set_phase("idle")
-                    self._render_q.append(("static", f"运行错误: {type(e).__name__}: {e}", "red"))
+                    # Show the error as a red Panel (not a single dim line) so
+                    # it's visible and actionable. Then refill the input with
+                    # the failed user message so they can just press Enter to
+                    # retry — matching the UX of claude code / zcode.
+                    self._render_q.append(
+                        (
+                            "panel",
+                            Panel(
+                                f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。",
+                                title="⚠ 运行错误",
+                                border_style="red",
+                            ),
+                        )
+                    )
+
+                    def _refill_input():
+                        try:
+                            inp = self.query_one("#msg", Input)
+                            inp.value = line
+                            inp.focus()
+                        except Exception:
+                            pass
+
+                    self.call_from_thread(_refill_input)
 
             self.run_worker(
                 _run,
@@ -1462,8 +1553,37 @@ class CoderioTUI(App):
             args_str = args_str[:100] + "…"
         self._render_q.append(("static", f"⏺ {name}({args_str})", "green"))
 
+    # Tools that modify files — shown with a prominent yellow line so the user
+    # always knows what changed, even in auto mode (where there's no confirmation).
+    _WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit"})
+
     def on_tool_end(self, name: str, result: str) -> None:
         self._set_phase("thinking")
+        # Write tools get a prominent yellow line so the user sees what was
+        # modified — matching the "always show file changes" UX of claude code /
+        # zcode. Other tools keep the existing dim/grey output.
+        if name in self._WRITE_TOOLS and not result.startswith(("Error", "Permission denied")):
+            self._render_q.append(
+                ("static", f"  📝 {result.splitlines()[0] if result.splitlines() else name}", "yellow bold")
+            )
+            return
+        if name == "_empty_response":
+            # Empty-response exhaustion is a hard interruption, not a normal
+            # tool result — show it as a red panel (like on_harness_warn) so
+            # it's visible instead of buried in dim grey text.
+            self._flush_round_thinking()
+            self._flush_buffer()
+            self._render_q.append(
+                (
+                    "panel",
+                    Panel(
+                        f"⚠ {result}\n\n建议用 /clear 清理上下文后重试，或检查模型状态。",
+                        title="⚠ 会话中断",
+                        border_style="red",
+                    ),
+                )
+            )
+            return
         if not self.show_tool_output:
             first = result.splitlines()[0][:60] if result.splitlines() else ""
             self._render_q.append(("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim"))
@@ -1545,6 +1665,24 @@ class CoderioTUI(App):
         self._render_q.append(("finalize", buf, think_text, secs, had_live))
         if self._status_bar:
             self._status_bar.set_phase("idle")
+
+    def on_turn_end(self, writes: list[str]) -> None:
+        """Turn-end summary: show a panel listing all files modified this turn.
+
+        Called after on_finish. If the turn modified any files (write_file /
+        edit_file / multi_edit), render a compact summary so the user always
+        knows what changed — even in auto mode where there's no confirmation.
+        Matches the 'always show file changes' UX of claude code / zcode.
+        """
+        if not writes:
+            return
+        body = "\n".join(f"📝 {w}" for w in writes)
+        self._render_q.append(
+            (
+                "panel",
+                Panel(body, title="本轮修改的文件", border_style="yellow"),
+            )
+        )
 
     def add_usage(self, meta: dict[str, int]) -> None:
         for k in ("input_tokens", "output_tokens"):
@@ -1908,6 +2046,29 @@ def run_tui(
                     tui.push_screen,
                     ProfilePickerScreen(profiles, active_name),
                     _on_profile_picked,
+                )
+                return
+            if res.message == "__OPEN_MODE_PICKER__":
+                # /mode (no arg) → open the ModePickerScreen. After the user
+                # picks, rebuild the gate with the new permission mode.
+                current_mode = rt["gate"].mode
+
+                def _on_mode_picked(mode):
+                    if mode is None or mode == current_mode:
+                        return  # cancelled or re-picked the same one
+                    from dataclasses import replace as _replace
+
+                    from coderio.cli.repl import build_gate
+
+                    c = _replace(rt["cfg"], tools=_replace(rt["cfg"].tools, permission_mode=mode))
+                    rt["cfg"] = c
+                    rt["gate"] = build_gate(c, console=None)
+                    tui._add_text(f"✅ 已切换到 {mode} 模式", style="bold green")
+
+                tui.call_from_thread(
+                    tui.push_screen,
+                    ModePickerScreen(current_mode),
+                    _on_mode_picked,
                 )
                 return
             if res.message:

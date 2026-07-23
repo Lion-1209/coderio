@@ -385,6 +385,10 @@ def _execute_turn(
     # re-doing the same thing — flag it as context-rot for the restart logic.
     _tool_call_counts: dict[tuple, int] = {}
     _detected_loop = False
+    # Track ALL file writes this turn (for the on_turn_end summary). Unlike
+    # harness.state.writes_since_verify (which is cleared by bash verification),
+    # this list persists for the full turn so the UI can show what changed.
+    _turn_writes: list[str] = []
 
     active_prompt = system_prompt
     last_input_tokens = 0  # updated each round from the model's usage_metadata
@@ -490,6 +494,8 @@ def _execute_turn(
                     stream.on_harness_warn(warn)
             _emit(Message.assistant(text))
             stream.on_finish()
+            if hasattr(stream, "on_turn_end"):
+                stream.on_turn_end(_turn_writes)
             return TurnResult(text, in_tool_loop=_detected_loop)
         _emit(
             Message.assistant(
@@ -515,6 +521,14 @@ def _execute_turn(
             # --- Harness observation + PlanGate augmentation (spec §3) ---
             # observe() records ground truth (writes / verifications) for the gates;
             # after_tool_call() may append a soft nudge to the result (never blocks).
+            # Track file writes for the turn-end summary (independent of the
+            # harness's writes_since_verify, which bash verification clears).
+            if name in ("write_file", "edit_file", "multi_edit") and not result.startswith(
+                ("Error", "Permission denied")
+            ):
+                p = str(args.get("path", ""))
+                if p and p not in _turn_writes:
+                    _turn_writes.append(f"{p} ({name})")
             if harness is not None and getattr(harness, "enabled", False):
                 harness.observe(name, args, result)
                 aug = harness.after_tool_call(name, args, result)
@@ -541,6 +555,8 @@ def _execute_turn(
     out = _build_max_rounds_notice(harness, max_rounds)
     _emit(Message.assistant(out))
     stream.on_finish()
+    if hasattr(stream, "on_turn_end"):
+        stream.on_turn_end(_turn_writes)
     # hit_max_rounds=True signals context-rot to run_agent's restart logic.
     # in_tool_loop carries whether we ALSO detected repeated tool calls.
     return TurnResult(out, hit_max_rounds=True, in_tool_loop=_detected_loop)

@@ -35,6 +35,10 @@ class StreamHandler(Protocol):
     # AgentStateTracker from inside Harness.observe/check_termination. Lets the
     # UI show the task-level phase alongside the model-activity micro-phase.
     def on_phase_change(self, state: str, step: int, hint: str) -> None: ...
+    # Turn end summary: the list of files modified this turn (write_file /
+    # edit_file / multi_edit). Lets the UI show a "files changed" summary —
+    # matching the "always show what changed" UX of claude code / zcode.
+    def on_turn_end(self, writes: list[str]) -> None: ...
 
 
 class NullStream:
@@ -75,4 +79,7 @@ class NullStream:
         pass
 
     def on_phase_change(self, state: str, step: int, hint: str) -> None:
+        pass
+
+    def on_turn_end(self, writes: list[str]) -> None:
         pass
