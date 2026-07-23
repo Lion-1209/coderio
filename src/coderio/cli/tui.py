@@ -21,10 +21,10 @@ from rich.panel import Panel
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Collapsible, Input, ListItem, ListView, RichLog, Static
+from textual.widgets import Button, Collapsible, Input, ListItem, ListView, RichLog, Static
 
 # Human-readable labels for AgentState task-phase values (shown in StatusBar).
 # Mirrors _PHASE_LABELS in cli/stream.py — duplicated rather than imported to
@@ -1044,6 +1044,13 @@ class CoderioTUI(App):
     #history Static { height: auto; }
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
+    #status-row { height: auto; }
+    #interrupt-btn {
+        display: none; height: 1; min-width: 8; padding: 0 1;
+        border: round $error 50%;
+    }
+    /* interrupt-btn is shown only when the agent is running (via add_class). */
+    #interrupt-btn.-visible { display: block; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -1055,7 +1062,8 @@ class CoderioTUI(App):
 
     BINDINGS = [
         Binding("ctrl+o", "toggle_thinking", "展开/收起思考", show=True),
-        Binding("ctrl+c", "quit", "退出", show=False),
+        Binding("escape", "interrupt", "中断任务", show=True),
+        Binding("ctrl+c", "interrupt", "中断任务", show=False),
     ]
 
     name = "textual_tui"
@@ -1100,6 +1108,13 @@ class CoderioTUI(App):
         # (on_mount, main thread) and read the plain attribute thereafter
         # (GIL-safe from any thread).
         self._status_bar: StatusBar | None = None
+        # Interrupt support: when the user clicks "中断" or presses Esc during
+        # an agent turn, _interrupted is set. The agent checks it between rounds
+        # (via stream.is_interrupted()) and exits gracefully. The worker ref is
+        # held so we can also call .cancel() as a backup.
+        self._interrupted: bool = False
+        self._agent_worker = None
+        self._is_running: bool = False  # True while the agent worker is active
         # RENDER QUEUE: the agent's background thread pushes render instructions
         # here (thread-safe deque append/popleft). A main-thread set_interval
         # timer drains the queue and executes the instructions on the main thread.
@@ -1124,9 +1139,11 @@ class CoderioTUI(App):
         # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
             yield CommandMenu(slash_completions())
-            yield StatusBar()
+            with Horizontal(id="status-row"):
+                yield StatusBar()
+                yield Button("⏹ 中断", id="interrupt-btn", variant="error")
             yield Input(
-                placeholder="输入消息, /help 看命令, Ctrl+O 展开思考",
+                placeholder="输入消息, /help 看命令, Esc 中断任务",
                 id="msg",
             )
 
@@ -1432,6 +1449,22 @@ class CoderioTUI(App):
             return  # not mounted yet
         bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
+    def _show_interrupt_btn(self, show: bool) -> None:
+        """Show/hide the interrupt button (main thread, called via call_from_thread)."""
+        try:
+            btn = self.query_one("#interrupt-btn", Button)
+            if show:
+                btn.add_class("-visible")
+            else:
+                btn.remove_class("-visible")
+        except Exception:
+            pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Interrupt button click → trigger action_interrupt."""
+        if event.button.id == "interrupt-btn":
+            self.action_interrupt()
+
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
         """Live-filter the command menu as the user types in the main input."""
@@ -1479,10 +1512,35 @@ class CoderioTUI(App):
             # keeps draining pending UI updates while the worker runs AND after it
             # completes — a raw daemon thread would not.
             def _run():
+                self._is_running = True
+                self._interrupted = False
+                self.call_from_thread(self._show_interrupt_btn, True)
                 try:
                     self._on_input(line)
                 except SystemExit:
                     self._render_q.append(("exit",))
+                except InterruptedError:
+                    # User pressed Esc / clicked 中断. Show a notice and clean up.
+                    self._round_thinking = ""
+                    self._round_think_start = 0.0
+                    self._live_think_body = None
+                    self._live_think_chars = 0
+                    self._round_think_started = False
+                    self.buffer = ""
+                    self._live_output_last_flush = 0.0
+                    if self._status_bar:
+                        self._status_bar.set_phase("idle")
+                    self._render_q.append(
+                        (
+                            "panel",
+                            Panel(
+                                "用户已中断当前任务。已完成的中间结果保留在历史中。\n"
+                                "输入新消息继续，或按 ↑ 恢复上一条输入。",
+                                title="⚠ 已中断",
+                                border_style="yellow",
+                            ),
+                        )
+                    )
                 except Exception as e:
                     # Reset the streaming state + status bar so the TUI doesn't
                     # get stuck in 'thinking' phase when the agent errors out
@@ -1497,10 +1555,6 @@ class CoderioTUI(App):
                     self._live_output_last_flush = 0.0
                     if self._status_bar:
                         self._status_bar.set_phase("idle")
-                    # Show the error as a red Panel (not a single dim line) so
-                    # it's visible and actionable. Then refill the input with
-                    # the failed user message so they can just press Enter to
-                    # retry — matching the UX of claude code / zcode.
                     self._render_q.append(
                         (
                             "panel",
@@ -1521,8 +1575,11 @@ class CoderioTUI(App):
                             pass
 
                     self.call_from_thread(_refill_input)
+                finally:
+                    self._is_running = False
+                    self.call_from_thread(self._show_interrupt_btn, False)
 
-            self.run_worker(
+            self._agent_worker = self.run_worker(
                 _run,
                 thread=True,
                 exclusive=True,
@@ -1549,6 +1606,31 @@ class CoderioTUI(App):
             return
         target.collapsed = not target.collapsed
 
+    # ----------------------------------------------------- binding: Esc = interrupt
+    def action_interrupt(self) -> None:
+        """Interrupt the currently-running agent turn (bound to Esc + Ctrl+C).
+
+        Sets the _interrupted flag (checked by is_interrupted() between rounds)
+        and cancels the worker as a backup. The agent thread sees the flag at
+        the next safe checkpoint (start of a new ReAct round) and raises
+        InterruptedError, which _run catches to show a '⚠ 已中断' panel.
+
+        If no agent is running, this is a no-op (Esc does nothing instead of
+        quitting the TUI — the old behavior was ctrl+c=quit which killed the
+        app mid-task with no way to stop gracefully).
+        """
+        if not self._is_running:
+            return  # nothing to interrupt
+        self._interrupted = True
+        # Cancel the worker as a backup — this unblocks subprocess.run calls
+        # and model.stream() that might be waiting on I/O. The flag handles
+        # the clean exit; cancel handles the "stuck in I/O" case.
+        if self._agent_worker is not None:
+            try:
+                self._agent_worker.cancel()
+            except Exception:
+                pass
+
     def _focused_collapsible(self):
         """Find the Collapsible enclosing the currently-focused widget, if any."""
         focused = self.focused
@@ -1570,6 +1652,16 @@ class CoderioTUI(App):
     def on_step_start(self, step: int = 1) -> None:
         self._flush_round_thinking()
         self._set_phase("thinking", step=step)
+
+    def is_interrupted(self) -> bool:
+        """Check if the user requested an interrupt (agent thread calls this).
+
+        Called between ReAct rounds by _execute_turn. When True, the turn ends
+        gracefully — the user gets whatever partial output exists, plus a
+        '⚠ 已中断' panel. The agent thread does NOT raise or crash; it just
+        stops looping and returns.
+        """
+        return self._interrupted
 
     def on_token(self, text: str) -> None:
         self._flush_round_thinking()

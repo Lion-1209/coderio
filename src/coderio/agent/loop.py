@@ -394,6 +394,12 @@ def _execute_turn(
     last_input_tokens = 0  # updated each round from the model's usage_metadata
     empty_retries = 0  # empty-response retry counter (see _MAX_EMPTY_RETRIES)
     for step_num in range(1, max_rounds + 1):
+        # User interrupt check: if the user pressed Esc / clicked 中断, stop
+        # gracefully at this safe checkpoint (between rounds, no partial tool
+        # calls in flight). The TUI's is_interrupted() is a plain attribute
+        # read (GIL-safe from the agent thread).
+        if hasattr(stream, "is_interrupted") and stream.is_interrupted():
+            raise InterruptedError("用户中断了任务")
         # Context compaction: if the previous round's input_tokens exceeded the
         # trigger ratio, summarize old messages before this round's model call.
         # Uses the provider-reported count (exact, not a tokenizer guess). Skipped
