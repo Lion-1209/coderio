@@ -8,6 +8,7 @@ stall in a real terminal with a large history pane.
 
 import asyncio
 import re
+
 import pytest
 
 from coderio.cli.tui import CoderioTUI, StatusBar
@@ -89,9 +90,7 @@ async def test_status_bar_shows_tool_index_in_batch():
     app = CoderioTUI()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.on_tool_start(
-            "read_file", {"path": "b.py"}, step=1, tool_index=1, tool_total=3
-        )
+        app.on_tool_start("read_file", {"path": "b.py"}, step=1, tool_index=1, tool_total=3)
         await pilot.pause()
         text = _render(app)
         assert "read_file(2/3)" in text

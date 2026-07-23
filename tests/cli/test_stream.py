@@ -1,5 +1,4 @@
 import re
-import time
 
 from rich.console import Console
 
@@ -47,9 +46,7 @@ def test_step_start_arms_busy_indicator():
     s = RichStream(console)
     assert s._busy_live is None
     s.on_step_start()
-    assert s._busy_live is not None, (
-        "busy indicator should be running after on_step_start"
-    )
+    assert s._busy_live is not None, "busy indicator should be running after on_step_start"
     assert s._busy_start > 0
     s.on_finish()
 
@@ -104,7 +101,6 @@ def test_busy_timer_text_advances_without_on_thinking():
     get_renderable callback so each refresh rebuilds the Spinner with a fresh
     time.monotonic() read. This must hold even when NO on_thinking fires (the
     silent-wait case the user reported)."""
-    import re
     import time as _time
 
     console = _console()
@@ -117,11 +113,5 @@ def test_busy_timer_text_advances_without_on_thinking():
     m2 = re.search(r"([\d.]+)s", t2)
     v1 = float(m1.group(1))
     v2 = float(m2.group(1))
-    assert v2 > v1, (
-        "timer text must advance during silent wait: "
-        + str(v1)
-        + "s -> "
-        + str(v2)
-        + "s"
-    )
+    assert v2 > v1, "timer text must advance during silent wait: " + str(v1) + "s -> " + str(v2) + "s"
     s.on_finish()

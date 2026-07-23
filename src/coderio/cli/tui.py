@@ -15,10 +15,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
-from rich.console import RenderableType
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -409,9 +409,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard-box"):
-            yield Static(
-                "[bold magenta]coderio 配置向导[/bold magenta]", id="onboard-title"
-            )
+            yield Static("[bold magenta]coderio 配置向导[/bold magenta]", id="onboard-title")
             yield Static("", id="onboard-hint")
             yield ListView(id="onboard-list")
             yield Input(id="onboard-input")
@@ -455,14 +453,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         lv.append(ListItem(Static("  [green]➕[/green]  新建配置")))
         self._action_items.append(None)
         for p in self._existing_profiles:
-            lv.append(
-                ListItem(
-                    Static(
-                        f"  [yellow]✎[/yellow]  修改  {p.name}  "
-                        f"[dim]{p.provider_id} · {p.model}[/dim]"
-                    )
-                )
-            )
+            lv.append(ListItem(Static(f"  [yellow]✎[/yellow]  修改  {p.name}  [dim]{p.provider_id} · {p.model}[/dim]")))
             self._action_items.append(p)
         try:
             lv.index = 0
@@ -533,11 +524,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
             ("订阅制", [p for p in self._providers if p.plan]),
             (
                 "国内直连",
-                [
-                    p
-                    for p in self._providers
-                    if not p.plan and p.id in ("bigmodel_api", "stepfun_api")
-                ],
+                [p for p in self._providers if not p.plan and p.id in ("bigmodel_api", "stepfun_api")],
             ),
             ("国际", [p for p in self._providers if p.id in ("openai", "anthropic")]),
             ("本地", [p for p in self._providers if p.id == "ollama"]),
@@ -545,15 +532,9 @@ class OnboardingScreen(ModalScreen[dict | None]):
         ]
         for group_name, providers in groups:
             for p in providers:
-                ms = (
-                    f" ({' / '.join(p.models[:2])}{'...' if len(p.models) > 2 else ''})"
-                    if p.models
-                    else ""
-                )
+                ms = f" ({' / '.join(p.models[:2])}{'...' if len(p.models) > 2 else ''})" if p.models else ""
                 check = "  [green]✓[/green]" if p.id in self._configured else "   "
-                lv.append(
-                    ListItem(Static(f"  [dim]{group_name}[/dim]  {p.label}{ms}{check}"))
-                )
+                lv.append(ListItem(Static(f"  [dim]{group_name}[/dim]  {p.label}{ms}{check}")))
                 self._provider_items.append(p)
         try:
             lv.index = 0
@@ -568,9 +549,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
             # No preset models (ollama/custom) — text input
             self._step = "model_input"
             self.query_one("#onboard-list", ListView).display = False
-            self.query_one("#onboard-hint").update(
-                "输入模型名（例如 qwen2.5-coder / gpt-4o）："
-            )
+            self.query_one("#onboard-hint").update("输入模型名（例如 qwen2.5-coder / gpt-4o）：")
             inp = self.query_one("#onboard-input", Input)
             inp.visible = True
             inp.password = False
@@ -595,18 +574,14 @@ class OnboardingScreen(ModalScreen[dict | None]):
             lv.index = start_idx
         except Exception:
             pass
-        self.query_one("#onboard-hint").update(
-            f"选择模型（{p.label}）— ★ = 推荐（↑↓ · Enter）"
-        )
+        self.query_one("#onboard-hint").update(f"选择模型（{p.label}）— ★ = 推荐（↑↓ · Enter）")
         lv.focus()
 
     def _show_base_url_step(self) -> None:
         """Step 2b: base_url input (openai_custom only)."""
         self._step = "base_url"
         self.query_one("#onboard-list", ListView).display = False
-        self.query_one("#onboard-hint").update(
-            "输入 base_url（例如 https://api.example.com/v1）："
-        )
+        self.query_one("#onboard-hint").update("输入 base_url（例如 https://api.example.com/v1）：")
         inp = self.query_one("#onboard-input", Input)
         inp.visible = True
         inp.password = False
@@ -628,13 +603,9 @@ class OnboardingScreen(ModalScreen[dict | None]):
 
             existing = get_key(p.id) or ""
             self._api_key = existing  # carry over until the user types a new one
-            self.query_one("#onboard-hint").update(
-                f"输入新 API key（留空保留现有 key）— {p.api_key_hint}："
-            )
+            self.query_one("#onboard-hint").update(f"输入新 API key（留空保留现有 key）— {p.api_key_hint}：")
         else:
-            self.query_one("#onboard-hint").update(
-                f"输入 API key（{p.api_key_hint}）："
-            )
+            self.query_one("#onboard-hint").update(f"输入 API key（{p.api_key_hint}）：")
         inp = self.query_one("#onboard-input", Input)
         inp.visible = True
         inp.password = True  # masked — shows dots
@@ -657,9 +628,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         # Editing: show the current name; new: default to the provider label.
         inp.value = self._profile_name or p.label
         inp.focus()
-        self.query_one("#onboard-hint").update(
-            "给这套配置起个名字（回车确认，稍后可用 /profile 切换）："
-        )
+        self.query_one("#onboard-hint").update("给这套配置起个名字（回车确认，稍后可用 /profile 切换）：")
 
     def _start_verification(self) -> None:
         """Step 4: verify the key via a minimal API request + probe context_limit."""
@@ -690,9 +659,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         else:
             self.query_one("#onboard-status").update(f"[red]❌ {msg}[/red]")
             self._step = "key"
-            self.query_one("#onboard-hint").update(
-                "验证失败，重新输入 API key（或 Esc 取消）："
-            )
+            self.query_one("#onboard-hint").update("验证失败，重新输入 API key（或 Esc 取消）：")
             inp = self.query_one("#onboard-input", Input)
             inp.password = True
             inp.visible = True
@@ -702,8 +669,9 @@ class OnboardingScreen(ModalScreen[dict | None]):
     def _finish(self) -> None:
         """Save credentials + profile, then dismiss with result."""
         from pathlib import Path
+
         from coderio.cli.credentials import write_credentials
-        from coderio.cli.onboarding import _save_profile_to_config, OnboardingResult
+        from coderio.cli.onboarding import OnboardingResult, _save_profile_to_config
 
         creds_path = Path.home() / ".coderio" / "credentials"
         write_credentials({self._chosen_provider.id: self._api_key}, creds_path)
@@ -839,8 +807,7 @@ class ProfilePickerScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="profile-box"):
             yield Static(
-                "[bold magenta]切换配置[/bold magenta]  "
-                "↑↓ 选择 · Enter 切换 · Esc 取消",
+                "[bold magenta]切换配置[/bold magenta]  ↑↓ 选择 · Enter 切换 · Esc 取消",
                 id="profile-title",
             )
             yield ListView(id="profile-list")
@@ -915,9 +882,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
                 id="picker-title",
             )
             yield ListView(id="picker-list")
-            yield Input(
-                placeholder="输入关键字过滤（首条消息 / 时间）", id="picker-filter"
-            )
+            yield Input(placeholder="输入关键字过滤（首条消息 / 时间）", id="picker-filter")
 
     def on_mount(self) -> None:
         self._populate()
@@ -930,12 +895,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
         f = self._filter.lower()
         for s in self._all:
             label = s["first_user"] or "(空会话)"
-            if (
-                f
-                and f not in label.lower()
-                and f not in s["mtime"].lower()
-                and f not in s["id"].lower()
-            ):
+            if f and f not in label.lower() and f not in s["mtime"].lower() and f not in s["id"].lower():
                 continue
             row = Static(
                 f"[{s['mtime']}] {label}\n"
@@ -982,9 +942,7 @@ class CoderioTUI(App):
 
     name = "textual_tui"
 
-    def __init__(
-        self, on_input=None, show_tool_output: bool = True, banner: str | None = None
-    ) -> None:
+    def __init__(self, on_input=None, show_tool_output: bool = True, banner: str | None = None) -> None:
         super().__init__()
         self._on_input = on_input
         self.show_tool_output = show_tool_output
@@ -1033,9 +991,7 @@ class CoderioTUI(App):
         import collections
 
         self._render_q: collections.deque = collections.deque()
-        self._live_out_widget: RichLog | None = (
-            None  # streaming output RichLog (main thread)
-        )
+        self._live_out_widget: RichLog | None = None  # streaming output RichLog (main thread)
         self._live_rendered_len: int = 0  # chars already written to the RichLog
 
     # ----------------------------------------------------- layout
@@ -1273,9 +1229,7 @@ class CoderioTUI(App):
             self._last_collapsible = col
             self._mount_widget_main(col)
 
-    def _render_finalize(
-        self, buf: str, think_text: str, secs: float, had_live: bool
-    ) -> None:
+    def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
         """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
 
         The final answer is rendered as Static(Panel(Markdown(buf))) (see
@@ -1327,9 +1281,7 @@ class CoderioTUI(App):
         bar = self._status_bar
         if bar is None:
             return  # not mounted yet
-        bar.set_phase(
-            phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total
-        )
+        bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1396,9 +1348,7 @@ class CoderioTUI(App):
                     self._live_output_last_flush = 0.0
                     if self._status_bar:
                         self._status_bar.set_phase("idle")
-                    self._render_q.append(
-                        ("static", f"运行错误: {type(e).__name__}: {e}", "red")
-                    )
+                    self._render_q.append(("static", f"运行错误: {type(e).__name__}: {e}", "red"))
 
             self.run_worker(
                 _run,
@@ -1459,10 +1409,7 @@ class CoderioTUI(App):
         # Throttle: only push at most once per ~60ms to avoid flooding the queue.
         self.buffer += text
         now = time.monotonic()
-        if (
-            self._live_output_last_flush == 0.0
-            or (now - self._live_output_last_flush) >= 0.06
-        ):
+        if self._live_output_last_flush == 0.0 or (now - self._live_output_last_flush) >= 0.06:
             self._live_output_last_flush = now
             self._render_q.append(("text", self.buffer))
 
@@ -1519,9 +1466,7 @@ class CoderioTUI(App):
         self._set_phase("thinking")
         if not self.show_tool_output:
             first = result.splitlines()[0][:60] if result.splitlines() else ""
-            self._render_q.append(
-                ("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim")
-            )
+            self._render_q.append(("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim"))
             return
         lines = result.splitlines()
         shown = "\n".join(lines[:3])
@@ -1583,11 +1528,7 @@ class CoderioTUI(App):
         # Capture everything remaining and push ONE finalize instruction.
         # The main-thread drain will fold thinking + mount the final Markdown Panel.
         think_text = self._round_thinking
-        secs = (
-            time.monotonic() - self._round_think_start
-            if self._round_think_start
-            else 0.0
-        )
+        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
         # had_live = a live Collapsible was mounted for this round. Use the
         # agent-thread flag (truthful at this moment) rather than _live_think_body
         # (which the main thread owns and may not have updated yet).
@@ -1636,11 +1577,7 @@ class CoderioTUI(App):
             self._round_think_started = False
             return
         text = self._round_thinking
-        secs = (
-            time.monotonic() - self._round_think_start
-            if self._round_think_start
-            else 0.0
-        )
+        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
         # had_live = a live Collapsible was mounted for THIS round. Read the
         # agent-thread flag, not _live_think_body (main-thread state, races).
         had_live = self._round_think_started
@@ -1772,8 +1709,9 @@ def _switch_active_profile(profile_name: str) -> str:
     the /profile picker callback after the user picks a profile.
     """
     import tomllib
-    import tomli_w
     from pathlib import Path
+
+    import tomli_w
 
     config_path = Path.home() / ".coderio" / "config.toml"
     data: dict = {}
@@ -1803,9 +1741,7 @@ def _resolve_effective_context(cfg):
     from dataclasses import replace as _replace
 
     eff_ctx = cfg.context
-    active_profile = next(
-        (p for p in (cfg.profiles or []) if p.name == cfg.active_profile), None
-    )
+    active_profile = next((p for p in (cfg.profiles or []) if p.name == cfg.active_profile), None)
     if active_profile is not None and active_profile.context_limit > 0:
         return _replace(eff_ctx, model_context_limit=active_profile.context_limit)
     if getattr(cfg.model, "context_limit", 0) > 0:
@@ -1829,7 +1765,8 @@ def run_tui(
     history (same semantics as the REPL's --resume/--continue).
     """
     from pathlib import Path
-    from coderio.cli.repl import build_runtime, _resolve_resume, _needs_onboarding
+
+    from coderio.cli.repl import _needs_onboarding, _resolve_resume, build_runtime
     from coderio.config import load_config
     from coderio.config.bootstrap import ensure_user_dirs
 
@@ -1890,9 +1827,10 @@ def run_tui(
 
     def on_input(line: str) -> None:
         if line.startswith("/"):
-            from coderio.cli.commands import handle_slash, ReplContext
-            from coderio.session.store import Session
             from pathlib import Path as _P
+
+            from coderio.cli.commands import ReplContext, handle_slash
+            from coderio.session.store import Session
 
             ctx = ReplContext(
                 available_skills=store.names(),
@@ -1902,9 +1840,7 @@ def run_tui(
                 provider_id=rt["cfg"].model.provider_id,
                 api_key="",
                 base_url=rt["cfg"].model.base_url,
-                recent_sessions=Session.list_recent(
-                    _P(rt["cfg"].session.save_dir).expanduser()
-                ),
+                recent_sessions=Session.list_recent(_P(rt["cfg"].session.save_dir).expanduser()),
                 profiles=rt["cfg"].profiles,
                 active_profile=rt["cfg"].active_profile,
                 usage=tui.usage,
@@ -1916,9 +1852,7 @@ def run_tui(
             # event loop); on_input runs in the agent's background thread, so
             # dispatch via call_from_thread — same pattern as _add_text.
             if res.message == "__OPEN_PICKER__":
-                summaries = Session.summaries(
-                    _P(rt["cfg"].session.save_dir).expanduser()
-                )
+                summaries = Session.summaries(_P(rt["cfg"].session.save_dir).expanduser())
 
                 def _on_picked(sid):
                     """Picker dismissed: sid is the chosen id, or None if cancelled."""
@@ -1926,9 +1860,7 @@ def run_tui(
                         return
                     _load_session(sid)
 
-                tui.call_from_thread(
-                    tui.push_screen, SessionPickerScreen(summaries), _on_picked
-                )
+                tui.call_from_thread(tui.push_screen, SessionPickerScreen(summaries), _on_picked)
                 return
             if res.message == "__OPEN_ONBOARDING__":
                 # /setup → open the OnboardingScreen to reconfigure provider/model.
@@ -1937,8 +1869,9 @@ def run_tui(
                     if result is None:
                         return
                     # Reload config + rebuild model with the new provider/key.
-                    from coderio.llm import build_chat_model as _build
                     from pathlib import Path as _Path
+
+                    from coderio.llm import build_chat_model as _build
 
                     creds = _Path.home() / ".coderio" / "credentials"
                     new_cfg = load_config(search_from=".")
@@ -1949,9 +1882,7 @@ def run_tui(
                         style="bold green",
                     )
 
-                tui.call_from_thread(
-                    tui.push_screen, OnboardingScreen(), _on_reconfigured
-                )
+                tui.call_from_thread(tui.push_screen, OnboardingScreen(), _on_reconfigured)
                 return
             if res.message == "__OPEN_PROFILE_PICKER__":
                 # /profile → open the ProfilePickerScreen. After the user picks,
@@ -1959,9 +1890,7 @@ def run_tui(
                 profiles = rt["cfg"].profiles or []
                 active_name = rt["cfg"].active_profile
                 if not profiles:
-                    tui._add_text(
-                        "[yellow]还没有保存的 profile。用 /setup 添加一个配置。[/yellow]"
-                    )
+                    tui._add_text("[yellow]还没有保存的 profile。用 /setup 添加一个配置。[/yellow]")
                     return
 
                 def _on_profile_picked(name):
@@ -1992,6 +1921,7 @@ def run_tui(
                 return
             if res.reset_runtime:
                 from dataclasses import replace as _replace
+
                 from coderio.cli.repl import build_gate
                 from coderio.llm import build_chat_model
 
@@ -1999,9 +1929,7 @@ def run_tui(
                 if res.new_permission_mode:
                     c = _replace(
                         c,
-                        tools=_replace(
-                            c.tools, permission_mode=res.new_permission_mode
-                        ),
+                        tools=_replace(c.tools, permission_mode=res.new_permission_mode),
                     )
                     rt["cfg"] = c
                     rt["gate"] = build_gate(c, console=None)
@@ -2015,9 +1943,7 @@ def run_tui(
                 if cmd_name == "/model":
                     parts = line.strip().split(maxsplit=1)
                     if len(parts) > 1 and parts[1].strip():
-                        c = _replace(
-                            c, model=_replace(c.model, default=parts[1].strip())
-                        )
+                        c = _replace(c, model=_replace(c.model, default=parts[1].strip()))
                         rt["cfg"] = c
                         rt["model"] = build_chat_model(c, creds_path=creds_path)
             return
@@ -2054,8 +1980,9 @@ def run_tui(
         old session's jsonl stays on disk; we just point the runtime at the new
         Session object so subsequent turns continue that conversation.
         """
-        from coderio.session.store import Session
         from pathlib import Path as _P
+
+        from coderio.session.store import Session
 
         save_dir = _P(rt["cfg"].session.save_dir).expanduser()
         rt["session"] = Session.load_by_id(save_dir, sid)
@@ -2065,18 +1992,12 @@ def run_tui(
         # Count only conversation messages (exclude system-role metadata like
         # phase_timeline / context_summary so the count matches what's displayed).
         convo_msgs = [m for m in rt["session"].messages if m.role != "system"]
-        tui._add_text(
-            f"↩ 已恢复会话 {sid}（{len(convo_msgs)} 条历史消息）", style="bold green"
-        )
+        tui._add_text(f"↩ 已恢复会话 {sid}（{len(convo_msgs)} 条历史消息）", style="bold green")
         for m in rt["session"].messages:
             if m.role == "user":
                 c = m.content
                 if isinstance(c, list):
-                    c = " ".join(
-                        b.get("text", "")
-                        for b in c
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
+                    c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
                 tui._add_text(f"▸ you {c}", style="bold cyan")
             elif m.role == "assistant":
                 tui._add_text(f"  {m.content[:200]}", style="blue")
@@ -2088,8 +2009,9 @@ def run_tui(
         being fed to the model (loop.py reads session.messages), so 'context
         cleared' was previously a lie — the model still saw the full history.
         """
-        from coderio.session.store import Session
         from pathlib import Path as _P
+
+        from coderio.session.store import Session
 
         save_dir = _P(rt["cfg"].session.save_dir).expanduser()
         rt["session"] = Session.create(
@@ -2103,11 +2025,7 @@ def run_tui(
         # Wipe the visible history pane so the user sees a clean slate (the old
         # session's jsonl is preserved on disk — /resume can still get it back).
         tui._clear_history()
-        tui._add_text(
-            "🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green"
-        )
+        tui._add_text("🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green")
 
-    tui = CoderioTUI(
-        on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner
-    )
+    tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
     tui.run()

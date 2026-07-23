@@ -8,18 +8,14 @@ from coderio.tools.edit_file import _strip_line_prefix
 
 
 class _SingleEdit(BaseModel):
-    old_string: str = Field(
-        description="Exact text to replace (must match uniquely unless replace_all)."
-    )
+    old_string: str = Field(description="Exact text to replace (must match uniquely unless replace_all).")
     new_string: str = Field(description="Text to substitute.")
     replace_all: bool = Field(default=False, description="Replace every occurrence.")
 
 
 class MultiEditArgs(BaseModel):
     path: str = Field(description="Path to the file to edit.")
-    edits: list[_SingleEdit] = Field(
-        description="Ordered list of edits to apply sequentially."
-    )
+    edits: list[_SingleEdit] = Field(description="Ordered list of edits to apply sequentially.")
 
 
 class MultiEditTool:

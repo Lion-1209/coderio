@@ -1,6 +1,6 @@
 from rich.console import Console
 
-from coderio.cli.render import render_markdown, render_tool_call, render_error, mask_key
+from coderio.cli.render import mask_key, render_error, render_markdown, render_tool_call
 
 
 def test_mask_key_shows_last4():

@@ -1,15 +1,11 @@
-from pathlib import Path
-from unittest.mock import MagicMock
-
-from coderio.cli.repl import build_runtime, build_gate, _resolve_resume
+from coderio.cli.repl import _resolve_resume, build_gate, build_runtime
 from coderio.config import Config
 from coderio.session import Message
 from coderio.session.store import Session
 from coderio.tools.permission import (
-    RichPromptPermissionGate,
     AutoPermissionGate,
-    PermissionGate,
     PermissionMode,
+    RichPromptPermissionGate,
 )
 
 

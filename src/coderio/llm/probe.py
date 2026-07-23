@@ -18,7 +18,6 @@ import json
 import urllib.error
 import urllib.request
 
-
 # The fields different providers use to report context window size in their
 # /v1/models/{id} (OpenAI-compatible) or /v1/models/{id} (Anthropic) responses.
 # We check each in order and take the first that's a positive int.

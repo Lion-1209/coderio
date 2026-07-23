@@ -6,16 +6,13 @@ phases, derived from harness ground truth.
 
 from coderio.agent.state import AgentState, AgentStateTracker
 
-
 # --- AgentStateTracker: phase derivation ---
 
 
 def test_derive_phase_explore_default():
     """No writes, no todos, no verification → EXPLORE."""
     t = AgentStateTracker()
-    assert (
-        t.derive_phase([], todos_exist=False, just_verified=False) == AgentState.EXPLORE
-    )
+    assert t.derive_phase([], todos_exist=False, just_verified=False) == AgentState.EXPLORE
 
 
 def test_derive_phase_plan_when_write_without_todos():

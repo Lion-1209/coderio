@@ -120,9 +120,7 @@ class AgentStateTracker:
         """Mark the turn as complete. Always records (even if already COMPLETE)
         so the final step number is captured for timeline replay."""
         self._current = AgentState.COMPLETE
-        self.timeline.append(
-            StateSnapshot(state=AgentState.COMPLETE, step=step, hint=hint)
-        )
+        self.timeline.append(StateSnapshot(state=AgentState.COMPLETE, step=step, hint=hint))
 
     def to_payload(self) -> list[dict]:
         """Serialize the timeline for persistence (system-role Message content)."""

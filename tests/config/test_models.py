@@ -1,4 +1,4 @@
-from coderio.config import Config, ModelConfig, ToolsConfig, SkillsConfig, SessionConfig
+from coderio.config import Config, ModelConfig, SessionConfig, SkillsConfig, ToolsConfig
 
 
 def test_config_defaults():

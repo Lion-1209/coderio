@@ -37,11 +37,7 @@ def _content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            b.get("text", "")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return str(content) if content else ""
 
 
@@ -104,9 +100,7 @@ class _WinLocalShellBackend:
         except Exception as e:
             from deepagents.backends.protocol import ExecuteResponse
 
-            return ExecuteResponse(
-                output=f"Error: {type(e).__name__}: {e}", exit_code=-1, truncated=False
-            )
+            return ExecuteResponse(output=f"Error: {type(e).__name__}: {e}", exit_code=-1, truncated=False)
 
     def __getattr__(self, name):
         # Delegate all other backend methods (read/write/edit/glob/grep/ls/...) to the inner backend.
@@ -246,22 +240,12 @@ def _emit_message(m, stream, session) -> None:
 
             tcs = []
             for tc in tool_calls:
-                name = (
-                    tc.get("name", "")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "name", "")
-                )
-                args = (
-                    dict(tc.get("args", {}))
-                    if isinstance(tc, dict)
-                    else dict(getattr(tc, "args", {}))
-                )
+                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                args = dict(tc.get("args", {})) if isinstance(tc, dict) else dict(getattr(tc, "args", {}))
                 stream.on_tool_start(name, args)
                 tcs.append(
                     ToolCall(
-                        id=tc.get("id", "")
-                        if isinstance(tc, dict)
-                        else getattr(tc, "id", ""),
+                        id=tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
                         name=name,
                         args=args,
                     )

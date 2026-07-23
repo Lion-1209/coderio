@@ -33,9 +33,7 @@ async def test_main_input_submitted_dispatches_to_on_input():
         main_input.value = "hello world"
         await pilot.press("enter")
         await pilot.pause()
-    assert received == ["hello world"], (
-        f"main input submission must reach _on_input, got {received}"
-    )
+    assert received == ["hello world"], f"main input submission must reach _on_input, got {received}"
 
 
 @pytest.mark.asyncio
@@ -66,7 +64,6 @@ async def test_non_main_input_submitted_does_not_dispatch():
         await pilot.press("enter")
         await pilot.pause()
         await pilot.pause()
-    assert received == [], (
-        "non-main Input.Submitted leaked to _on_input — this is the security "
-        "bug. captured: " + str(received)
+    assert received == [], "non-main Input.Submitted leaked to _on_input — this is the security bug. captured: " + str(
+        received
     )

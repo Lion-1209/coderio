@@ -29,25 +29,17 @@ SLASH_COMMANDS: list[SlashCommand] = [
     SlashCommand("/help", "show this help", ["/help"]),
     SlashCommand("/exit", "exit the REPL", ["/exit"], aliases=("/quit",)),
     SlashCommand("/skills", "list skills (★ = active)", ["/skills", "/skills install"]),
-    SlashCommand(
-        "/clear", "reset context (new session + clear active skills)", ["/clear"]
-    ),
+    SlashCommand("/clear", "reset context (new session + clear active skills)", ["/clear"]),
     SlashCommand("/config", "show current configuration", ["/config"]),
-    SlashCommand(
-        "/setup", "reconfigure provider/model (onboarding wizard)", ["/setup"]
-    ),
+    SlashCommand("/setup", "reconfigure provider/model (onboarding wizard)", ["/setup"]),
     SlashCommand(
         "/profile",
         "switch between saved provider profiles",
         ["/profile", "/profile list"],
     ),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
-    SlashCommand(
-        "/resume", "resume a past session (opens an interactive picker)", ["/resume "]
-    ),
-    SlashCommand(
-        "/mode", "change permission mode", ["/mode confirm", "/mode plan", "/mode auto"]
-    ),
+    SlashCommand("/resume", "resume a past session (opens an interactive picker)", ["/resume "]),
+    SlashCommand("/mode", "change permission mode", ["/mode confirm", "/mode plan", "/mode auto"]),
     SlashCommand("/model", "switch model at runtime", ["/model "]),
     SlashCommand("/cost", "show token usage for this session", ["/cost"]),
     SlashCommand("/think", "expand the last round's collapsed thinking", ["/think"]),
@@ -174,9 +166,7 @@ def _cmd_resume(ctx, arg: str) -> CommandResult:
                 + "\n请用更完整的前缀或直接 /resume 用选择器。"
             )
         else:
-            return CommandResult(
-                message=f"找不到会话 {arg!r}。/resume 打开选择器挑选。"
-            )
+            return CommandResult(message=f"找不到会话 {arg!r}。/resume 打开选择器挑选。")
     return CommandResult(
         new_session_id=sid,
         message=f"已切到会话 {sid}。",
@@ -186,9 +176,7 @@ def _cmd_resume(ctx, arg: str) -> CommandResult:
 def _cmd_mode(ctx, arg: str) -> CommandResult:
     mode = arg.strip()
     if mode not in {"confirm", "auto", "plan"}:
-        return CommandResult(
-            message=f"Invalid mode {mode!r}. Use: confirm | plan | auto"
-        )
+        return CommandResult(message=f"Invalid mode {mode!r}. Use: confirm | plan | auto")
     return CommandResult(
         reset_runtime=True,
         new_permission_mode=mode,
@@ -249,20 +237,14 @@ def handle_slash(line: str, ctx) -> CommandResult:
         name = arg.strip()
         if not name:
             return CommandResult(message=f"当前模型: {ctx.model_name}")
-        return CommandResult(
-            reset_runtime=True, message=f"已切换模型 → {name}（下一轮生效）。"
-        )
+        return CommandResult(reset_runtime=True, message=f"已切换模型 → {name}（下一轮生效）。")
     if cmd == "/cost":
         u = ctx.usage or {}
         inp = u.get("input_tokens", 0)
         out = u.get("output_tokens", 0)
         if inp == 0 and out == 0:
-            return CommandResult(
-                message="本次会话暂无 token 用量(尚未对话或 provider 未返回)。"
-            )
-        return CommandResult(
-            message=f"Token 用量:\n  输入: {inp}\n  输出: {out}\n  合计: {inp + out}"
-        )
+            return CommandResult(message="本次会话暂无 token 用量(尚未对话或 provider 未返回)。")
+        return CommandResult(message=f"Token 用量:\n  输入: {inp}\n  输出: {out}\n  合计: {inp + out}")
     if cmd == "/think":
         stream = getattr(ctx, "stream", None)
         if stream is not None and hasattr(stream, "show_last_thinking"):

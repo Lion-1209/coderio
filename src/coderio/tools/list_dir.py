@@ -8,9 +8,7 @@ from pydantic import BaseModel, Field
 class ListDirArgs(BaseModel):
     path: str = Field(description="Directory to list.")
     recursive: bool = Field(default=False, description="Recurse into subdirectories.")
-    max_depth: int = Field(
-        default=3, description="Max recursion depth (when recursive)."
-    )
+    max_depth: int = Field(default=3, description="Max recursion depth (when recursive).")
 
 
 class ListDirTool:

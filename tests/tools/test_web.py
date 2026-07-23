@@ -1,9 +1,7 @@
-from unittest.mock import patch
-
 import httpx
 
-from coderio.tools.web_search import WebSearchTool
 from coderio.tools.web_fetch import WebFetchTool
+from coderio.tools.web_search import WebSearchTool
 
 
 def test_web_search_returns_results(monkeypatch):
@@ -12,9 +10,7 @@ def test_web_search_returns_results(monkeypatch):
             return self
 
         def json(self):
-            return {
-                "results": [{"title": "T", "url": "http://x", "content": "snippet"}]
-            }
+            return {"results": [{"title": "T", "url": "http://x", "content": "snippet"}]}
 
         def raise_for_status(self):
             pass

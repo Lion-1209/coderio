@@ -6,9 +6,9 @@ is open — that matches Claude Code's behavior), and Esc hides it.
 """
 
 import pytest
+from textual.widgets import Input
 
 from coderio.cli.tui import CoderioTUI, CommandMenu, StatusBar
-from textual.widgets import Input
 
 
 @pytest.mark.asyncio
@@ -135,8 +135,7 @@ async def test_highlight_stays_visible_after_many_down_presses():
                 # The selected index MUST be within the visible viewport,
                 # with at least 1 row of margin (not flush on the bottom edge).
                 assert top <= idx < top + vp_h, (
-                    f"highlight lost at terminal h={term_h}: idx={idx} "
-                    f"outside viewport [{top},{top + vp_h})"
+                    f"highlight lost at terminal h={term_h}: idx={idx} outside viewport [{top},{top + vp_h})"
                 )
 
 

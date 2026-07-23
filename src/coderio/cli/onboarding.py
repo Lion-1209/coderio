@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import tomllib
-import tomli_w
 from dataclasses import dataclass
 from pathlib import Path
+
+import tomli_w
 
 from coderio.cli.credentials import write_credentials
 from coderio.cli.providers import PROVIDERS, ProviderInfo
@@ -30,9 +31,7 @@ def _menu(prompt_fn) -> ProviderInfo | str:
     """Display grouped provider menu; return chosen ProviderInfo or 'skip'."""
     # Group providers for the menu display.
     plan = [p for p in PROVIDERS if p.plan]
-    cn_direct = [
-        p for p in PROVIDERS if not p.plan and p.id in ("bigmodel_api", "stepfun_api")
-    ]
+    cn_direct = [p for p in PROVIDERS if not p.plan and p.id in ("bigmodel_api", "stepfun_api")]
     intl = [p for p in PROVIDERS if p.id in ("openai", "anthropic")]
     local = [p for p in PROVIDERS if p.id == "ollama"]
     custom = [p for p in PROVIDERS if p.id == "openai_custom"]
@@ -116,9 +115,7 @@ def _save_to_config(result: OnboardingResult, config_path: Path) -> None:
         tomli_w.dump(data, f)
 
 
-def _save_profile_to_config(
-    result: OnboardingResult, profile_name: str, config_path: Path
-) -> None:
+def _save_profile_to_config(result: OnboardingResult, profile_name: str, config_path: Path) -> None:
     """Append a named profile to config.toml and mark it active.
 
     Read-modify-write: preserves all existing sections and any prior profiles.
@@ -167,9 +164,7 @@ def _save_profile_to_config(
         tomli_w.dump(data, f)
 
 
-def _verify_and_probe(
-    p: ProviderInfo, api_key: str, model: str, base_url: str
-) -> tuple[bool, str, int]:
+def _verify_and_probe(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str, int]:
     """Verify the key works AND probe the model's context window size.
 
     Returns (success, message, context_limit). context_limit is 0 on any
@@ -186,15 +181,11 @@ def _verify_and_probe(
         if p.kind == "anthropic":
             from langchain_anthropic import ChatAnthropic
 
-            m = ChatAnthropic(
-                model=model, base_url=base_url, api_key=api_key, max_tokens=1
-            )
+            m = ChatAnthropic(model=model, base_url=base_url, api_key=api_key, max_tokens=1)
         else:
             from langchain_openai import ChatOpenAI
 
-            m = ChatOpenAI(
-                model=model, base_url=base_url, api_key=api_key, max_tokens=1
-            )
+            m = ChatOpenAI(model=model, base_url=base_url, api_key=api_key, max_tokens=1)
         m.invoke("hi")
     except Exception as e:
         msg = str(e).lower()
@@ -209,23 +200,17 @@ def _verify_and_probe(
     from coderio.llm.probe import probe_context_limit
 
     context_limit = probe_context_limit(p.kind, base_url, api_key, model)
-    suffix = (
-        f"（检测到 {context_limit // 1000}K 上下文窗口）" if context_limit > 0 else ""
-    )
+    suffix = f"（检测到 {context_limit // 1000}K 上下文窗口）" if context_limit > 0 else ""
     return (True, f"验证成功{suffix}", context_limit)
 
 
 # Back-compat shim: older call sites/tests may still import _verify_key.
-def _verify_key(
-    p: ProviderInfo, api_key: str, model: str, base_url: str
-) -> tuple[bool, str]:
+def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tuple[bool, str]:
     ok, msg, _ = _verify_and_probe(p, api_key, model, base_url)
     return (ok, msg)
 
 
-def run_onboarding(
-    prompt_fn, password_fn, creds_file: Path | None = None
-) -> OnboardingResult | None:
+def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> OnboardingResult | None:
     """Run the interactive wizard. Returns None if user skips."""
     print("检测到尚未配置 API key，启动配置向导：")
     choice = _menu(prompt_fn)

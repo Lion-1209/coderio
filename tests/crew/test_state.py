@@ -1,9 +1,8 @@
 from coderio.crew.state import (
     ProjectState,
-    CrewState,
-    crew_state_to_project_state,
-    _overwrite,
     _append_list,
+    _overwrite,
+    crew_state_to_project_state,
 )
 
 

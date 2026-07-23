@@ -5,20 +5,19 @@ from pathlib import Path
 from rich.console import Console
 
 from coderio.agent.prompts import ActiveSkills
+from coderio.cli.stream import RichStream
 from coderio.config import Config, load_config
 from coderio.llm import build_chat_model
 from coderio.session.store import Session
-from coderio.skills.store import load_skill_store, SkillStore
+from coderio.skills.store import SkillStore, load_skill_store
 from coderio.tools import build_default_tools
 from coderio.tools.permission import (
+    AutoPermissionGate,
     PermissionGate,
     PermissionMode,
     RichPromptPermissionGate,
-    AutoPermissionGate,
 )
 from coderio.tools.workspace import WorkspacePolicy
-
-from coderio.cli.stream import RichStream
 
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
@@ -81,9 +80,7 @@ def build_runtime(
 
     if session is None:
         save = save_dir or Path(cfg.session.save_dir).expanduser()
-        session = Session.create(
-            save, {"model": cfg.model.default, "provider": cfg.model.provider}
-        )
+        session = Session.create(save, {"model": cfg.model.default, "provider": cfg.model.provider})
 
     active = ActiveSkills()
     stream = RichStream(console or Console())
@@ -98,8 +95,9 @@ def _needs_onboarding(creds_path) -> bool:
       - config.toml already has a provider_id
       - ANTHROPIC_API_KEY / OPENAI_API_KEY / Z_API_KEY env var is set
     """
-    from coderio.cli.credentials import read_credentials
     import os
+
+    from coderio.cli.credentials import read_credentials
 
     creds = read_credentials(creds_path)
     if creds:
@@ -115,11 +113,7 @@ def _needs_onboarding(creds_path) -> bool:
                 return False
         except Exception:
             pass
-    if (
-        os.environ.get("ANTHROPIC_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("Z_API_KEY")
-    ):
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("Z_API_KEY"):
         return False
     return True
 

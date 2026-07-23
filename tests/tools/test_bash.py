@@ -1,13 +1,10 @@
 import shutil
-import sys
 
 import pytest
 
 from coderio.tools.bash import BashTool, detect_shell
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None, reason="bash not available"
-)
+pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 
 
 def test_run_echo():

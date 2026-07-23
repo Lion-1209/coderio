@@ -41,7 +41,5 @@ class WebSearchTool:
             return "No results."
         lines = []
         for r in results:
-            lines.append(
-                f"- {r.get('title', '')}\n  {r.get('url', '')}\n  {r.get('content', '')[:200]}"
-            )
+            lines.append(f"- {r.get('title', '')}\n  {r.get('url', '')}\n  {r.get('content', '')[:200]}")
         return "\n".join(lines)

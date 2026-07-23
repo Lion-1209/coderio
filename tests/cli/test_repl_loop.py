@@ -1,8 +1,3 @@
-from pathlib import Path
-
-import pytest
-
-
 def test_build_runtime_assembles_pieces(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -34,9 +29,9 @@ def test_build_runtime_with_model_override(tmp_path, monkeypatch):
 
 
 def test_build_gate_returns_auto_for_auto_mode(tmp_path, monkeypatch):
-    from coderio.config import Config, ToolsConfig
-    from coderio.tools.permission import PermissionMode, AutoPermissionGate
     from coderio.cli.repl import build_gate
+    from coderio.config import Config, ToolsConfig
+    from coderio.tools.permission import AutoPermissionGate, PermissionMode
 
     cfg = Config(tools=ToolsConfig(permission_mode=PermissionMode.AUTO))
     gate = build_gate(cfg)

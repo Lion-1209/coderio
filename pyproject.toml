@@ -57,5 +57,20 @@ coderio = "coderio.cli.app:main_entry"
 [tool.hatch.build.targets.wheel]
 packages = ["src/coderio"]
 
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# E/F = pycodestyle/pyflakes basics (errors + warnings). Keep src/ clean.
+# C901 = mccabe complexity (informational — tracked but not enforced as error).
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use:
+#   F841 — variables assigned for side effects (e.g. `final = run_agent(...)`
+#          where the assertion is on session state, not the return value).
+#   E731 — lambda assignments for quick inline mocks/patches.
+"tests/**" = ["F841", "E731"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

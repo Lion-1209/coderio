@@ -1,6 +1,5 @@
 import os
 import time
-from pathlib import Path
 
 from coderio.session import Message, ToolCall
 from coderio.session.store import Session, new_session_id
@@ -21,11 +20,7 @@ def test_append_and_load(tmp_path):
 
 def test_append_writes_tool_calls(tmp_path):
     s = Session.create(tmp_path, {"meta": "test"})
-    s.append(
-        Message.assistant(
-            "", tool_calls=[ToolCall(id="c1", name="bash", args={"command": "ls"})]
-        )
-    )
+    s.append(Message.assistant("", tool_calls=[ToolCall(id="c1", name="bash", args={"command": "ls"})]))
     s.append(Message.tool_result(tool_call_id="c1", name="bash", content="output"))
     loaded = Session.load(s.path)
     msgs = loaded.messages
@@ -108,7 +103,6 @@ def test_load_truncates_superseded_history_at_last_summary(tmp_path):
     System messages (phase_timeline) before the summary are KEPT so the
     observability timeline survives compaction.
     """
-    from coderio.session.store import _truncate_at_last_summary
 
     s = Session.create(tmp_path, {"meta": "test"})
     # Simulate a session that went: user/assistant/tool -> compaction -> more
@@ -117,9 +111,7 @@ def test_load_truncates_superseded_history_at_last_summary(tmp_path):
     s.append(Message.tool_result("tc1", "bash", "old output"))
     s.append(Message.system('{"state":"explore"}', kind="phase_timeline"))
     # Compaction happens here:
-    s.append(
-        Message.system("[上下文摘要] old stuff summarized", kind="context_summary")
-    )
+    s.append(Message.system("[上下文摘要] old stuff summarized", kind="context_summary"))
     # New messages after compaction:
     s.append(Message.user("new question"))
     s.append(Message.assistant("new answer"))

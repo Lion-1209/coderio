@@ -1,7 +1,6 @@
 from coderio.tools.permission import (
-    PermissionGate,
-    RichPromptPermissionGate,
     AutoPermissionGate,
+    RichPromptPermissionGate,
 )
 
 

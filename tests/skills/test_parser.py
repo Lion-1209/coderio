@@ -1,17 +1,12 @@
-from pathlib import Path
-
 import pytest
 
 from coderio.skills.parser import parse_skill_file
-from coderio.skills.models import Skill
 
 
 def write_skill(d, name, body, desc="a skill"):
     p = d / name / "SKILL.md"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8"
-    )
+    p.write_text(f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8")
     return p
 
 

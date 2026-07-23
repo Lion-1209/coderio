@@ -1,8 +1,6 @@
-import os
 import sys
-from pathlib import Path
 
-from coderio.cli.credentials import read_credentials, write_credentials, get_key
+from coderio.cli.credentials import get_key, read_credentials, write_credentials
 
 
 def test_write_and_read(tmp_path):
@@ -21,7 +19,6 @@ def test_get_key(tmp_path):
 
 
 def test_permissions_restricted(tmp_path):
-    import sys
 
     creds_file = tmp_path / ".coderio" / "credentials"
     write_credentials({"bigmodel_api": "sk-x"}, path=creds_file)

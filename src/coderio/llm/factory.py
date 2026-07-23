@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 
 from coderio.config import Config
 
@@ -89,16 +89,12 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
     # Layer 0: named profile (multi-config). Takes precedence over [model].
     profile = _resolve_profile(cfg)
     if profile is not None:
-        from coderio.cli.providers import get_provider
         from coderio.cli.credentials import get_key
+        from coderio.cli.providers import get_provider
 
         info = get_provider(profile.provider_id)
-        key = get_key(profile.provider_id, creds_path) or _pick_api_key(
-            info.kind if info else profile.kind
-        )
-        model_name = profile.model or (
-            info.default_model if info and info.default_model else ""
-        )
+        key = get_key(profile.provider_id, creds_path) or _pick_api_key(info.kind if info else profile.kind)
+        model_name = profile.model or (info.default_model if info and info.default_model else "")
         # Registry providers supply their own base_url/kind; custom profiles
         # carry their own (mirrors the [model] layer 1 vs 2 split).
         base_url = info.base_url if info and info.base_url else profile.base_url
@@ -117,13 +113,11 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
         )
 
     if m.provider_id:
-        from coderio.cli.providers import get_provider
         from coderio.cli.credentials import get_key
+        from coderio.cli.providers import get_provider
 
         info = get_provider(m.provider_id)
-        key = get_key(m.provider_id, creds_path) or _pick_api_key(
-            info.kind if info else m.provider
-        )
+        key = get_key(m.provider_id, creds_path) or _pick_api_key(info.kind if info else m.provider)
         model_name = m.default or (info.default_model if info else "")
         if info:
             # Known provider — use registry base_url/kind.
@@ -167,6 +161,4 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
             api_key=api_key,
             max_tokens=max_tokens,
         )
-    raise ValueError(
-        f"Unknown provider: {m.provider!r} (expected 'openai_compatible' or 'anthropic')"
-    )
+    raise ValueError(f"Unknown provider: {m.provider!r} (expected 'openai_compatible' or 'anthropic')")

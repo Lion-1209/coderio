@@ -3,10 +3,10 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
 
+from coderio.agent.stream import NullStream
 from coderio.crew.orchestrator import CrewOrchestrator
 from coderio.crew.state import ProjectState
 from coderio.tools.permission import AutoPermissionGate
-from coderio.agent.stream import NullStream
 
 
 def _model_returning_per_call(*responses):
@@ -125,9 +125,7 @@ def test_read_context_injected_into_prompt():
         auto_mode=True,
     )
     state = orch.run("req")
-    role_prompt = orch._build_prompt(
-        next(r for r in orch.roles if r.stage == "spec"), state
-    )
+    role_prompt = orch._build_prompt(next(r for r in orch.roles if r.stage == "spec"), state)
     assert "prior clar" in role_prompt
 
 
@@ -160,9 +158,7 @@ def test_verification_structured_marker_wins_over_keywords():
         auto_mode=True,
     )
     # PASS verdict despite 'failed' appearing in the prose (the classic false positive).
-    assert orch._verification_passed(
-        "Ran the full suite; failed to reproduce any bug.\n[CREW_VERIFY] PASS"
-    )
+    assert orch._verification_passed("Ran the full suite; failed to reproduce any bug.\n[CREW_VERIFY] PASS")
     # FAIL verdict explicitly.
     assert not orch._verification_passed("2 tests still red.\n[CREW_VERIFY] FAIL")
     # Marker present but verdict unreadable → FAIL-CLOSED (no longer defaults to

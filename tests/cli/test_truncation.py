@@ -18,22 +18,17 @@ final content line are visible, on wide and narrow terminals, for long content.
 import asyncio
 
 import pytest
-
 from rich.markdown import Markdown
 from rich.panel import Panel
-from textual.geometry import Size
 from textual.containers import VerticalScroll
+from textual.geometry import Size
 from textual.widgets import Static
 
 from coderio.cli.tui import CoderioTUI
 
-
 LONG_BODY = (
     "# 最终回答\n\n"
-    + "\n".join(
-        f"第 {i} 行内容：这是测试行的内容，用来撑满超过一屏，描述细节和实现要点。"
-        for i in range(1, 41)
-    )
+    + "\n".join(f"第 {i} 行内容：这是测试行的内容，用来撑满超过一屏，描述细节和实现要点。" for i in range(1, 41))
     + "\n\n## 测试覆盖\n这里是被截断的内容，应该可见。"
     + "\n\n## 最后\n这里是真正的结尾，最后一句应该可见。"
 )
@@ -126,7 +121,5 @@ async def test_streaming_output_appends_and_scrolls():
         await asyncio.sleep(0.2)
         await pilot.pause()
         screen = _screen_text(app)
-        assert "line 49" in screen, (
-            f"streaming output didn't keep up — last line not visible"
-        )
+        assert "line 49" in screen, "streaming output didn't keep up — last line not visible"
         assert app._live_out_widget is not None

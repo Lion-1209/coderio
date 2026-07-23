@@ -8,9 +8,7 @@ from pydantic import BaseModel, Field
 class TodoArgs(BaseModel):
     action: str = Field(description="One of: list, add, update, delete.")
     content: str = Field(default="", description="Todo text (for 'add').")
-    priority: str = Field(
-        default="medium", description="high | medium | low (for 'add')."
-    )
+    priority: str = Field(default="medium", description="high | medium | low (for 'add').")
     index: int = Field(default=-1, description="Todo index (for 'update'/'delete').")
     status: str = Field(default="", description="New status (for 'update').")
 

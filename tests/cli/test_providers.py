@@ -1,4 +1,4 @@
-from coderio.cli.providers import PROVIDERS, get_provider, ProviderInfo
+from coderio.cli.providers import PROVIDERS, get_provider
 
 
 def test_registry_has_expected_providers():

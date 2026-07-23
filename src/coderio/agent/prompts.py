@@ -216,8 +216,5 @@ def build_system_prompt(store: SkillStore, active: ActiveSkills) -> str:
     # asked for them, so they're now in context).
     active_bodies = [s.body for s in active.all()]
     if active_bodies:
-        parts.append(
-            "Active skill playbooks (loaded into context):\n\n"
-            + "\n\n---\n\n".join(active_bodies)
-        )
+        parts.append("Active skill playbooks (loaded into context):\n\n" + "\n\n---\n\n".join(active_bodies))
     return "\n\n".join(parts)

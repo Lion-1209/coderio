@@ -1,10 +1,6 @@
-from pathlib import Path
-
-import pytest
-
+from coderio.tools.edit_file import EditFileTool
 from coderio.tools.read_file import ReadFileTool
 from coderio.tools.write_file import WriteFileTool
-from coderio.tools.edit_file import EditFileTool
 
 
 def test_read_file_with_line_numbers(tmp_path):

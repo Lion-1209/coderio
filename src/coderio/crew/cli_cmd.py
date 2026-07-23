@@ -6,9 +6,9 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from coderio.crew.orchestrator import CrewOrchestrator
 from coderio.config import load_config
 from coderio.config.bootstrap import ensure_user_dirs
+from coderio.crew.orchestrator import CrewOrchestrator
 from coderio.llm import build_chat_model
 from coderio.skills.store import load_skill_store
 from coderio.tools.permission import (
@@ -73,9 +73,7 @@ def run_crew(
     )
 
     def on_pause(stage: str, output: str) -> str:
-        console.print(
-            Panel(output, title=f"[{stage}] 产出 — 请回应", border_style="yellow")
-        )
+        console.print(Panel(output, title=f"[{stage}] 产出 — 请回应", border_style="yellow"))
         return console.input("[bold]你的回应 (回车=接受默认):[/bold] ")
 
     orch = CrewOrchestrator(
@@ -113,9 +111,7 @@ def register(app):
     @app.command("crew")
     def crew_cmd(
         request: str = typer.Argument(..., help="需求描述，用引号包起来"),
-        auto_mode: bool = typer.Option(
-            False, "--auto", help="全自动，跳过 clarify/spec 暂停"
-        ),
+        auto_mode: bool = typer.Option(False, "--auto", help="全自动，跳过 clarify/spec 暂停"),
     ):
         """跑完整的多 agent 流水线 (clarify→spec→task→execute→verify→commit)。"""
         run_crew(request, auto_mode)

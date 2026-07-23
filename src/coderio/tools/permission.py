@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Callable
-
-from coderio.tools.base import DESTRUCTIVE_TOOLS
 
 # Forward-declared type-only import to avoid a circular dependency at runtime
 # (workspace.py imports nothing from permission.py, but we keep the typing tight).
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
+
+from coderio.tools.base import DESTRUCTIVE_TOOLS
 
 if TYPE_CHECKING:
     from coderio.tools.workspace import WorkspacePolicy

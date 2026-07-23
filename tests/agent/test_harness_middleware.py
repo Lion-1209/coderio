@@ -83,9 +83,7 @@ def test_wrap_tool_call_no_nudge_after_execute():
     )
     assert "[nudge]" in r1
     # execute clears writes
-    mw.wrap_tool_call(
-        _tool_call_request("execute", {"command": "python a.py"}), lambda r: "ok"
-    )
+    mw.wrap_tool_call(_tool_call_request("execute", {"command": "python a.py"}), lambda r: "ok")
     # second write → no nudge (plan_nudged already True this turn)
     r2 = mw.wrap_tool_call(
         _tool_call_request("write_file", {"path": "b.py", "content": "y"}),
@@ -166,9 +164,7 @@ def test_after_model_escalation_releases_with_warning():
 def test_after_model_text_only_no_writes_passes():
     """Pure Q&A (no writes) passes through — harness only cares about code writes."""
     mw = HarnessMiddleware()
-    state = _state_with_messages(
-        [AIMessage(content="The answer is 42.", tool_calls=[])]
-    )
+    state = _state_with_messages([AIMessage(content="The answer is 42.", tool_calls=[])])
     update = mw.after_model(state, None)
     assert update is None
 
@@ -176,8 +172,6 @@ def test_after_model_text_only_no_writes_passes():
 def test_disabled_middleware_passthrough():
     """When disabled, after_model and wrap_tool_call are no-ops."""
     mw = HarnessMiddleware(enabled=False)
-    mw.harness.observe(
-        "write_file", {"path": "a.py"}, "Wrote 10 chars"
-    )  # no-op when disabled
+    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")  # no-op when disabled
     state = _state_with_messages([AIMessage(content="done", tool_calls=[])])
     assert mw.after_model(state, None) is None

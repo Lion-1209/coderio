@@ -1,4 +1,4 @@
-from coderio.skills.triggers import detect_stage, STAGE_SKILL_MAP
+from coderio.skills.triggers import STAGE_SKILL_MAP, detect_stage
 
 
 def test_implement_stage():

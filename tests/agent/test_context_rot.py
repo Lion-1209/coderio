@@ -8,7 +8,6 @@ guarded by try/except, so it's tested indirectly via the signals it consumes.
 
 from coderio.agent.loop import TurnResult
 
-
 # --- TurnResult ---
 
 

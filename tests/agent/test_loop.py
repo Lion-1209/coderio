@@ -1,18 +1,15 @@
-import pytest
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
 
 from coderio.agent.loop import (
-    run_agent,
-    run_step,
     _BoundModelCache,
     _to_langchain_messages,
+    run_agent,
+    run_step,
 )
 from coderio.agent.prompts import ActiveSkills
 from coderio.agent.stream import NullStream
-from coderio.config import Config
 from coderio.session import Message, ToolCall
 from coderio.session.store import Session
 from coderio.skills.store import SkillStore
@@ -111,11 +108,7 @@ def test_permission_blocked_in_plan_mode(tmp_path):
     )
     tool_results = [m for m in session.messages if m.role == "tool"]
     assert tool_results, "expected a tool result message"
-    denied = [
-        m.content.lower()
-        for m in tool_results
-        if "permission denied" in m.content.lower()
-    ]
+    denied = [m.content.lower() for m in tool_results if "permission denied" in m.content.lower()]
     assert denied, "expected bash to be blocked with a permission-denied result"
     assert isinstance(out, str)
 
@@ -123,9 +116,7 @@ def test_permission_blocked_in_plan_mode(tmp_path):
 def test_to_langchain_messages_produces_real_message_types():
     convo = [
         Message.user("hi"),
-        Message.assistant(
-            "", tool_calls=[ToolCall(id="c1", name="read_file", args={"path": "a"})]
-        ),
+        Message.assistant("", tool_calls=[ToolCall(id="c1", name="read_file", args={"path": "a"})]),
         Message.tool_result(tool_call_id="c1", name="read_file", content="body"),
     ]
     msgs = _to_langchain_messages("SYS", convo)
@@ -169,9 +160,7 @@ def test_bind_tools_called_with_schemas(tmp_path):
     model.bind_tools.assert_called_once()
     bound_arg = model.bind_tools.call_args[0][0]
     assert isinstance(bound_arg, list)
-    assert all(not isinstance(x, str) for x in bound_arg), (
-        "tools must be objects, not strings"
-    )
+    assert all(not isinstance(x, str) for x in bound_arg), "tools must be objects, not strings"
     assert all(hasattr(x, "args_schema") for x in bound_arg)
 
 
@@ -193,7 +182,6 @@ def test_run_step_aggregates_incremental_tool_call_chunks():
     """Regression: a provider that streams tool_call_chunks (no single complete AIMessage)
     must still yield an AIMessage with complete tool_calls."""
     from langchain_core.messages import AIMessageChunk
-    from coderio.agent.loop import run_step, _BoundModelCache
 
     chunks = [
         AIMessageChunk(
@@ -267,11 +255,7 @@ def test_verify_gate_blocks_unverified_done(tmp_path):
         max_rounds=10,
     )
     # the harness injected [harness] user messages to force-continue
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert len(harness_msgs) == 2, "expected verify gate to force-continue twice"
     assert "bash" in session.messages[-2].content or any(
         "bash" in m.content for m in session.messages if m.role == "user"
@@ -286,9 +270,7 @@ def test_verify_gate_passes_after_bash(tmp_path):
     f = tmp_path / "a.txt"
     model = _model_returning(
         _tool_call_msg("write_file", {"path": str(f), "content": "hi"}),
-        _tool_call_msg(
-            "bash", {"command": f"python -c \"print(open(r'{f}').read())\""}
-        ),
+        _tool_call_msg("bash", {"command": f"python -c \"print(open(r'{f}').read())\""}),
         AIMessage(content="Done and verified.", tool_calls=[]),
     )
     session = Session.create(tmp_path, {"meta": "test"})
@@ -305,11 +287,7 @@ def test_verify_gate_passes_after_bash(tmp_path):
         max_rounds=10,
     )
     assert "verified" in final.lower()
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], "no interception expected after bash verification"
     assert stream.warnings == [], "no warning expected after bash verification"
 
@@ -335,11 +313,7 @@ def test_harness_disabled_passthrough(tmp_path):
         max_rounds=10,
         harness_enabled=False,
     )
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], "no interception expected when harness disabled"
     assert stream.warnings == [], "no warning expected when harness disabled"
     assert "done" in final
@@ -367,11 +341,7 @@ def test_failed_write_not_counted(tmp_path):
         stream=stream,
         max_rounds=10,
     )
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], "failed write must not trigger verify gate"
     assert stream.warnings == [], "failed write must not warn"
     assert "done" in final
@@ -397,13 +367,9 @@ def test_plan_gate_nudge_visible_in_tool_result(tmp_path):
         stream=stream,
         max_rounds=10,
     )
-    tool_results = [
-        m for m in session.messages if m.role == "tool" and m.name == "write_file"
-    ]
+    tool_results = [m for m in session.messages if m.role == "tool" and m.name == "write_file"]
     assert tool_results, "expected a write_file tool result"
-    assert "[nudge]" in tool_results[0].content, (
-        "expected plan-gate nudge in write result"
-    )
+    assert "[nudge]" in tool_results[0].content, "expected plan-gate nudge in write result"
 
 
 def test_on_step_start_called_before_each_model_call(tmp_path):
@@ -428,9 +394,8 @@ def test_on_step_start_called_before_each_model_call(tmp_path):
         stream=stream,
         max_rounds=5,
     )
-    assert stream.step_starts == 2, (
-        "expected on_step_start before each of 2 model calls, got "
-        + str(stream.step_starts)
+    assert stream.step_starts == 2, "expected on_step_start before each of 2 model calls, got " + str(
+        stream.step_starts
     )
 
 
@@ -455,9 +420,7 @@ def test_bad_tool_args_become_result_not_crash(tmp_path):
         max_rounds=5,
     )
     assert "recovered" in final
-    tool_results = [
-        m for m in session.messages if m.role == "tool" and m.name == "bash"
-    ]
+    tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert tool_results, "expected a bash tool result even though the call was bad"
     # TypeError from a bad signature is classified retryable so the model knows
     # it can fix the call and retry (rather than abandon the tool).
@@ -468,7 +431,6 @@ def test_bad_tool_args_become_result_not_crash(tmp_path):
 def test_tool_raising_arbitrary_exception_becomes_result(tmp_path):
     """Any tool execution exception (not just TypeError) must be caught and turned
     into a result — the agent keeps going. We force it via a stub tool."""
-    from coderio.tools.base import Tool
 
     session = Session.create(tmp_path, {"meta": "test"})
 
@@ -497,9 +459,7 @@ def test_tool_raising_arbitrary_exception_becomes_result(tmp_path):
         max_rounds=5,
     )
     assert "moved on" in final
-    tool_results = [
-        m for m in session.messages if m.role == "tool" and m.name == "bash"
-    ]
+    tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert "kaboom" in tool_results[0].content
     # Unknown exceptions are conservatively retryable and carry the type name.
     assert "[retryable]" in tool_results[0].content
@@ -537,9 +497,7 @@ def test_non_retryable_tool_error_is_classified(tmp_path):
         max_rounds=5,
     )
     assert "switching approach" in final
-    tool_results = [
-        m for m in session.messages if m.role == "tool" and m.name == "bash"
-    ]
+    tool_results = [m for m in session.messages if m.role == "tool" and m.name == "bash"]
     assert "[non-retryable]" in tool_results[0].content
     assert "PermissionError" in tool_results[0].content
 
@@ -558,9 +516,7 @@ def test_grounding_gate_intercepts_unread_citation_then_passes(tmp_path):
     f.write_text("HARNESS = True\n", encoding="utf-8")
     model = _model_returning(
         # round 1: cites loader.py:81 WITHOUT reading it
-        AIMessage(
-            content="loader.py:81 已经接入了 config.harness，没问题。", tool_calls=[]
-        ),
+        AIMessage(content="loader.py:81 已经接入了 config.harness，没问题。", tool_calls=[]),
         # round 2: after the harness nudge, reads the file
         _tool_call_msg("read_file", {"path": str(f)}),
         # round 3: grounded answer
@@ -580,11 +536,7 @@ def test_grounding_gate_intercepts_unread_citation_then_passes(tmp_path):
         max_rounds=10,
     )
     # the harness injected a [harness] demand to read the cited file
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert len(harness_msgs) == 1, "expected grounding gate to force-continue once"
     assert "loader.py" in harness_msgs[0]
     assert "read_file" in harness_msgs[0]
@@ -612,11 +564,7 @@ def test_grounding_gate_no_op_for_pure_conversation(tmp_path):
         stream=stream,
         max_rounds=5,
     )
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], "no file cited → no grounding interception"
     assert stream.warnings == []
 
@@ -648,11 +596,7 @@ def test_grounding_gate_session_level_remember_prior_turn_reads(tmp_path):
             tool_calls=[ToolCall(id="tc1", name="read_file", args={"path": str(f)})],
         )
     )
-    session.append(
-        Message.tool_result(
-            tool_call_id="tc1", name="read_file", content="1	HARNESS = True"
-        )
-    )
+    session.append(Message.tool_result(tool_call_id="tc1", name="read_file", content="1	HARNESS = True"))
 
     # Turn 2: model cites loader.py:81 WITHOUT reading it again. With the fix,
     # the gate sees loader.py in content_read_files (seeded from session msgs)
@@ -672,11 +616,7 @@ def test_grounding_gate_session_level_remember_prior_turn_reads(tmp_path):
         stream=stream,
         max_rounds=5,
     )
-    harness_msgs = [
-        m.content
-        for m in session.messages
-        if m.role == "user" and m.content.startswith("[harness]")
-    ]
+    harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
     assert harness_msgs == [], (
         "session-level seed broken: gate forced re-read of a file already read "
         "in a prior turn. harness_msgs: " + str(harness_msgs)
@@ -702,9 +642,7 @@ def test_empty_response_triggers_compact_before_retry(tmp_path):
         AIMessage(content="", tool_calls=[]),
         AIMessage(content="最终答案。", tool_calls=[]),
     )
-    ctx_cfg = ContextConfig(
-        enabled=True, trigger_ratio=0.6, keep_recent=4, model_context_limit=200_000
-    )
+    ctx_cfg = ContextConfig(enabled=True, trigger_ratio=0.6, keep_recent=4, model_context_limit=200_000)
     session = Session.create(tmp_path, {"meta": "test"})
     stream = _RecStream()
     compact_calls = []
@@ -756,8 +694,9 @@ def test_compaction_persists_summary_and_truncates_on_reload(tmp_path):
     assert summary is in session.messages -> reload from disk -> assert old
     messages are gone.
     """
-    from coderio.config import ContextConfig
     from langchain_core.messages import AIMessage as _AIMsg
+
+    from coderio.config import ContextConfig
 
     # Build a model mock whose .invoke() returns a real summary (used by
     # compact_convo's model.invoke() call), and whose .stream() yields the
@@ -779,9 +718,7 @@ def test_compaction_persists_summary_and_truncates_on_reload(tmp_path):
     # compact_convo calls model.invoke() for the summary — must return content.
     model.invoke = MagicMock(return_value=_AIMsg(content="这是压缩后的摘要内容"))
 
-    ctx_cfg = ContextConfig(
-        enabled=True, trigger_ratio=0.6, keep_recent=4, model_context_limit=200_000
-    )
+    ctx_cfg = ContextConfig(enabled=True, trigger_ratio=0.6, keep_recent=4, model_context_limit=200_000)
     session = Session.create(tmp_path, {"meta": "test"})
     # Seed enough conversation messages that compact_convo can actually shrink
     # (it needs len(convo) > keep_recent + 2 = 6). These represent a prior turn.
@@ -806,15 +743,8 @@ def test_compaction_persists_summary_and_truncates_on_reload(tmp_path):
 
     # 1. The context_summary must now be in session.messages (persisted by
     #    on_compact -> session.append).
-    summaries = [
-        m
-        for m in session.messages
-        if m.role == "system" and m.kind == "context_summary"
-    ]
-    assert len(summaries) >= 1, (
-        "compaction did not persist context_summary to session — on_compact "
-        "wiring is broken"
-    )
+    summaries = [m for m in session.messages if m.role == "system" and m.kind == "context_summary"]
+    assert len(summaries) >= 1, "compaction did not persist context_summary to session — on_compact wiring is broken"
 
     # 2. Reload the session from disk — the truncation must kick in.
     reloaded = Session.load(session.path)
@@ -827,9 +757,7 @@ def test_compaction_persists_summary_and_truncates_on_reload(tmp_path):
     # The summary itself must survive (system message).
     assert any("摘要" in c for c in reloaded_contents), "context_summary lost on reload"
     # The final answer (post-compaction) must survive.
-    assert "final answer" in " ".join(reloaded_contents), (
-        "post-compaction messages lost on reload"
-    )
+    assert "final answer" in " ".join(reloaded_contents), "post-compaction messages lost on reload"
 
 
 def test_empty_response_shows_notice_not_silent_hang(tmp_path):
@@ -861,8 +789,6 @@ def test_empty_response_shows_notice_not_silent_hang(tmp_path):
     )
     # The turn must end (not hang), AND a visible notice was emitted so the user
     # knows the model produced nothing (vs. a silent empty screen).
-    tool_notices = [
-        m for m in session.messages if m.role == "tool" and m.name == "_empty_response"
-    ]
+    tool_notices = [m for m in session.messages if m.role == "tool" and m.name == "_empty_response"]
     assert tool_notices, "empty response must emit a visible notice, not end silently"
     assert "空响应" in tool_notices[0].content

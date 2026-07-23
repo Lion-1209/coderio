@@ -1,7 +1,6 @@
 import textwrap
-from pathlib import Path
 
-from coderio.config import Config, load_config
+from coderio.config import load_config
 
 
 def write(p, text):
@@ -64,9 +63,7 @@ def test_project_search_stops_at_home(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     realhome = tmp_path / "realhome"
     (realhome / ".coderio").mkdir(parents=True)
-    (realhome / ".coderio" / "config.toml").write_text(
-        '[model]\ndefault = "home-glm"\n', encoding="utf-8"
-    )
+    (realhome / ".coderio" / "config.toml").write_text('[model]\ndefault = "home-glm"\n', encoding="utf-8")
     # search_from is NESTED inside the (patched) home so the walk would reach home
     # unless it stops at the home boundary.
     proj = realhome / "projects" / "myproj"

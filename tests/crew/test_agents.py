@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from coderio.crew.agents import build_agent_roles, STAGE_FIELD
+from coderio.crew.agents import STAGE_FIELD, build_agent_roles
 
 BUNDLED = Path(__file__).resolve().parents[2] / "src" / "coderio" / "skills"
 
@@ -46,9 +46,7 @@ def test_implementer_has_all_tools():
     roles = build_agent_roles(_store())
     impl = next(r for r in roles if r.stage == "execute")
     tool_names = {t.name for t in impl.tools}
-    assert frozenset(
-        {"bash", "grep", "glob", "write_file", "read_file", "edit_file"}
-    ).issubset(tool_names)
+    assert frozenset({"bash", "grep", "glob", "write_file", "read_file", "edit_file"}).issubset(tool_names)
 
 
 def test_verifier_cannot_write():

@@ -1,12 +1,11 @@
 """Tests for P0 stability fixes: session crash recovery and config validation."""
 
 import json
-from pathlib import Path
 
 import pytest
 
-from coderio.session.store import Session
 from coderio.config.loader import _from_dict
+from coderio.session.store import Session
 
 
 class TestSessionCrashRecovery:
@@ -45,10 +44,7 @@ class TestSessionCrashRecovery:
     def test_load_clean_session_unaffected(self, tmp_path):
         path = tmp_path / "clean.jsonl"
         path.write_text(
-            json.dumps({"type": "meta", "model": "m"})
-            + "\n"
-            + json.dumps({"role": "user", "content": "hi"})
-            + "\n",
+            json.dumps({"type": "meta", "model": "m"}) + "\n" + json.dumps({"role": "user", "content": "hi"}) + "\n",
             encoding="utf-8",
         )
         session = Session.load(path)

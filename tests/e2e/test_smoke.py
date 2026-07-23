@@ -1,7 +1,6 @@
-from pathlib import Path
-from unittest.mock import MagicMock
 import subprocess
 import sys
+from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage
 
@@ -174,9 +173,7 @@ def test_e2e_phase_timeline_persisted_to_session(tmp_path):
         max_rounds=10,
     )
     # The phase_timeline system message should be in the session.
-    sys_msgs = [
-        m for m in session.messages if m.role == "system" and m.kind == "phase_timeline"
-    ]
+    sys_msgs = [m for m in session.messages if m.role == "system" and m.kind == "phase_timeline"]
     assert len(sys_msgs) >= 1, "expected a phase_timeline system message"
     import json
 
@@ -186,9 +183,7 @@ def test_e2e_phase_timeline_persisted_to_session(tmp_path):
     # is PLAN (write + no todos), not IMPLEMENT (write + todos). Either is valid
     # ground-truth derivation; what matters is the progression is captured.
     assert "explore" in states, f"explore missing from {states}"
-    assert "plan" in states or "implement" in states, (
-        f"write phase missing from {states}"
-    )
+    assert "plan" in states or "implement" in states, f"write phase missing from {states}"
     # verify is conditional on the bash command actually succeeding (exit 0).
     # In the test environment the mock model's bash command runs against a
     # tmp_path that bash can't necessarily reach, so verify may or may not
@@ -299,11 +294,7 @@ def test_e2e_grounding_gate_remembers_reads_across_turns(tmp_path):
     )
     assert "x is 1" in answer
     # The gate should NOT have injected a "[harness]" message in turn 2
-    gate_injects = [
-        m
-        for m in session.messages
-        if m.role == "user" and str(m.content).startswith("[harness]")
-    ]
+    gate_injects = [m for m in session.messages if m.role == "user" and str(m.content).startswith("[harness]")]
     # Any gate inject would be from turn 2 (turn 1 had no citations in its output)
     # If the gate remembered the read, there are ZERO injects.
     assert gate_injects == [], f"GroundingGate forgot cross-turn read: {gate_injects}"

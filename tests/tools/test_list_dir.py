@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from coderio.tools.list_dir import ListDirTool
 
 

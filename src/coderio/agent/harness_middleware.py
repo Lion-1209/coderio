@@ -116,11 +116,7 @@ class HarnessMiddleware(AgentMiddleware):
         force-continue, or None to let the agent end normally. On escalation
         release, fires stream.on_harness_warn (if a stream is attached).
         """
-        messages = (
-            state.get("messages", [])
-            if hasattr(state, "get")
-            else getattr(state, "messages", [])
-        )
+        messages = state.get("messages", []) if hasattr(state, "get") else getattr(state, "messages", [])
         last = messages[-1] if messages else None
         # Only intercept when the model returned final text (no tool calls).
         if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):

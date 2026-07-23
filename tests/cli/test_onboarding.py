@@ -1,6 +1,6 @@
-from coderio.cli.onboarding import run_onboarding, OnboardingResult, _save_to_config
-from coderio.cli.credentials import read_credentials
 import coderio.cli.onboarding as onboarding_mod
+from coderio.cli.credentials import read_credentials
+from coderio.cli.onboarding import OnboardingResult, run_onboarding
 
 
 def _mock_verify_ok(*a, **kw):

@@ -31,9 +31,7 @@ class WorkspacePolicy:
     """
 
     READ_TOOLS: frozenset[str] = frozenset({"read_file", "list_dir", "glob", "grep"})
-    WRITE_TOOLS: frozenset[str] = frozenset(
-        {"write_file", "edit_file", "multi_edit", "bash"}
-    )
+    WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit", "bash"})
 
     def __init__(self, root: Path | str = ""):
         # Default to the process CWD when no root is configured — this matches

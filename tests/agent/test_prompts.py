@@ -1,14 +1,13 @@
-from coderio.agent.prompts import build_system_prompt, ActiveSkills
-from coderio.skills.store import SkillStore
 from pathlib import Path
+
+from coderio.agent.prompts import ActiveSkills, build_system_prompt
+from coderio.skills.store import SkillStore
 
 
 def _make(tmp_path, name, desc, body):
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8"
-    )
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n{body}", encoding="utf-8")
 
 
 def test_prompt_lists_available_skills(tmp_path):
@@ -130,7 +129,6 @@ def test_system_prompt_is_small_under_progressive_disclosure():
 
 def _bundled_store():
     from coderio.skills.store import load_skill_store
-    from pathlib import Path
 
     bundled = Path(__file__).resolve().parents[2] / "src" / "coderio" / "skills"
     return load_skill_store(bundled, None, None)
@@ -177,6 +175,5 @@ def test_skill_descriptions_are_trimmed():
     vf = _bundled_store().get("verify-and-fix")
     assert vf is not None
     assert len(vf.description) < 60, (
-        f"verify-and-fix description not trimmed (len={len(vf.description)}); "
-        "expected Lion-Skills 0.3.0 (~26 chars)"
+        f"verify-and-fix description not trimmed (len={len(vf.description)}); expected Lion-Skills 0.3.0 (~26 chars)"
     )

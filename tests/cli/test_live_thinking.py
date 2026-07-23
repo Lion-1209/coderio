@@ -7,9 +7,9 @@ chunk as it arrives, so the user sees reasoning grow in real time.
 """
 
 import pytest
+from textual.widgets import Collapsible
 
 from coderio.cli.tui import CoderioTUI
-from textual.widgets import Collapsible, Static
 
 
 def _think_body_texts(app) -> list[str]:
@@ -40,9 +40,7 @@ async def test_first_thinking_chunk_creates_expanded_block():
         assert cols[0].collapsed is False  # EXPANDED — visible immediately
         # The thinking text must be somewhere in the Collapsible's content
         all_texts = _think_body_texts(app)
-        assert any("我需要先看看代码" in t for t in all_texts), (
-            f"thinking text not in {all_texts}"
-        )
+        assert any("我需要先看看代码" in t for t in all_texts), f"thinking text not in {all_texts}"
 
 
 @pytest.mark.asyncio
@@ -173,9 +171,7 @@ async def test_rapid_thinking_chunks_do_not_fragment():
         # The full accumulated text must be in the live body.
         all_texts = _think_body_texts(app)
         joined = "".join(all_texts)
-        assert "The user is asking about the project." in joined, (
-            f"full thinking text missing — got {all_texts}"
-        )
+        assert "The user is asking about the project." in joined, f"full thinking text missing — got {all_texts}"
 
 
 @pytest.mark.asyncio

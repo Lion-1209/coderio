@@ -91,18 +91,14 @@ class CrewOrchestrator:
         while True:
             result = self._graph.invoke(state, config=cfg)
             # LangGraph signals a pause via the __interrupt__ key in the result.
-            interrupts = (
-                result.get("__interrupt__") if isinstance(result, dict) else None
-            )
+            interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
             if not interrupts:
                 break
             # A pause node fired interrupt(); ask the user and resume.
             intr = interrupts[0]
             payload = intr.value if hasattr(intr, "value") else intr
             stage = payload.get("stage", "") if isinstance(payload, dict) else ""
-            output = (
-                payload.get("output", "") if isinstance(payload, dict) else str(payload)
-            )
+            output = payload.get("output", "") if isinstance(payload, dict) else str(payload)
             answer = self.on_pause(stage, output) if self.on_pause else ""
             state = Command(resume=answer)
         ps = crew_state_to_project_state(result)
@@ -181,9 +177,7 @@ class CrewOrchestrator:
     def _make_pause_node(self, stage: str):
         """Build a HITL pause node. In auto mode it is a no-op; otherwise it
         interrupts and waits for the user's response (resumed via Command)."""
-        field = (
-            "user_clarification_answer" if stage == "clarify" else "user_spec_approval"
-        )
+        field = "user_clarification_answer" if stage == "clarify" else "user_spec_approval"
         output_field = "clarification" if stage == "clarify" else "spec"
 
         def node(state: CrewState) -> dict:
@@ -297,9 +291,7 @@ class CrewOrchestrator:
         if role.stage == "spec" and state.user_spec_approval:
             parts.append(f"\n用户对 spec 的确认/修改:\n{state.user_spec_approval}")
         parts.append("")
-        parts.append(
-            f"## 你的产出\n把你的最终回复作为产出（编排器会存入 {role.writes} 字段）。"
-        )
+        parts.append(f"## 你的产出\n把你的最终回复作为产出（编排器会存入 {role.writes} 字段）。")
         if role.stage == "clarify":
             parts.append("提出澄清问题；不要假设答案。")
         if role.stage == "verify":
@@ -317,9 +309,7 @@ class CrewOrchestrator:
         convo = [Message.user(self._task_instruction(role))]
         bound_cache = _BoundModelCache(self.model)
         activate = ActivateSkillTool(self.store, _ActiveSkillsStub())
-        langchain_tools = to_langchain_tools(role.tools) + [
-            to_langchain_tool(activate, activate.args_schema)
-        ]
+        langchain_tools = to_langchain_tools(role.tools) + [to_langchain_tool(activate, activate.args_schema)]
         skill_index = {t.name: t for t in role.tools}
         skill_index[activate.name] = activate
         turn_result = _execute_turn(

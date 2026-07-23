@@ -66,8 +66,5 @@ class DeactivateSkillTool:
         removed = self.active.deactivate(name)
         if not removed:
             active_names = [s.name for s in self.active.all()]
-            return (
-                f"Error: skill not active: {name}. "
-                f"Active skills: {', '.join(active_names) or '(none)'}"
-            )
+            return f"Error: skill not active: {name}. Active skills: {', '.join(active_names) or '(none)'}"
         return f"Deactivated skill: {name}. Prompt will refresh on next turn."

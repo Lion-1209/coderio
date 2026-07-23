@@ -58,9 +58,7 @@ class NoteTool:
                 return "Error: name is required for append."
             p = self._path(name)
             p.parent.mkdir(parents=True, exist_ok=True)
-            existing = (
-                p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
-            )
+            existing = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
             p.write_text(existing + content, encoding="utf-8")
             return f"Appended to note: {p.stem}"
         elif action == "delete":

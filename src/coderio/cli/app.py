@@ -8,7 +8,7 @@ from rich.panel import Panel
 
 from coderio.config import load_config
 from coderio.config.bootstrap import ensure_user_dirs
-from coderio.skills.store import load_skill_store, SkillStore
+from coderio.skills.store import SkillStore, load_skill_store
 
 app = typer.Typer(
     add_completion=False,
@@ -34,9 +34,7 @@ def _load_store() -> SkillStore:
 def main(
     ctx: typer.Context,
     resume: str = typer.Option(None, "--resume", help="Resume a session by id."),
-    continue_last: bool = typer.Option(
-        False, "--continue", help="Resume most recent session."
-    ),
+    continue_last: bool = typer.Option(False, "--continue", help="Resume most recent session."),
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
 ):
@@ -72,9 +70,7 @@ def skills_list():
 
 @skills_app.command("install")
 def skills_install(
-    repo: str = typer.Option(
-        None, "--repo", help="Git repo URL (default: Lion-Skills)."
-    ),
+    repo: str = typer.Option(None, "--repo", help="Git repo URL (default: Lion-Skills)."),
     force: bool = typer.Option(False, "--force", help="Overwrite non-git target."),
 ):
     """Install/update skills from a git repo (default: Lion-Skills)."""

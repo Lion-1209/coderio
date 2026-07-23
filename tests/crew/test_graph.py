@@ -6,14 +6,11 @@ behavior through the public run() interface).
 
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage
-
 from coderio.agent.stream import NullStream
 from coderio.crew.orchestrator import CrewOrchestrator
 from coderio.crew.state import CrewState
 from coderio.tools.permission import AutoPermissionGate
-
-from tests.crew.test_orchestrator import _model_returning_per_call, _store_with_skills
+from tests.crew.test_orchestrator import _store_with_skills
 
 
 def _orch(**kw):

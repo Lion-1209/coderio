@@ -5,7 +5,7 @@ These test Harness in isolation — no loop, no model. The loop-integration test
 """
 
 from coderio.agent.harness import Harness, HarnessState
-from coderio.tools.todo import TodoStore, Todo
+from coderio.tools.todo import Todo, TodoStore
 
 
 # ----------------------------------------------------------------- helpers
@@ -234,9 +234,7 @@ def test_verify_gate_failed_pytest_does_not_clear():
     """
     h = _harness()
     h.observe("write_file", {"path": "tests/test_foo.py"}, "Wrote 100 chars")
-    h.observe(
-        "bash", {"command": "pytest -q"}, "FAILED tests/test_foo.py\n[exit_code: 1]"
-    )
+    h.observe("bash", {"command": "pytest -q"}, "FAILED tests/test_foo.py\n[exit_code: 1]")
     cont, inject, warn = h.check_termination("done")
     assert cont is True, "failed pytest must NOT satisfy VerifyGate"
 
@@ -285,10 +283,7 @@ def test_is_success_rejects_permission_denied():
 
     assert _is_success("Wrote 50 chars to a.py") is True
     assert _is_success("Error: file not found") is False
-    assert (
-        _is_success("Permission denied: tool 'write_file' blocked in plan mode.")
-        is False
-    )
+    assert _is_success("Permission denied: tool 'write_file' blocked in plan mode.") is False
     assert _is_success("") is False
 
 
@@ -300,9 +295,7 @@ def test_permission_denied_write_not_recorded():
         {"path": "a.py"},
         "Permission denied: tool 'write_file' blocked in plan mode.",
     )
-    assert h.state.writes_since_verify == [], (
-        "permission-denied write should not be tracked as an unverified write"
-    )
+    assert h.state.writes_since_verify == [], "permission-denied write should not be tracked as an unverified write"
 
 
 # ----------------------------------------------- check_termination — CompletionGate
@@ -370,9 +363,7 @@ def test_grounding_gate_passthrough_when_no_files_cited():
 def test_grounding_gate_blocks_unread_citation():
     """The core regression: model cites loader.py:81 but never read loader.py."""
     h = _harness()
-    cont, inject, warn = h.check_termination(
-        "分析发现 loader.py:81 已经接入了 config.harness。"
-    )
+    cont, inject, warn = h.check_termination("分析发现 loader.py:81 已经接入了 config.harness。")
     assert cont is True
     assert inject is not None and "loader.py" in inject
     assert "read_file" in inject
@@ -423,9 +414,7 @@ def test_grounding_gate_grep_does_not_ground_citation():
     lines, never the full file. Citing the file after grep should be ungrounded.
     This closes the bypass where grep pattern='loop' satisfied 'loop.py:42'."""
     h = _harness()
-    h.observe(
-        "grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ..."
-    )
+    h.observe("grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ...")
     cont, inject, warn = h.check_termination("loop.py:42 处理 ReAct 循环。")
     assert cont is True  # gate forces a real read_file
     assert inject is not None
@@ -509,9 +498,7 @@ def test_was_read_is_case_and_slash_insensitive():
 
 def test_grounding_gate_catches_multiple_citations():
     h = _harness()
-    cont, inject, warn = h.check_termination(
-        "loop.py 处理 turn，harness.py 定义 gate，prompts.py 路由意图。"
-    )
+    cont, inject, warn = h.check_termination("loop.py 处理 turn，harness.py 定义 gate，prompts.py 路由意图。")
     assert cont is True
     assert inject is not None
     for f in ("loop.py", "harness.py", "prompts.py"):
@@ -558,9 +545,7 @@ def _harness_with_tracker():
 
     stream = _CapturingStream()
     tracker = AgentStateTracker()
-    h = Harness(
-        state=HarnessState(), todos=TodoStore(), state_tracker=tracker, stream=stream
-    )
+    h = Harness(state=HarnessState(), todos=TodoStore(), state_tracker=tracker, stream=stream)
     return h, tracker, stream
 
 

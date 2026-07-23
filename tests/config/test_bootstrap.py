@@ -1,6 +1,4 @@
-from pathlib import Path
-
-from coderio.config.bootstrap import ensure_user_dirs, STRUCTURE
+from coderio.config.bootstrap import STRUCTURE, ensure_user_dirs
 
 
 def test_creates_skeleton(tmp_path):

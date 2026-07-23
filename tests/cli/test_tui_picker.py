@@ -9,7 +9,6 @@ import pytest
 
 from coderio.cli.tui import SessionPickerScreen
 
-
 SUMMARIES = [
     {
         "id": "20260703-093941-b9f7",
@@ -32,18 +31,15 @@ SUMMARIES = [
 async def test_picker_mounts_and_shows_summaries():
     """The picker must mount and render each session's first-user summary (so the
     user recognizes conversations by what they asked, not by opaque ids)."""
-    from coderio.cli.tui import CoderioTUI
     from textual.widgets import Static
+
+    from coderio.cli.tui import CoderioTUI
 
     app = CoderioTUI()
     async with app.run_test() as pilot:
         app.push_screen(SessionPickerScreen(SUMMARIES))
         await pilot.pause()
-        texts = [
-            str(w.content)
-            for w in app.screen.walk_children(Static)
-            if getattr(w, "content", None) is not None
-        ]
+        texts = [str(w.content) for w in app.screen.walk_children(Static) if getattr(w, "content", None) is not None]
         joined = " ".join(texts)
         assert "帮我修登录bug" in joined
         assert "分析项目架构" in joined
@@ -71,8 +67,9 @@ async def test_picker_cancel_returns_none():
 @pytest.mark.asyncio
 async def test_picker_filter_narrows_list():
     """Setting the filter input hides non-matching rows."""
-    from coderio.cli.tui import CoderioTUI
     from textual.widgets import Input, Static
+
+    from coderio.cli.tui import CoderioTUI
 
     app = CoderioTUI()
     async with app.run_test() as pilot:
@@ -82,11 +79,7 @@ async def test_picker_filter_narrows_list():
         # register as an Input.Changed event). A keyword matching only session 1.
         app.screen.query_one("#picker-filter", Input).value = "登录"
         await pilot.pause()
-        texts = [
-            str(w.content)
-            for w in app.screen.walk_children(Static)
-            if getattr(w, "content", None) is not None
-        ]
+        texts = [str(w.content) for w in app.screen.walk_children(Static) if getattr(w, "content", None) is not None]
         joined = " ".join(texts)
         assert "帮我修登录bug" in joined
         assert "分析项目架构" not in joined

@@ -5,7 +5,7 @@ cover the happy path (extracting context_length from various provider response
 shapes) and the failure paths (network errors, missing fields, weird types).
 """
 
-from coderio.llm.probe import probe_context_limit, _extract_context_limit
+from coderio.llm.probe import _extract_context_limit, probe_context_limit
 
 
 def test_extract_from_openai_compatible_top_level():
@@ -22,9 +22,7 @@ def test_extract_from_anthropic_nested_data():
 
 def test_extract_from_openai_list_shape():
     """OpenAI /v1/models returns {'data': [{...}, ...]}."""
-    payload = {
-        "data": [{"id": "gpt-4o", "context_length": 128000}, {"id": "gpt-4o-mini"}]
-    }
+    payload = {"data": [{"id": "gpt-4o", "context_length": 128000}, {"id": "gpt-4o-mini"}]}
     assert _extract_context_limit(payload) == 128000
 
 
@@ -73,9 +71,7 @@ def test_probe_returns_zero_on_network_failure(monkeypatch):
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _raise)
-    n = probe_context_limit(
-        "openai_compatible", "https://api.example.com/v1", "key", "model-x"
-    )
+    n = probe_context_limit("openai_compatible", "https://api.example.com/v1", "key", "model-x")
     assert n == 0
 
 
@@ -111,9 +107,7 @@ def test_probe_happy_path_openai_compatible(monkeypatch):
         status = 200
 
         def __init__(self):
-            self._payload = json.dumps(
-                {"id": "step-3.7-flash", "context_length": 256000}
-            ).encode()
+            self._payload = json.dumps({"id": "step-3.7-flash", "context_length": 256000}).encode()
 
         def read(self):
             return self._payload
@@ -130,9 +124,7 @@ def test_probe_happy_path_openai_compatible(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _ok)
-    n = probe_context_limit(
-        "openai_compatible", "https://api.stepfun.com/v1", "sk-test", "step-3.7-flash"
-    )
+    n = probe_context_limit("openai_compatible", "https://api.stepfun.com/v1", "sk-test", "step-3.7-flash")
     assert n == 256000
 
 
@@ -160,9 +152,7 @@ def test_probe_happy_path_anthropic(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr("coderio.llm.probe.urllib.request.urlopen", _ok)
-    n = probe_context_limit(
-        "anthropic", "https://api.anthropic.com", "sk-ant", "claude-x"
-    )
+    n = probe_context_limit("anthropic", "https://api.anthropic.com", "sk-ant", "claude-x")
     assert n == 200000
     # Anthropic uses x-api-key header (urllib normalizes header name casing)
     headers_lower = {k.lower(): v for k, v in captured["headers"].items()}

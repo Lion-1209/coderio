@@ -1,11 +1,5 @@
 """Regression tests for the S1 review fixes: /mode and --model/--provider overrides."""
 
-import io
-import sys
-from pathlib import Path
-
-import pytest
-
 
 def _patch_console_input(monkeypatch, answers):
     """Make rich Console.input return scripted answers, then EOF."""

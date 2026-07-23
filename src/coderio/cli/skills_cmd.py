@@ -17,9 +17,7 @@ def _list_skills(target: Path) -> list[str]:
     return sorted(p.parent.name for p in target.glob("*/SKILL.md"))
 
 
-def install_skills(
-    repo_url: str, target_dir: Path | str, force: bool = False
-) -> InstallResult:
+def install_skills(repo_url: str, target_dir: Path | str, force: bool = False) -> InstallResult:
     """Clone repo_url into target_dir, or git-pull if it already exists as a repo.
 
     - target missing OR empty -> clone (normal first install)
@@ -43,9 +41,7 @@ def install_skills(
                 text=True,
             )
         except subprocess.CalledProcessError as e:
-            return InstallResult(
-                success=False, message=f"git clone failed: {e.stderr.strip() or e}"
-            )
+            return InstallResult(success=False, message=f"git clone failed: {e.stderr.strip() or e}")
         return InstallResult(
             success=True,
             action="cloned",
@@ -72,9 +68,7 @@ def install_skills(
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        return InstallResult(
-            success=False, message=f"git pull failed: {e.stderr.strip() or e}"
-        )
+        return InstallResult(success=False, message=f"git pull failed: {e.stderr.strip() or e}")
     return InstallResult(
         success=True,
         action="updated",

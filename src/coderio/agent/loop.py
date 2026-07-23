@@ -48,9 +48,7 @@ class TurnResult:
 
     __slots__ = ("text", "hit_max_rounds", "in_tool_loop")
 
-    def __init__(
-        self, text: str, hit_max_rounds: bool = False, in_tool_loop: bool = False
-    ):
+    def __init__(self, text: str, hit_max_rounds: bool = False, in_tool_loop: bool = False):
         self.text = text
         self.hit_max_rounds = hit_max_rounds
         self.in_tool_loop = in_tool_loop
@@ -83,11 +81,7 @@ def _seed_read_state(harness, messages) -> None:
         if m.role == "assistant" and m.tool_calls:
             for tc in m.tool_calls:
                 if tc.name == "read_file":
-                    p = (
-                        (tc.args or {}).get("path")
-                        or (tc.args or {}).get("file_path")
-                        or ""
-                    )
+                    p = (tc.args or {}).get("path") or (tc.args or {}).get("file_path") or ""
                     if p:
                         harness.state.content_read_files.add(_norm_path(p))
 
@@ -186,15 +180,10 @@ def _to_langchain_messages(system_prompt: str, convo: list[Message]) -> list:
         elif m.role == "assistant":
             tcs = None
             if m.tool_calls:
-                tcs = [
-                    {"name": tc.name, "args": tc.args, "id": tc.id, "type": "tool_call"}
-                    for tc in m.tool_calls
-                ]
+                tcs = [{"name": tc.name, "args": tc.args, "id": tc.id, "type": "tool_call"} for tc in m.tool_calls]
             msgs.append(AIMessage(content=m.content, tool_calls=tcs or []))
         elif m.role == "tool":
-            msgs.append(
-                ToolMessage(content=m.content, tool_call_id=m.tool_call_id or "")
-            )
+            msgs.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id or ""))
         elif m.role == "system":
             # Phase timelines are observability metadata — never shown to the model.
             # Context summaries (kind="context_summary") ARE shown (that's their purpose).
@@ -267,11 +256,7 @@ class _BoundModelCache:
 
     def get(self, langchain_tools: list, signature: tuple) -> Any:
         if self._signature != signature or self._bound is None:
-            self._bound = (
-                self.model.bind_tools(langchain_tools)
-                if langchain_tools
-                else self.model
-            )
+            self._bound = self.model.bind_tools(langchain_tools) if langchain_tools else self.model
             self._signature = signature
         return self._bound
 
@@ -315,20 +300,15 @@ def run_step(
             ) from e
         if any(k in msg for k in ("rate_limit", "429", "rate limit", "quota")):
             raise RuntimeError(
-                "API 速率限制：请求过于频繁或额度用完（SDK 已自动重试 3 次仍失败）。"
-                "请稍后重试，或检查账户额度。"
+                "API 速率限制：请求过于频繁或额度用完（SDK 已自动重试 3 次仍失败）。请稍后重试，或检查账户额度。"
             ) from e
-        if any(
-            k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")
-        ):
+        if any(k in msg for k in ("connect", "timeout", "unreachable", "dns", "refused")):
             raise RuntimeError(
-                f"网络错误：无法连接到模型端点 ({type(e).__name__})，"
-                "已自动重试 3 次。请检查网络连接和 base_url 配置。"
+                f"网络错误：无法连接到模型端点 ({type(e).__name__})，已自动重试 3 次。请检查网络连接和 base_url 配置。"
             ) from e
         if any(k in msg for k in ("not found", "404", "model")):
             raise RuntimeError(
-                f"模型错误：模型名可能无效 ({type(e).__name__}: {e})。"
-                "请运行 coderio config 检查 model 配置。"
+                f"模型错误：模型名可能无效 ({type(e).__name__}: {e})。请运行 coderio config 检查 model 配置。"
             ) from e
         raise  # unknown error — let the TUI's generic handler surface it
     usage = getattr(aggregated, "usage_metadata", None) or {}
@@ -338,11 +318,7 @@ def run_step(
     # (e.g. max_tokens) — tell the user instead of silently producing partial work.
     meta = getattr(aggregated, "response_metadata", {}) or {}
     stop_reason = meta.get("stop_reason")
-    if (
-        stop_reason
-        and stop_reason not in ("end_turn", "stop", "tool_use", None)
-        and hasattr(stream, "on_truncated")
-    ):
+    if stop_reason and stop_reason not in ("end_turn", "stop", "tool_use", None) and hasattr(stream, "on_truncated"):
         stream.on_truncated(stop_reason)
     if aggregated is not None and getattr(aggregated, "tool_calls", None):
         return AIMessage(
@@ -350,11 +326,7 @@ def run_step(
             tool_calls=list(aggregated.tool_calls),
             usage_metadata=usage or None,
         )
-    text = (
-        _content_to_text(getattr(aggregated, "content", ""))
-        if aggregated is not None
-        else ""
-    )
+    text = _content_to_text(getattr(aggregated, "content", "")) if aggregated is not None else ""
     return AIMessage(content=text, tool_calls=[])
 
 
@@ -437,9 +409,7 @@ def _execute_turn(
             ):
                 if hasattr(stream, "on_phase_change"):
                     stream.on_phase_change("compacting", step_num, "压缩上下文")
-                compacted = compact_convo(
-                    convo, model, keep_recent=context_cfg.keep_recent
-                )
+                compacted = compact_convo(convo, model, keep_recent=context_cfg.keep_recent)
                 _apply_compaction(compacted, convo, on_compact)
 
         # Signal the UI to start its busy indicator BEFORE the model call. The
@@ -471,17 +441,11 @@ def _execute_turn(
             #   (2) Then inject a "please continue" nudge (Kimi Code's pattern).
             if not text.strip():
                 empty_retries += 1
-                if (
-                    empty_retries == 1
-                    and context_cfg is not None
-                    and getattr(context_cfg, "enabled", False)
-                ):
+                if empty_retries == 1 and context_cfg is not None and getattr(context_cfg, "enabled", False):
                     from coderio.agent.compact import compact_convo
 
                     try:
-                        compacted = compact_convo(
-                            convo, model, keep_recent=context_cfg.keep_recent
-                        )
+                        compacted = compact_convo(convo, model, keep_recent=context_cfg.keep_recent)
                         _apply_compaction(compacted, convo, on_compact)
                     except Exception:
                         pass  # compaction failed — fall through to the nudge retry
@@ -500,11 +464,7 @@ def _execute_turn(
                 )
                 stream.on_tool_start("_empty_response", {})
                 stream.on_tool_end("_empty_response", notice)
-                _emit(
-                    Message.tool_result(
-                        tool_call_id="_empty", name="_empty_response", content=notice
-                    )
-                )
+                _emit(Message.tool_result(tool_call_id="_empty", name="_empty_response", content=notice))
             # --- Harness termination control (spec §3) ---
             # The model wants to stop, but the harness decides whether that's allowed.
             # Based on observed tool calls (ground truth), not the model's self-report.
@@ -534,12 +494,7 @@ def _execute_turn(
         _emit(
             Message.assistant(
                 _content_to_text(getattr(ai, "content", "")),
-                tool_calls=[
-                    ToolCall(
-                        id=tc["id"], name=tc["name"], args=dict(tc.get("args", {}))
-                    )
-                    for tc in tool_calls
-                ],
+                tool_calls=[ToolCall(id=tc["id"], name=tc["name"], args=dict(tc.get("args", {}))) for tc in tool_calls],
             )
         )
         for tool_index, tc in enumerate(tool_calls):
@@ -553,16 +508,10 @@ def _execute_turn(
                 tool_total=len(tool_calls),
             )
             if not gate.check(name, args):
-                result = (
-                    f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
-                )
+                result = f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
             else:
                 tool = skill_index.get(name)
-                result = (
-                    _invoke_tool(tool, name, args)
-                    if tool
-                    else f"Error: unknown tool {name!r}"
-                )
+                result = _invoke_tool(tool, name, args) if tool else f"Error: unknown tool {name!r}"
             # --- Harness observation + PlanGate augmentation (spec §3) ---
             # observe() records ground truth (writes / verifications) for the gates;
             # after_tool_call() may append a soft nudge to the result (never blocks).
@@ -585,10 +534,7 @@ def _execute_turn(
             # Both activate_skill and deactivate_skill change which skill bodies
             # are in the system prompt — refresh it so the next round sees the
             # updated active set.
-            if (
-                name in ("activate_skill", "deactivate_skill")
-                and on_activate_skill is not None
-            ):
+            if name in ("activate_skill", "deactivate_skill") and on_activate_skill is not None:
                 new_prompt = on_activate_skill()
                 if new_prompt:
                     active_prompt = new_prompt
@@ -637,20 +583,12 @@ def run_agent(
     _input_text = (
         user_input
         if isinstance(user_input, str)
-        else " ".join(
-            b.get("text", "")
-            for b in user_input
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
+        else " ".join(b.get("text", "") for b in user_input if isinstance(b, dict) and b.get("type") == "text")
     )
     if stage_auto_inject:
         if stage := detect_stage(_input_text):
             skill_name = stage_skill(stage)
-            if (
-                skill_name
-                and skill_store.has(skill_name)
-                and not active_skills.is_active(skill_name)
-            ):
+            if skill_name and skill_store.has(skill_name) and not active_skills.is_active(skill_name):
                 active_skills.activate(skill_store.get(skill_name))
 
     system_prompt = build_system_prompt(skill_store, active_skills)
@@ -691,9 +629,7 @@ def run_agent(
         from coderio.agent.harness import Harness, HarnessState
         from coderio.agent.state import AgentStateTracker
 
-        todo_store = next(
-            (t.store for t in tools if getattr(t, "name", "") == "todo"), None
-        )
+        todo_store = next((t.store for t in tools if getattr(t, "name", "") == "todo"), None)
         # If no TodoStore is reachable, the gates degrade gracefully (todos empty
         # -> plan gate always nudges, completion gate always skips). Build anyway.
         from coderio.tools.todo import TodoStore as _TS
@@ -760,9 +696,7 @@ def run_agent(
             checkpoint = compact_convo(convo, model, keep_recent=6)
             if len(checkpoint) < len(convo):  # only restart if compaction shrank it
                 if hasattr(stream, "on_phase_change"):
-                    stream.on_phase_change(
-                        "restart", 0, "检测到上下文衰败，正在从压缩上下文重试"
-                    )
+                    stream.on_phase_change("restart", 0, "检测到上下文衰败，正在从压缩上下文重试")
                 # Append a restart-checkpoint marker so the retry's session shows
                 # why the context jumped. The summary itself is context_summary kind.
                 for m in checkpoint:

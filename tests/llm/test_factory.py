@@ -5,11 +5,7 @@ from coderio.llm import build_chat_model
 
 
 def test_openai_compatible_uses_chatopenai():
-    cfg = Config(
-        model=ModelConfig(
-            provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"
-        )
-    )
+    cfg = Config(model=ModelConfig(provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"))
     model = build_chat_model(cfg)
     from langchain_openai import ChatOpenAI
 
@@ -18,9 +14,7 @@ def test_openai_compatible_uses_chatopenai():
 
 
 def test_anthropic_uses_chatanthropic():
-    cfg = Config(
-        model=ModelConfig(provider="anthropic", default="claude-sonnet", base_url="")
-    )
+    cfg = Config(model=ModelConfig(provider="anthropic", default="claude-sonnet", base_url=""))
     model = build_chat_model(cfg)
     from langchain_anthropic import ChatAnthropic
 
@@ -36,11 +30,7 @@ def test_unknown_provider_raises():
 def test_api_key_from_env(monkeypatch):
     monkeypatch.setenv("Z_API_KEY", "zk-123")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    cfg = Config(
-        model=ModelConfig(
-            provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"
-        )
-    )
+    cfg = Config(model=ModelConfig(provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"))
     model = build_chat_model(cfg)
     assert model.openai_api_key.get_secret_value() == "zk-123"
 
@@ -190,9 +180,7 @@ def test_profile_defaults_to_first_when_active_unset(tmp_path):
 def test_no_profiles_falls_through_to_model(tmp_path):
     """Empty profiles list → Layer 0 skipped, legacy [model] path runs."""
     cfg = Config(
-        model=ModelConfig(
-            provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"
-        ),
+        model=ModelConfig(provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"),
         profiles=[],
         active_profile="",
     )
@@ -207,9 +195,7 @@ def test_stale_active_profile_falls_through(tmp_path):
     """active_profile names a non-existent profile → fall through to [model]
     rather than crashing."""
     cfg = Config(
-        model=ModelConfig(
-            provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"
-        ),
+        model=ModelConfig(provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"),
         profiles=[
             Profile(
                 name="real",
@@ -236,11 +222,7 @@ def test_build_client_sets_max_retries_and_timeout_openai():
     429 spike or network blip doesn't immediately surface as a fatal error."""
     from coderio.llm.factory import _MAX_RETRIES, _REQUEST_TIMEOUT
 
-    cfg = Config(
-        model=ModelConfig(
-            provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"
-        )
-    )
+    cfg = Config(model=ModelConfig(provider="openai_compatible", default="glm-4.5", base_url="http://x/v4"))
     model = build_chat_model(cfg)
     assert model.max_retries == _MAX_RETRIES
     assert model.request_timeout == _REQUEST_TIMEOUT

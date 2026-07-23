@@ -7,17 +7,15 @@ skips confirmation, not the security floor.
 """
 
 import os
-from pathlib import Path
 
 import pytest
 
-from coderio.tools.workspace import WorkspacePolicy
 from coderio.tools.permission import (
+    AutoPermissionGate,
     PermissionGate,
     PermissionMode,
-    AutoPermissionGate,
 )
-
+from coderio.tools.workspace import WorkspacePolicy
 
 # --- WorkspacePolicy unit tests ---
 
@@ -78,9 +76,7 @@ def test_grep_glob_listdir_outside_allowed(tmp_path):
     """All read-class tools pass even with out-of-workspace paths."""
     p = WorkspacePolicy(root=tmp_path)
     for tool in ("grep", "glob", "list_dir"):
-        allowed, _ = p.check(
-            tool, {"path": os.path.join(os.sep, "etc"), "pattern": "x"}
-        )
+        allowed, _ = p.check(tool, {"path": os.path.join(os.sep, "etc"), "pattern": "x"})
         assert allowed is True, f"{tool} should be unconstrained"
 
 

@@ -1,4 +1,4 @@
-from coderio.cli.commands import handle_slash, CommandResult
+from coderio.cli.commands import handle_slash
 
 
 class _FakeCtx:
@@ -113,9 +113,7 @@ def test_completions_cover_every_registered_command():
     completions = slash_completions()
     for cmd in SLASH_COMMANDS:
         # at least one completion candidate starts with the bare command name
-        assert any(c.startswith(cmd.name) for c in completions), (
-            f"{cmd.name} missing from completions"
-        )
+        assert any(c.startswith(cmd.name) for c in completions), f"{cmd.name} missing from completions"
 
 
 def test_completions_include_aliases():
@@ -238,9 +236,7 @@ def test_profile_list_prints_inline():
             model="glm-5.2",
             kind="anthropic",
         ),
-        Profile(
-            name="oai", provider_id="openai", model="gpt-4o", kind="openai_compatible"
-        ),
+        Profile(name="oai", provider_id="openai", model="gpt-4o", kind="openai_compatible"),
     ]
     ctx.active_profile = "glm"
     res = handle_slash("/profile list", ctx)
