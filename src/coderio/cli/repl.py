@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -22,12 +23,37 @@ from coderio.tools.workspace import WorkspacePolicy
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 
-def build_gate(cfg: Config, console=None):
+class TuiPermissionGate(RichPromptPermissionGate):
+    """Confirm-mode gate that uses a Textual ModalScreen instead of input().
+
+    Python's input() deadlocks when Textual has taken over the terminal — the
+    agent thread blocks on stdin while Textual blocks on its event loop. This
+    gate delegates to CoderioTUI.request_confirmation which uses a
+    threading.Event + call_from_thread to bridge the gap: the agent thread
+    blocks on the Event while the UI thread shows a ConfirmScreen and resolves
+    it on user input.
+    """
+
+    def __init__(self, tui, policy=None):
+        super().__init__(console=None, policy=policy)
+        self._tui = tui
+
+    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
+        if hasattr(self._tui, "request_confirmation"):
+            return self._tui.request_confirmation(tool_name, args)
+        return super()._ask(tool_name, args)
+
+
+def build_gate(cfg: Config, console=None, tui=None):
     """Construct the permission gate with a workspace policy attached.
 
     The policy enforces path boundaries in ALL modes (including AUTO) — auto
     mode skips interactive confirmation, not the security floor. The root
     defaults to the process CWD when workspace_root is unset.
+
+    When ``tui`` is provided (a CoderioTUI instance), confirm mode uses a
+    Textual ModalScreen for permission prompts instead of input() — which
+    would deadlock against Textual's terminal takeover.
     """
     policy = WorkspacePolicy(root=cfg.tools.workspace_root)
     mode = cfg.tools.permission_mode
@@ -35,6 +61,8 @@ def build_gate(cfg: Config, console=None):
         return AutoPermissionGate(policy=policy)
     if mode == PermissionMode.PLAN:
         return PermissionGate(PermissionMode.PLAN, policy=policy)
+    if tui is not None:
+        return TuiPermissionGate(tui=tui, policy=policy)
     return RichPromptPermissionGate(console=console, policy=policy)
 
 

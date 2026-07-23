@@ -904,6 +904,56 @@ class ModePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ConfirmScreen(ModalScreen[bool]):
+    """Permission confirmation dialog for confirm-mode write operations.
+
+    Shows the tool name + args and asks the user to allow or deny. The agent's
+    background thread blocks on a threading.Event while this screen is open
+    (see CoderioTUI.request_confirmation). Without this, confirm mode would
+    use Python's input() which deadlocks against Textual's terminal takeover.
+    """
+
+    CSS = """
+    ConfirmScreen { align: center middle; }
+    #confirm-box {
+        width: 70%; height: auto; max-height: 60%; border: round $accent;
+        background: $surface; padding: 1 2;
+    }
+    #confirm-title { text-align: center; margin-bottom: 1; }
+    #confirm-detail { color: $text-muted; margin-bottom: 1; }
+    """
+
+    BINDINGS = [
+        Binding("y", "allow", "允许", show=True),
+        Binding("n", "deny", "拒绝", show=True),
+        Binding("escape", "deny", "取消", show=True),
+        Binding("enter", "allow", "允许", show=True),
+    ]
+
+    def __init__(self, tool_name: str, args_str: str) -> None:
+        super().__init__()
+        self._tool_name = tool_name
+        self._args_str = args_str
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Static(
+                "[bold yellow]⚠ 权限确认[/bold yellow]",
+                id="confirm-title",
+            )
+            yield Static(
+                f"工具: {self._tool_name}\n参数: {self._args_str}",
+                id="confirm-detail",
+            )
+            yield Static("[dim]Y = 允许 · N/Esc = 拒绝[/dim]")
+
+    def action_allow(self) -> None:
+        self.dismiss(True)
+
+    def action_deny(self) -> None:
+        self.dismiss(False)
+
+
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -1102,6 +1152,37 @@ class CoderioTUI(App):
         # all queued render instructions and executes them. This is the only path
         # from background-thread data to main-thread widgets.
         self.set_interval(0.06, self._drain_render_queue)
+
+    # ----------------------------------------------------- cross-thread confirmation
+    def request_confirmation(self, tool_name: str, args: dict) -> bool:
+        """Ask the user to allow/deny a write operation (confirm mode).
+
+        Called from the AGENT's background thread. Uses a threading.Event to
+        block until the user responds on the main thread (via ConfirmScreen).
+        Without this, confirm mode would use Python's input() which deadlocks
+        against Textual's terminal takeover — the entire TUI freezes.
+
+        Returns True (allow) or False (deny). The Event has a 120s timeout as a
+        safety net — if the user walks away, the agent doesn't hang forever.
+        """
+        import threading
+
+        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        if len(args_str) > 120:
+            args_str = args_str[:120] + "…"
+        result: dict = {"allowed": False}
+        done = threading.Event()
+
+        def _on_result(allowed: bool):
+            result["allowed"] = allowed
+            done.set()
+
+        def _push():
+            self.push_screen(ConfirmScreen(tool_name, args_str), _on_result)
+
+        self.call_from_thread(_push)
+        done.wait(timeout=120)  # block the agent thread until user responds
+        return result["allowed"]
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
@@ -1962,6 +2043,13 @@ def run_tui(
 
     # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
     rt = {"cfg": cfg, "model": model, "gate": gate, "session": session}
+    # Rebuild the gate with the TUI reference attached. The initial gate from
+    # build_runtime doesn't have the TUI (it was constructed before tui existed).
+    # Without this, confirm mode would use input() which deadlocks against
+    # Textual's terminal takeover.
+    from coderio.cli.repl import build_gate as _bg
+
+    rt["gate"] = _bg(cfg, console=None, tui=tui)
 
     def on_input(line: str) -> None:
         if line.startswith("/"):
@@ -2062,7 +2150,7 @@ def run_tui(
 
                     c = _replace(rt["cfg"], tools=_replace(rt["cfg"].tools, permission_mode=mode))
                     rt["cfg"] = c
-                    rt["gate"] = build_gate(c, console=None)
+                    rt["gate"] = build_gate(c, console=None, tui=tui)
                     tui._add_text(f"✅ 已切换到 {mode} 模式", style="bold green")
 
                 tui.call_from_thread(
@@ -2093,7 +2181,7 @@ def run_tui(
                         tools=_replace(c.tools, permission_mode=res.new_permission_mode),
                     )
                     rt["cfg"] = c
-                    rt["gate"] = build_gate(c, console=None)
+                    rt["gate"] = build_gate(c, console=None, tui=tui)
                 cmd_name = line.strip().split(maxsplit=1)[0]
                 if cmd_name == "/clear":
                     # /clear: start a fresh session + wipe active skills + clear
