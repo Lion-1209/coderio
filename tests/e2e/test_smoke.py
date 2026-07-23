@@ -104,6 +104,8 @@ def test_cli_help_exits_zero():
         [sys.executable, "-m", "coderio.cli.app", "--help"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert r.returncode == 0, f"--help failed:\n{r.stderr}"
@@ -120,6 +122,8 @@ def test_cli_has_no_tui_flag():
         [sys.executable, "-m", "coderio.cli.app", "--help"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert "--tui" not in r.stdout
@@ -132,6 +136,8 @@ def test_cli_unknown_flag_errors():
         [sys.executable, "-m", "coderio.cli.app", "--definitely-not-real"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert r.returncode != 0
