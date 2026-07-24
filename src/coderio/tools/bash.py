@@ -100,8 +100,20 @@ def detect_shell(configured: str) -> str:
 class BashTool:
     name = "bash"
     description = (
-        "Execute a shell command via bash (Git Bash on Windows). Returns combined "
-        "stdout+stderr. Supports timeout and run_in_background. Requires permission."
+        "Execute a shell command via bash (Git Bash on Windows, native bash on Linux/macOS). "
+        "Returns combined stdout+stderr with an [exit_code: N] marker. "
+        "Supports timeout (default 120s) and run_in_background.\n\n"
+        "ENVIRONMENT DISCOVERY (important on Windows): the bash shell inherits the system "
+        "PATH, which may differ from the environment coderio itself runs in. Before assuming "
+        "'the environment is broken', discover what's actually available:\n"
+        "  - `which python python3 py 2>/dev/null` — find which Python interpreters exist\n"
+        "  - Check for a project virtual environment: `ls .venv/Scripts/python.exe` "
+        "(Windows) or `ls venv/bin/python` (Linux/macOS). If found, use that path directly: "
+        "`.venv/Scripts/python.exe -m pytest` instead of bare `python -m pytest`.\n"
+        "  - `py -3 --version` — Windows Python launcher may find a Python 3 even when "
+        "`python` resolves to Python 2.\n"
+        "A bare `python` that fails does NOT mean dependencies are missing. Always verify "
+        "with the correct interpreter before concluding the environment is broken."
     )
     args_schema = BashArgs
 

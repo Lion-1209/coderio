@@ -179,6 +179,24 @@ apply (they are what make you a usable agent, not just a code-spitter):
   web_search / web_fetch — external info (any mode)
   activate_skill(name) — load an optional playbook (naming, debugging, error-handling,
     onboarding-unknown-codebase, etc.) when a task matches it.
+
+### Tool failure recovery (CRITICAL)
+
+  When a tool call fails, DO NOT immediately conclude "the environment is broken" or
+  "the file doesn't exist". Investigate using other tools first:
+
+  • read_file returns "file not found" → the path is likely wrong (relative paths resolve
+    from the project root, not the current file's directory). Use glob("**/filename") or
+    grep to find the actual location, then retry with the correct path.
+  • bash `python -m pytest` fails with "No module named X" → the `python` on PATH may be
+    the wrong interpreter (e.g. Python 2.7 on Windows). Check `.venv/Scripts/python.exe`
+    (Windows) or `venv/bin/python` (Linux/macOS) — if the project has a virtual environment,
+    use that interpreter directly. Run `which -a python python3` to see what's available.
+  • bash command not found → some tools differ between platforms (rg vs grep, py vs python3).
+    Use `which <tool>` to check availability before assuming it exists.
+  • Any tool error → retry with a corrected approach. The first failure is a signal to
+    investigate, not a conclusion. The harness will not penalize you for extra discovery
+    calls, but it WILL penalize you for claiming "done" based on a failed verification.
 """
 
 # The core workflow chain — these are injected as runtime rules by default, NOT
