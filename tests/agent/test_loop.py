@@ -267,10 +267,17 @@ def test_verify_gate_blocks_unverified_done(tmp_path):
 
 def test_verify_gate_passes_after_bash(tmp_path):
     """write -> bash (runs the written file) -> 'done' passes cleanly."""
+    import sys as _sys
+
     f = tmp_path / "a.txt"
+    # Use sys.executable instead of bare 'python' — on macOS with an
+    # unactivated venv, 'python' is not on PATH and the bash subprocess
+    # returns exit_code 127. sys.executable is the interpreter running
+    # the tests (the venv Python), guaranteed to exist and work.
+    python_path = str(_sys.executable).replace("\\", "/")
     model = _model_returning(
         _tool_call_msg("write_file", {"path": str(f), "content": "hi"}),
-        _tool_call_msg("bash", {"command": f"python -c \"print(open(r'{f}').read())\""}),
+        _tool_call_msg("bash", {"command": f'"{python_path}" -c "print(open(r\'{f}\').read())"'}),
         AIMessage(content="Done and verified.", tool_calls=[]),
     )
     session = Session.create(tmp_path, {"meta": "test"})

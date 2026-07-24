@@ -30,8 +30,26 @@ jobs:
         run: |
           pip install build
           python -m build --wheel
-          # Verify the wheel is importable in a fresh venv.
-          ls -la dist/*.whl
+
+      - name: Verify wheel in clean venv
+        # ACTUALLY install the wheel in a fresh venv and run coderio --help.
+        # This catches missing entry points, broken imports, missing bundled
+        # resources (skills), and packaging regressions — not just 'file exists'.
+        run: |
+          python -m venv /tmp/wheel-test-venv
+          /tmp/wheel-test-venv/bin/pip install --no-deps dist/*.whl
+          /tmp/wheel-test-venv/bin/pip install typer rich textual langchain langchain-core
+          /tmp/wheel-test-venv/bin/coderio --help
+          # Verify bundled skills are importable from the installed package.
+          /tmp/wheel-test-venv/bin/python -c "
+          from coderio.skills.store import load_skill_store
+          from pathlib import Path
+          import coderio
+          pkg = Path(coderio.__file__).parent / 'skills'
+          store = load_skill_store(pkg, 0, None)
+          assert len(store.skills) > 0, 'no bundled skills found'
+          print(f'{len(store.skills)} bundled skills OK')
+          "
 
       - name: Create GitHub Release + attach wheel
         uses: softprops/action-gh-release@v2

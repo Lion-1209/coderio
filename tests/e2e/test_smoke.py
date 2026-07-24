@@ -154,11 +154,15 @@ def test_e2e_phase_timeline_persisted_to_session(tmp_path):
     in the session jsonl, recording the explore→implement→verify progression."""
     f = tmp_path / "target.py"
     f.write_text("print('hello')\n", encoding="utf-8")
-    # Sequence: read_file → write_file → bash(run the file) → final text.
+    # Use sys.executable — bare 'python' may not be on PATH on macOS with an
+    # unactivated venv (causes exit_code 127, breaking the verify phase check).
+    import sys as _sys
+
+    _py = str(_sys.executable).replace("\\", "/")
     model = _model_returning(
         _tc("read_file", {"path": str(f)}),
         _tc("write_file", {"path": str(f)}, content=""),
-        _tc("bash", {"command": "python -c \"print('ok')\""}, content=""),
+        _tc("bash", {"command": f'"{_py}" -c "print(\'ok\')"'}),
         AIMessage(content="Done. All tests pass.", tool_calls=[]),
     )
     cfg = Config()
