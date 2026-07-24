@@ -208,6 +208,12 @@ class HarnessState:
     content_read_files: set[str] = field(default_factory=set)
     # Times the grounding gate has force-continued this turn.
     grounding_attempts: int = 0
+    # Paths the model TRIED to read_file but got "file not found". The
+    # GroundingGate skips these in its ungrounded-citation check — the regex
+    # can match path-like strings in prose (e.g. '.coderio/config.toml' in a
+    # README analysis) that aren't real files. Once the agent has confirmed a
+    # path doesn't exist, the gate stops forcing it to "read" it again.
+    not_found_files: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -263,6 +269,11 @@ class Harness:
                         # Normalize on write so later _was_read comparisons are
                         # case- and slash-insensitive (see _norm_path).
                         self.state.content_read_files.add(_norm_path(v))
+                        # If the read returned "file not found", record it so the
+                        # GroundingGate doesn't force re-reading a nonexistent path
+                        # (regex false positives on prose path-like strings).
+                        if result and "file not found" in result.lower():
+                            self.state.not_found_files.add(_norm_path(v))
         elif name == VERIFY_TOOL:
             # A bash call clears "unverified writes" ONLY if it plausibly runs
             # or tests the written code AND the run actually succeeded (exit 0).
@@ -451,7 +462,11 @@ class Harness:
         cited = _cited_files(final_text)
         if not cited:
             return (False, None, None)
-        ungrounded = [c for c in cited if not self._was_read(c)]
+        # Filter out cited paths that the agent already TRIED to read but got
+        # "file not found" — these aren't real code files, just regex false
+        # positives on path-like strings in prose. The agent already attempted
+        # and confirmed they don't exist; forcing another read wastes rounds.
+        ungrounded = [c for c in cited if not self._was_read(c) and c not in self.state.not_found_files]
         if not ungrounded:
             return (False, None, None)
 

@@ -465,6 +465,29 @@ def test_grounding_gate_does_not_false_positive_on_prose():
     assert len(cited) == 1 and cited[0].startswith("loader.py")
 
 
+def test_grounding_gate_skips_nonexistent_cited_files(tmp_path):
+    """REGRESSION: after the agent tries to read a cited file and gets 'file not
+    found', the gate must NOT force it to read that file again. The citation
+    regex can match path-like strings in prose (e.g. '.coderio/config.toml'
+    in documentation) that aren't real code files.
+
+    Flow: gate fires (1st attempt) → model tries read → file not found →
+    gate checks again → the not-found path is skipped, not re-demanded.
+    """
+    h = _harness()
+    # Simulate: model cited 'ghost.py' (doesn't exist), gate fired once,
+    # model tried to read it, got 'file not found'.
+    h.observe("read_file", {"path": "ghost.py"}, "Error: file not found: ghost.py")
+    # Now check_termination with the same citation — ghost.py should be skipped
+    # because the agent already confirmed it doesn't exist.
+    cont, inject, warn = h.check_termination("ghost.py 的逻辑是正确的。")
+    assert cont is False, (
+        "gate re-demanded a read of a file the agent already confirmed "
+        "doesn't exist — the not_found_files skip is broken"
+    )
+    assert inject is None
+
+
 def test_was_read_is_case_and_slash_insensitive():
     """REGRESSION: reading 'Loop.py' must satisfy a citation of 'loop.py:81'.
 
