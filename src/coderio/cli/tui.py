@@ -2135,13 +2135,6 @@ def run_tui(
 
     # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
     rt = {"cfg": cfg, "model": model, "gate": gate, "session": session}
-    # Rebuild the gate with the TUI reference attached. The initial gate from
-    # build_runtime doesn't have the TUI (it was constructed before tui existed).
-    # Without this, confirm mode would use input() which deadlocks against
-    # Textual's terminal takeover.
-    from coderio.cli.repl import build_gate as _bg
-
-    rt["gate"] = _bg(cfg, console=None, tui=tui)
 
     def on_input(line: str) -> None:
         if line.startswith("/"):
@@ -2369,4 +2362,11 @@ def run_tui(
         tui._add_text("🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green")
 
     tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
+    # Rebuild the gate with the TUI reference attached. The initial gate from
+    # build_runtime doesn't have the TUI (it was constructed before tui existed).
+    # Without this, confirm mode would use input() which deadlocks against
+    # Textual's terminal takeover.
+    from coderio.cli.repl import build_gate as _bg
+
+    rt["gate"] = _bg(cfg, console=None, tui=tui)
     tui.run()
