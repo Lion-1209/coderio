@@ -62,15 +62,54 @@ line-length = 120
 
 [tool.ruff.lint]
 # E/F = pycodestyle/pyflakes basics (errors + warnings). Keep src/ clean.
-# C901 = mccabe complexity (informational — tracked but not enforced as error).
-select = ["E", "F", "W", "I"]
+# S = bandit security rules (audited per-file below — the tool-execution code
+# legitimately uses subprocess and swallows UI exceptions by design).
+select = ["E", "F", "W", "I", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately use:
 #   F841 — variables assigned for side effects (e.g. `final = run_agent(...)`
 #          where the assertion is on session state, not the return value).
 #   E731 — lambda assignments for quick inline mocks/patches.
-"tests/**" = ["F841", "E731"]
+#   S101 — assert statements (test code uses assert, not exceptions).
+#   S108 — /tmp paths in test fixtures (mock data, not real file access).
+#   S607 — partial executable path ('git') in test setup scripts.
+"tests/**" = ["F841", "E731", "S101", "S108", "S607"]
+# TUI rendering: S110 (try-except-pass) is intentional — these are UI
+# fault-tolerance guards. A failed widget mount/scroll/remove must never crash
+# the agent's main loop. Logging would spam the terminal during streaming.
+# Also S603 for the OnboardingScreen verification subprocess.
+"src/coderio/cli/tui.py" = ["S110"]
+# Bash tool: S603 (subprocess with untrusted input) is the TOOL'S ENTIRE PURPOSE.
+# The agent runs user/model-authored shell commands by design. The workspace
+# policy + permission gate are the security boundary, not subprocess filtering.
+"src/coderio/tools/bash.py" = ["S603", "S110"]
+# Grep tool: S603 — spawns ripgrep, input is the model's pattern. Same rationale.
+"src/coderio/tools/grep_tool.py" = ["S603"]
+# Credentials: S603/S607 — runs icacls (Windows) / chmod (Linux) to set file
+# permissions. Partial path is intentional (platform command, not user input).
+"src/coderio/cli/credentials.py" = ["S603", "S607"]
+# Skills installer: S603/S607 — runs git clone + git pull. The URL is from the
+# user's config (trusted repo_url), not arbitrary model input.
+"src/coderio/cli/skills_cmd.py" = ["S603", "S607"]
+# Probe: S310 — urllib.request.urlopen for provider model-info discovery.
+# The URL is constructed from the configured base_url (trusted), and we only
+# connect to http/https endpoints. Not user-supplied arbitrary URLs.
+"src/coderio/llm/probe.py" = ["S310"]
+# Session IDs: S311 — random.choices for session ID suffixes. These are NOT
+# cryptographic secrets; they're human-readable unique identifiers (timestamp +
+# 4-char suffix). No security dependency on unpredictability.
+"src/coderio/session/store.py" = ["S311"]
+# Deep agent: S602 — shell=True is required by deepagents' LocalShellBackend.
+# Experimental module, not wired into the default CLI path.
+"src/coderio/agent/deep_loop.py" = ["S602"]
+# REPL onboarding check: S110 — best-effort config parse, failure means skip.
+"src/coderio/cli/repl.py" = ["S110"]
+# App entry: S110 — stream.reconfigure may fail on some platforms; skip is safe.
+"src/coderio/cli/app.py" = ["S110"]
+# Loop: S110 — compaction/restart are best-effort; a failure falls through to
+# the original result rather than crashing the agent turn.
+"src/coderio/agent/loop.py" = ["S110"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
