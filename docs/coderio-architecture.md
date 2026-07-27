@@ -1,9 +1,10 @@
 # coderio 架构设计文档
 
-- **文档版本**：2026-07-02（基于实际代码库，非早期 spec）
-- **代码规模**：~3600 行 Python（src/coderio），327 测试全绿
+- **文档版本**：2026-07-27（基于实际代码库，非早期 spec）
+- **代码规模**：~9400 行 Python（src/coderio），500 测试全绿（499 passed + 1 skipped）
 - **技术栈**：Python 3.11 + langchain + langgraph + Textual + Rich + Typer，Windows 优先
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
+- **CI**：GitHub Actions，lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke
 
 > 本文档描述的是**当前代码库的实际状态**。S0/S1/S2 早期设计 spec 见 `docs/superpowers/specs/`，本文是它们实现后的整合视图。
 
@@ -40,14 +41,14 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 
 | 模块 | 行数 | 职责 | 关键文件 |
 |------|------|------|----------|
-| `agent/` | 780 | ReAct 循环、harness 硬约束、提示词构建、流式协议 | loop.py, harness.py, prompts.py |
-| `cli/` | 960 | Typer 应用、交互 REPL、Rich 流式 UI、slash 命令、凭证/onboarding | repl.py, stream.py, app.py |
-| `tools/` | 841 | 12 个工具 + 权限门 + langchain 适配 | __init__.py, permission.py, base.py |
-| `crew/` | 376 | 6-agent 流水线编排 + verify→修复循环 | orchestrator.py, agents.py |
-| `config/` | 241 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
-| `skills/` | 213 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
-| `session/` | 139 | jsonl 追加式会话存储 + resume | store.py, message.py |
-| `llm/` | 48 | 模型工厂（OpenAI/Anthropic 协议 + provider 注册表） | factory.py |
+| `agent/` | 2525 | ReAct 循环、harness 硬约束、提示词构建、流式协议、上下文压缩、状态机 | loop.py, harness.py, prompts.py, compact.py, state.py |
+| `cli/` | 3815 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
+| `tools/` | 1129 | 12 个工具 + 权限门 + 工作区路径策略 + langchain 适配 | bash.py, permission.py, workspace.py, base.py |
+| `crew/` | 715 | 6-agent 流水线编排 + verify→修复循环 + fail-closed 状态 | orchestrator.py, agents.py, state.py, cli_cmd.py |
+| `config/` | 411 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
+| `skills/` | 222 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
+| `session/` | 260 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
+| `llm/` | 320 | 模型工厂 + provider context window 探测 | factory.py, probe.py |
 
 ### 依赖方向（关键约束）
 
@@ -129,7 +130,8 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 | 1（第二次）| 强制续跑，列出未验证文件名，措辞更严厉 |
 | 2（第三次）| **放行 + UI 红色警告面板**（永不无限循环、永不静默放水）|
 
-- **"已验证"定义**：跑过 bash（哪怕命令失败）= 已尝试验证，门放行。这避免 agent 用"跑了一下报错"卡死，又阻止"写完就说完成"。
+- **"已验证"定义**：跑过 bash 且 exit_code=0 = 验证通过。bash 失败（非 0 退出码）**不算验证通过**——退出码从 BashTool 结果的 `[exit_code: N]` marker 解析。避免 agent "跑了一下报错就说验证了"，又阻止"写完就说完成"。
+- **智能跳过非代码文件**：写 `.md`/`.json`/`.yaml`/`.txt`/`.toml` 等文档/配置文件不触发 VerifyGate——读一遍确认格式即可，不需要跑 pytest。只有 `.py`/`.js`/`.ts`/`.go`/`.rs` 等真正的代码文件才需要 bash 验证。
 
 #### CompletionGate（硬，逐级升级）
 
@@ -147,7 +149,9 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 - **触发**：已过验证门和完成门，模型最终文本里**显式引用了代码位置**（`foo.py`、`src/x.py:42`），但该文件**本 turn 从未被 read_file/grep/glob/list_dir 读过**
 - **逐级升级**：同 VerifyGate（0/1 强制续跑要求先读，2 放行+警告）
-- **"已读"定义**：`HarnessState.read_files` 记录所有 read-only 工具的 path/pattern。匹配是宽松的——basename 相同、或读取路径是引用路径的子串（`list_dir("src/agent/")` 覆盖 `src/agent/loop.py`）
+- **"已读"定义**：`HarnessState.content_read_files` 记录所有 read_file 的 path（归一化：小写 + 正斜杠 + 折叠 `..`）。匹配是 basename 或完整路径精确比较。跨 session 记忆——`run_agent` 从 `session.messages` 预填充。
+- **路径归一化**：`_norm_path()` 统一小写 + 正斜杠 + 折叠 `../`，Windows 大小写不敏感文件系统（NTFS/APFS）正确处理 `Loop.py` == `loop.py`。
+- **跳过不存在的路径**：`not_found_files` 记录 read_file 返回 "file not found" 的路径，gate 不再强制模型读不存在的文件（正则可能匹配到文档文本里的路径字符串）。
 - **只守代码声明，不碰对话**：正则要求有点扩展名（`.py/.js/.md...`），纯散文（"the loader"、"step 2"、"config.harness"无扩展名）不触发
 - **为什么需要**：这是 coderio 自分析项目时踩过的坑——它读了文档没读源码，就断言"config.harness 未接入 loader"（实际三处全通）。文档是意图、代码是现实，两者 gap 就是 bug 栖身处。软规则"先读再下结论"已被证明会被跳过，所以做成硬结构约束。和 VerifyGate 同构：基于 ground truth（工具历史），不信任模型自述。
 
@@ -270,15 +274,15 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 request → clarification → spec → task_list → implementation → verification → commit_message
 ```
 
-### 5.3 verify→修复循环
+### 5.3 verify→修复循环（fail-closed）
 
-Verifier 产出后，`_verification_passed()` 启发式判断（含 fail/未通过/❌ 等信号 = 未通过）。未通过则回退到 execute 阶段重跑，最多 `max_fix_loops=2` 次：
+Verifier 产出后，`_verification_passed()` 判断是否通过。**fail-closed**：空验证、不可读 marker、模糊输出默认失败（不再默认通过）。未通过则回退到 execute 阶段重跑，最多 `max_fix_loops=2` 次：
 
 ```
-execute → verify → (未通过) → execute → verify → ... → (达上限) → commit
+execute → verify → (未通过) → execute → verify → ... → (达上限) → commit (status=partial)
 ```
 
-这是 crew 自己的验证机制，**不依赖单 agent 的 harness**（crew 调 `_execute_turn` 传 `harness=None`）。
+预算耗尽后仍进入 commit，但 `ProjectState.status` 标记为 `"partial"`，CLI 显示黄色 `⚠ crew 完成（验证未通过，请人工复核）` 而非无条件绿色 `✓`。`status` 有三个值：`success` / `partial` / `failed`。
 
 ### 5.4 人机介入点
 
@@ -313,9 +317,26 @@ execute → verify → (未通过) → execute → verify → ... → (达上限
 on_step_start → on_token / on_thinking → on_tool_start → on_tool_end → ... → on_finish
                                                                    on_truncated（截断）
                                                                    on_harness_warn（harness 放行警告）
+                                                                   on_harness_continue（harness 强制续跑提示）
+                                                                   on_phase_change（任务阶段变化）
+                                                                   on_turn_end（轮末文件修改汇总）
+is_interrupted()（用户中断检查，agent 线程在每轮开头调用）
 ```
 
 `NullStream` 全空实现，用于测试/headless。
+
+### 6.5 TUI 交互（`cli/tui.py`）
+
+Textual 8.x App，核心设计：
+
+- **线程模型**：agent 在 Textual Worker 后台线程跑，UI 更新通过 `_render_q`（thread-safe deque）+ 60ms 定时器排空
+- **流式渲染**：dict 分派表（`_RENDER_DISPATCH`）映射 action → handler，每个 handler返回 streaming/final/none 决定滚动策略
+- **中断**：`Esc` / `⏹ 中断` 按钮 → `_interrupted` 标志位，agent 在每轮 ReAct 循环开头检查 `is_interrupted()` → `InterruptedError` → 黄色"已中断"面板
+- **confirm 模式**：`TuiPermissionGate` 用 `ConfirmScreen`（ModalScreen）+ `threading.Event` 跨线程同步，避免 `input()` 死锁
+- **可视化选择器**：`/mode`（ModePickerScreen）、`/profile`（ProfilePickerScreen）、`/resume`（SessionPickerScreen）
+- **文件修改可视化**：写工具结果用黄色 `📝` 行（即时）+ 轮末汇总面板（`on_turn_end`）
+- **错误恢复**：异常红色 Panel + 输入框回填失败的用户消息（Enter 重试）
+- **空响应中断**：`_empty_response` 用红色 Panel 而非灰色 tool result
 
 ---
 
@@ -327,12 +348,19 @@ on_step_start → on_token / on_thinking → on_tool_start → on_tool_end → .
 |------|------|
 | 读 | read_file, list_dir, glob, grep |
 | 写 | write_file, edit_file, multi_edit |
-| 执行 | bash（Git Bash，Windows 自动探测）|
+| 执行 | bash（Git Bash，Windows 自动探测，.venv 自动激活，进程树超时杀）|
 | 计划 | todo（TodoStore，harness 读它）|
 | 外部 | web_search, web_fetch |
 | 记忆 | note（跨会话长期记忆）|
 
-**权限门**（`permission.py`）：confirm / plan / auto 三模式。`DESTRUCTIVE_TOOLS`（write/edit/multi_edit/bash/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto 全放。
+**权限门**（`permission.py`）：confirm / plan / auto 三模式。`DESTRUCTIVE_TOOLS`（write/edit/multi_edit/bash/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto 全放。所有模式都执行 `WorkspacePolicy`（路径边界）。
+
+**工作区路径策略**（`workspace.py`）：读写分离。写工具（write/edit/multi_edit/bash cwd）路径必须 `resolve()` 在工作区根目录内，超出即硬拒绝。读工具（read_file/grep/glob/list_dir）不受限。`--auto` 模式也执行路径策略。
+
+**bash 工具特性**：
+- **.venv 自动激活**：执行命令前检查 `.venv/Scripts/activate`（Windows）或 `.venv/bin/activate`（Linux/macOS），存在则 `source activate; command`
+- **进程树超时杀**：`Popen` + 手动 timeout + `_kill_process_tree`（Windows Job Object / Linux killpg），解决 `subprocess.run(timeout=...)` 在 Windows 上不杀孙子进程导致永久挂起的问题
+- **exit_code marker**：结果末尾追加 `[exit_code: N]`，harness VerifyGate 解析它判断验证是否通过
 
 **统一接口**（`base.py`）：每个工具声明 pydantic `args_schema` + `run()`，经 `to_langchain_tool` 适配成 `StructuredTool` 绑定给模型。
 
@@ -364,18 +392,23 @@ CODE 执行段（写完代码后按需）:
 **三层 TOML 合并**：defaults < user（`~/.coderio/config.toml`）< project（`./.coderio/config.toml`）< env。`frozen` dataclass。
 
 关键字段：
-- `model`: default, provider, base_url, provider_id, max_output_tokens=16384
-- `tools`: bash_shell, permission_mode, max_tool_rounds=25
+- `model`: default, provider, base_url, provider_id, max_output_tokens=16384, context_limit=0（onboarding 自动探测）
+- `tools`: bash_shell, permission_mode, max_tool_rounds=25, workspace_root=""（空=用 cwd）
+- `context`: enabled, trigger_ratio=0.6, keep_recent=8, model_context_limit=200000
 - `skills`: auto_load, stage_auto_inject, **harness=True**, repo_url
 - `cli`: theme, show_tool_output
 
-### 7.5 Provider 注册表（`cli/providers.py`）
+### 7.5 Provider 注册表（`cli/providers.py`）+ Context Window 探测（`llm/probe.py`）
 
-5 个 provider：智谱 coding plan / 阶跃 coding plan / 智谱 API / 阶跃 API / OpenAI 自定义。coding plan 走 Anthropic 协议，API key 模式走 OpenAI 兼容。无 Z.ai。
+7 个 provider：智谱 coding plan / 阶跃 coding plan / 智谱 API / 阶跃 API / OpenAI / Anthropic / Ollama / OpenAI 自定义。coding plan 走 Anthropic 协议，API key 模式走 OpenAI 兼容。
+
+**Context window 探测**（`llm/probe.py`）：onboarding 时 `_verify_and_probe` 调用 `probe_context_limit()` 查询 provider 的 `/v1/models/{id}` 端点，探测真实 context window（如 step-3.7-flash 的 256K）。结果持久化到 `Profile.context_limit` / `ModelConfig.context_limit`。失败时静默退化为默认值（200K），不阻断 onboarding。
 
 ### 7.6 会话（`session/`）
 
-jsonl 追加式存储（`~/.coderio/sessions/`）。支持 `Session.create / load / load_by_id / list_recent / append`。Message 有 user/assistant/tool 三种 role + tool_calls。
+jsonl 追加式存储（`~/.coderio/sessions/`）。支持 `Session.create / load / load_by_id / list_recent / append`。Message 有 user/assistant/tool/system 四种 role + tool_calls + kind（phase_timeline / context_summary）。
+
+**压缩持久化 + 截断**：`Session.load` 时调用 `_truncate_at_last_summary`——找到最后一个 `context_summary` system 消息，丢弃它之前的对话消息（user/assistant/tool），保留 system 消息（phase_timeline）。这确保压缩效果跨轮保留，不会重建时加载回未压缩的全量历史。
 
 ---
 
@@ -431,22 +464,29 @@ _execute_turn(harness=h)  循环：
 
 1. **子模块状态**：Lion-Skills 作为目录拷贝存在于 `src/coderio/skills/lion-skills/`，是 vendored 拷贝而非 git submodule，更新需手动同步。用户可通过 `coderio skills install` 从上游 repo 拉取最新版到用户目录。
 
-2. **代码注释/docstring 为重建近似**：部分文件从 `.pyc` 反编译重建（见 git log `d4b24e2`），行为正确（327 测试验证），但注释措辞非原始逐字。
+2. **harness 的 `harness_enabled` 只有 run_agent 入口**：crew 路径硬编码 `harness=None`，未来若想让 crew 单个 role 也享受 harness 需 per-role 传入。
 
-3. **harness 的 `harness_enabled` 只有 run_agent 入口**：crew 路径硬编码 `harness=None`，未来若想让 crew 单个 role 也享受 harness 需 per-role 传入。
+3. **deepagents engine 实验性**：`deep_loop.py` + `harness_middleware.py` 实现了 deepagents 引擎（harness 作为 middleware），但未接入 CLI（默认用 ReAct）。deepagents 已改为可选依赖（`pip install coderio[deepagent]`）。0% 测试覆盖。
 
-4. **deepagents engine 实验性**：`deep_loop.py` + `harness_middleware.py` 实现了 deepagents 引擎（harness 作为 middleware），但未接入 CLI（默认用 ReAct）。deepagents 已改为可选依赖（`pip install coderio[deepagent]`）。
+4. **WorkspacePolicy 是路径策略，不是 OS 级沙箱**：文件工具（write/edit/multi_edit）的路径被 resolve + relative_to 边界检查拦截，但 bash 命令内容不受控——`printf x > /tmp/out.txt` 等通过重定向/绝对路径的写入可以绕过。真正的隔离需要 OS 级容器/seccomp，当前是"路径策略 + 权限门"的最佳折中。
+
+5. **ToolResult 非结构化**：bash exit_code 靠正则从 result 字符串提取 `[exit_code: N]`。如果 provider 或工具版本变化导致 marker 格式漂移，解析会断。长期应改为结构化 ToolResult（含 exit_code 字段）。
+
+6. **无依赖锁文件**：`pyproject.toml` 只声明依赖下限，CI 每次装最新兼容版本。上游 break 可能引入非确定性失败。应维护 constraints/lock。
+
+7. **真实模型 Live eval 缺失**：500 个 mock 测试不证明真实 provider 的 streaming block、tool-call shape、限流恢复兼容性。需建立至少两个 provider 的 nightly Live eval。
 
 ---
 
 ## 10. 测试与验证体系
 
-- **327 单元/集成测试**（pytest），覆盖所有模块
+- **500 单元/集成测试**（499 passed + 1 skipped），覆盖所有模块
+- **CI**（GitHub Actions）：lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke
 - **Live 验证脚本**（`scripts/verify_*_live.py`）：连真实智谱/阶跃端点验证
   - `verify_harness_live.py`：4 场景（验证门触发/通过/禁用/工具错误韧性）
   - `verify_crew_live.py`：crew 流水线真实验证
   - `verify_deepagent_live.py`：deepagents engine 验证（实验性）
-- **VS Code tasks**（`.vscode/tasks.json`）：REPL 启动、测试、live 验证一键运行
+- **Release 工作流**：tag 驱动，自动构建 wheel + 真实 venv 安装 + `coderio --help` smoke + bundled skills 验证
 
 测试设计原则：mock 只 mock 模型，工具是真的（避免"mock 通过但真实 provider 翻车"——这是项目历史教训）。
 
