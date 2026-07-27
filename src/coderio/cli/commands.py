@@ -39,7 +39,11 @@ SLASH_COMMANDS: list[SlashCommand] = [
     ),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
     SlashCommand("/resume", "resume a past session (opens an interactive picker)", ["/resume "]),
-    SlashCommand("/mode", "change permission mode", ["/mode confirm", "/mode plan", "/mode auto"]),
+    SlashCommand(
+        "/mode",
+        "change permission mode",
+        ["/mode plan", "/mode confirm", "/mode auto_edit", "/mode full", "/mode auto"],
+    ),
     SlashCommand("/model", "switch model at runtime", ["/model "]),
     SlashCommand("/cost", "show token usage for this session", ["/cost"]),
     SlashCommand("/think", "expand the last round's collapsed thinking", ["/think"]),
@@ -178,8 +182,9 @@ def _cmd_mode(ctx, arg: str) -> CommandResult:
     # /mode with no argument → open the visual picker (like /profile does).
     if not mode:
         return CommandResult(message="__OPEN_MODE_PICKER__")
-    if mode not in {"confirm", "auto", "plan"}:
-        return CommandResult(message=f"Invalid mode {mode!r}. Use: confirm | plan | auto")
+    valid_modes = {"plan", "confirm", "auto_edit", "full", "auto"}
+    if mode not in valid_modes:
+        return CommandResult(message=f"Invalid mode {mode!r}. Use: plan | confirm | auto_edit | full")
     return CommandResult(
         reset_runtime=True,
         new_permission_mode=mode,

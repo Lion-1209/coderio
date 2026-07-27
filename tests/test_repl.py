@@ -46,9 +46,9 @@ def test_default_mode_uses_concrete_gate_not_abstract(tmp_path, monkeypatch):
     assert result is False
 
 
-def test_build_gate_auto_mode():
+def test_build_gate_full_mode():
     cfg = Config()
-    object.__setattr__(cfg.tools, "permission_mode", PermissionMode.AUTO)
+    object.__setattr__(cfg.tools, "permission_mode", PermissionMode.FULL)
     gate = build_gate(cfg)
     assert isinstance(gate, AutoPermissionGate)
 

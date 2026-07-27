@@ -6,20 +6,43 @@ from enum import StrEnum
 # (workspace.py imports nothing from permission.py, but we keep the typing tight).
 from typing import TYPE_CHECKING, Any, Callable
 
-from coderio.tools.base import DESTRUCTIVE_TOOLS
+from coderio.tools.base import DESTRUCTIVE_TOOLS, FILE_EDIT_TOOLS
 
 if TYPE_CHECKING:
     from coderio.tools.workspace import WorkspacePolicy
 
 
 class PermissionMode(StrEnum):
-    """Permission modes. StrEnum so members ARE strings (== works with raw str),
-    but invalid values raise ValueError at construction — catching config typos
-    early instead of silently degrading at runtime."""
+    """Four permission levels (industry-standard tiered access).
 
-    CONFIRM = "confirm"
+    StrEnum so members ARE strings (== works with raw str), but invalid values
+    raise ValueError at construction — catching config typos early.
+
+    Levels (least → most permissive):
+      PLAN      — read-only, blocks ALL writes/bash (safe exploration)
+      CONFIRM   — prompts before each destructive action
+      AUTO_EDIT — auto-allow file edits, but bash/web/note still need confirm
+      FULL      — auto-allow everything (no prompts)
+
+    Backward compat: the old "auto" string maps to FULL via normalize().
+    """
+
     PLAN = "plan"
-    AUTO = "auto"
+    CONFIRM = "confirm"
+    AUTO_EDIT = "auto_edit"
+    FULL = "full"
+
+    @classmethod
+    def normalize(cls, raw: str) -> "PermissionMode":
+        """Map a raw config string to a PermissionMode, with backward compat.
+
+        Old configs may have permission_mode = "auto" (the pre-v0.2 name for
+        FULL). This silently upgrades it so users don't get a ValueError on
+        existing configs.
+        """
+        if raw == "auto":
+            return cls.FULL
+        return cls(raw)
 
 
 class PermissionGate:
@@ -35,7 +58,7 @@ class PermissionGate:
     """
 
     def __init__(self, mode: str, policy: "WorkspacePolicy | None" = None):
-        self._mode = PermissionMode(mode)
+        self._mode = PermissionMode.normalize(mode)
         self._policy = policy
 
     @property
@@ -43,28 +66,32 @@ class PermissionGate:
         return self._mode
 
     def check(self, tool_name: str, args: dict[str, Any]) -> bool:
-        # --- Workspace boundary (runs in ALL modes, including AUTO) ---
-        # This is the security floor: no matter how permissive the mode is,
-        # a write tool's path must stay inside the workspace root. Without this,
-        # --auto mode would let the model write anywhere on the filesystem.
+        # --- Workspace boundary (runs in ALL modes, including FULL) ---
         if self._policy is not None:
             allowed, _reason = self._policy.check(tool_name, args)
             if not allowed:
                 return False
         # --- Mode-specific checks ---
         # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
-        # read-only and shouldn't prompt (same as read_file/list_dir). This is
-        # action-level, not tool-name-level, because note is polymorphic.
+        # read-only and shouldn't prompt (same as read_file/list_dir).
         if tool_name == "note":
             action = str(args.get("action", "")).lower()
             if action in ("read", "list"):
                 return True
         if tool_name not in DESTRUCTIVE_TOOLS:
             return True
-        if self._mode == PermissionMode.AUTO:
+        # FULL: auto-allow everything (policy already checked above).
+        if self._mode == PermissionMode.FULL:
             return True
+        # AUTO_EDIT: auto-allow file edits, but bash/web_fetch/note still confirm.
+        if self._mode == PermissionMode.AUTO_EDIT:
+            if tool_name in FILE_EDIT_TOOLS:
+                return True
+            # High-risk tools (bash, web_fetch, note-write) fall through to _ask.
+            return self._ask(tool_name, args)
         if self._mode == PermissionMode.PLAN:
             return False
+        # CONFIRM: prompt for all destructive tools.
         return self._ask(tool_name, args)
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
@@ -103,11 +130,11 @@ class AutoPermissionGate(PermissionGate):
     """Convenience: auto-approve everything — EXCEPT workspace boundary violations.
 
     For tests / explicit trust. ``policy`` is still enforced when provided:
-    auto mode skips interactive confirmation, not the security floor.
+    full-access mode skips interactive confirmation, not the security floor.
     """
 
     def __init__(self, policy: "WorkspacePolicy | None" = None):
-        super().__init__(PermissionMode.AUTO, policy=policy)
+        super().__init__(PermissionMode.FULL, policy=policy)
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
         return True

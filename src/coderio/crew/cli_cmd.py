@@ -26,11 +26,11 @@ def _build_crew_gate(cfg, console):
     """Construct the crew permission gate with workspace policy attached.
 
     Same security floor as the REPL gate: workspace boundary is enforced in
-    ALL modes, so --auto can't write outside the workspace.
+    ALL tiers, so --auto can't write outside the workspace.
     """
     policy = WorkspacePolicy(root=cfg.tools.workspace_root)
-    mode = cfg.tools.permission_mode
-    if mode == PermissionMode.AUTO:
+    mode = PermissionMode.normalize(cfg.tools.permission_mode)
+    if mode == PermissionMode.FULL:
         return AutoPermissionGate(policy=policy)
     if mode == PermissionMode.PLAN:
         return PermissionGate(PermissionMode.PLAN, policy=policy)

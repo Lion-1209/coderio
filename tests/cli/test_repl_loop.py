@@ -28,11 +28,22 @@ def test_build_runtime_with_model_override(tmp_path, monkeypatch):
     assert cfg.model.default == "custom-model"
 
 
-def test_build_gate_returns_auto_for_auto_mode(tmp_path, monkeypatch):
+def test_build_gate_returns_auto_for_full_mode(tmp_path, monkeypatch):
     from coderio.cli.repl import build_gate
     from coderio.config import Config, ToolsConfig
     from coderio.tools.permission import AutoPermissionGate, PermissionMode
 
-    cfg = Config(tools=ToolsConfig(permission_mode=PermissionMode.AUTO))
+    cfg = Config(tools=ToolsConfig(permission_mode=PermissionMode.FULL))
+    gate = build_gate(cfg)
+    assert isinstance(gate, AutoPermissionGate)
+
+
+def test_build_gate_legacy_auto_maps_to_full(tmp_path, monkeypatch):
+    """Old configs with 'auto' should still work (normalized to FULL)."""
+    from coderio.cli.repl import build_gate
+    from coderio.config import Config, ToolsConfig
+    from coderio.tools.permission import AutoPermissionGate
+
+    cfg = Config(tools=ToolsConfig(permission_mode="auto"))
     gate = build_gate(cfg)
     assert isinstance(gate, AutoPermissionGate)

@@ -11,6 +11,18 @@ class _AlwaysAllow(PermissionGate):
         return True
 
 
+class _AlwaysAllow_AskTracker(PermissionGate):
+    """Like _AlwaysAllow but records which tools triggered _ask."""
+
+    def __init__(self, mode):
+        super().__init__(mode)
+        self.asked: list[str] = []
+
+    def _ask(self, tool_name, args):
+        self.asked.append(tool_name)
+        return True
+
+
 def test_readonly_tools_always_allowed():
     gate = _AlwaysAllow("plan")
     for t in ("read_file", "glob", "grep", "todo"):
@@ -24,9 +36,53 @@ def test_plan_mode_blocks_write_tools():
 
 
 def test_auto_mode_allows_all():
-    gate = _AlwaysAllow("auto")
+    """Full access mode (legacy 'auto' maps to 'full') allows everything."""
+    gate = _AlwaysAllow("full")
     assert gate.check("bash", {}) is True
     assert gate.check("write_file", {}) is True
+
+
+def test_auto_legacy_maps_to_full():
+    """Old configs with permission_mode='auto' should silently upgrade to FULL."""
+    gate = _AlwaysAllow("auto")  # normalize() maps "auto" -> FULL
+    assert gate.check("bash", {}) is True
+    assert gate.check("write_file", {}) is True
+    assert gate.mode == PermissionMode.FULL
+
+
+def test_auto_edit_mode_allows_file_edits():
+    """Auto Edit mode auto-approves file edits without prompting."""
+    gate = _AlwaysAllow("auto_edit")
+    assert gate.check("write_file", {}) is True
+    assert gate.check("edit_file", {}) is True
+    assert gate.check("multi_edit", {}) is True
+
+
+def test_auto_edit_mode_confirms_high_risk():
+    """Auto Edit mode still prompts for bash/web_fetch/note-writes."""
+    gate = _AlwaysAllow_AskTracker("auto_edit")
+    gate.check("bash", {})
+    gate.check("web_fetch", {})
+    gate.check("note", {"action": "write"})
+    assert gate.asked == ["bash", "web_fetch", "note"]
+
+
+def test_auto_edit_mode_does_not_ask_for_file_edits():
+    """File edits in Auto Edit mode must NOT trigger _ask."""
+    gate = _AlwaysAllow_AskTracker("auto_edit")
+    gate.check("write_file", {})
+    gate.check("edit_file", {})
+    gate.check("multi_edit", {})
+    assert gate.asked == [], f"file edits should not ask, got: {gate.asked}"
+
+
+def test_full_mode_allows_all():
+    """Full access allows everything without asking."""
+    gate = _AlwaysAllow_AskTracker("full")
+    gate.check("bash", {})
+    gate.check("write_file", {})
+    gate.check("web_fetch", {})
+    assert gate.asked == [], "FULL mode should never call _ask"
 
 
 def test_confirm_mode_asks():

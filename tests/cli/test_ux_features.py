@@ -73,17 +73,17 @@ async def test_turn_end_empty_writes_no_panel():
 
 
 @pytest.mark.asyncio
-async def test_mode_picker_shows_three_modes():
-    """ModePickerScreen lists confirm/plan/auto."""
+async def test_mode_picker_shows_four_modes():
+    """ModePickerScreen lists the four permission tiers."""
     app = CoderioTUI()
     async with app.run_test(size=Size(80, 24)) as pilot:
         await pilot.pause()
-        app.push_screen(ModePickerScreen(active_mode="auto"))
+        app.push_screen(ModePickerScreen(active_mode="full"))
         await pilot.pause()
         from textual.widgets import ListView
 
         lv = app.screen.query_one("#mode-list", ListView)
-        assert len(lv.children) == 3
+        assert len(lv.children) == 4
 
 
 @pytest.mark.asyncio

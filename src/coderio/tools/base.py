@@ -43,3 +43,10 @@ DESTRUCTIVE_TOOLS = {
     "note",
 }
 READONLY_TOOLS = {"read_file", "list_dir", "glob", "grep", "todo", "web_search"}
+
+# Auto Edit 模式细分：文件编辑工具自动放行，高危工具仍需确认。
+# This is the key distinction between Auto Edit and Full Access — file edits
+# are fast and reversible (git), but bash/network/note-writes have side
+# effects that are harder to undo.
+FILE_EDIT_TOOLS = {"write_file", "edit_file", "multi_edit"}
+HIGH_RISK_TOOLS = {"bash", "web_fetch", "note"}

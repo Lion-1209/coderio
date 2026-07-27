@@ -23,47 +23,73 @@ from coderio.tools.workspace import WorkspacePolicy
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 
-class TuiPermissionGate(RichPromptPermissionGate):
-    """Confirm-mode gate that uses a Textual ModalScreen instead of input().
+class TuiPermissionGate(PermissionGate):
+    """Gate for CONFIRM and AUTO_EDIT modes in the TUI.
 
-    Python's input() deadlocks when Textual has taken over the terminal — the
-    agent thread blocks on stdin while Textual blocks on its event loop. This
-    gate delegates to CoderioTUI.request_confirmation which uses a
-    threading.Event + call_from_thread to bridge the gap: the agent thread
-    blocks on the Event while the UI thread shows a ConfirmScreen and resolves
-    it on user input.
+    Uses a Textual ModalScreen (via request_confirmation) instead of input(),
+    which would deadlock against Textual's terminal takeover. The mode is
+    passed through so check() applies the right tier logic before _ask fires.
     """
 
-    def __init__(self, tui, policy=None):
-        super().__init__(console=None, policy=policy)
+    def __init__(self, mode, tui, policy=None):
+        super().__init__(mode, policy=policy)
         self._tui = tui
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
         if hasattr(self._tui, "request_confirmation"):
             return self._tui.request_confirmation(tool_name, args)
-        return super()._ask(tool_name, args)
+        # Fallback for tests without a real TUI: auto-allow.
+        return True
 
 
 def build_gate(cfg: Config, console=None, tui=None):
     """Construct the permission gate with a workspace policy attached.
 
-    The policy enforces path boundaries in ALL modes (including AUTO) — auto
-    mode skips interactive confirmation, not the security floor. The root
-    defaults to the process CWD when workspace_root is unset.
+    Four permission tiers (least → most permissive):
+      plan      — read-only, blocks all writes/bash
+      confirm   — prompts before each destructive action
+      auto_edit — auto-allow file edits, bash/web/note still confirm
+      full      — auto-allow everything
 
-    When ``tui`` is provided (a CoderioTUI instance), confirm mode uses a
-    Textual ModalScreen for permission prompts instead of input() — which
-    would deadlock against Textual's terminal takeover.
+    The policy enforces path boundaries in ALL tiers. The root defaults to
+    the process CWD when workspace_root is unset.
+
+    When ``tui`` is provided, confirm/auto_edit modes use a Textual ModalScreen
+    instead of input() (which deadlocks against Textual's terminal takeover).
     """
     policy = WorkspacePolicy(root=cfg.tools.workspace_root)
-    mode = cfg.tools.permission_mode
-    if mode == PermissionMode.AUTO:
+    mode = PermissionMode.normalize(cfg.tools.permission_mode)
+    if mode == PermissionMode.FULL:
         return AutoPermissionGate(policy=policy)
     if mode == PermissionMode.PLAN:
         return PermissionGate(PermissionMode.PLAN, policy=policy)
+    # CONFIRM and AUTO_EDIT both need _ask for some tools — use TuiPermissionGate
+    # (with tui) or RichPromptPermissionGate (without tui, e.g. REPL/CLI mode).
     if tui is not None:
-        return TuiPermissionGate(tui=tui, policy=policy)
+        return TuiPermissionGate(mode, tui=tui, policy=policy)
+    # Non-TUI fallback: RichPromptPermissionGate for CONFIRM, or base
+    # PermissionGate for AUTO_EDIT (check() handles tier logic, _ask uses
+    # input() — fine in REPL where Textual isn't active).
+    if mode == PermissionMode.AUTO_EDIT:
+        return _ReplAutoEditGate(console=console, policy=policy)
     return RichPromptPermissionGate(console=console, policy=policy)
+
+
+class _ReplAutoEditGate(PermissionGate):
+    """AUTO_EDIT gate for the non-TUI REPL (uses input() for high-risk tools)."""
+
+    def __init__(self, console=None, policy=None):
+        super().__init__(PermissionMode.AUTO_EDIT, policy=policy)
+        self._console = console
+
+    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
+        return _default_prompt_repl(tool_name, args)
+
+
+def _default_prompt_repl(tool_name: str, args) -> bool:
+    """Simple input()-based prompt for the REPL (no Textual active)."""
+    confirm = input(f"Allow {tool_name}({args})? [y/N] ").strip().lower()
+    return confirm in {"yes", "y"}
 
 
 def build_runtime(

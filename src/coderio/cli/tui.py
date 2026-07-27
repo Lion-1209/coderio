@@ -862,9 +862,10 @@ class ModePickerScreen(ModalScreen[str | None]):
 
     # mode -> human-readable description shown as a dim subtitle.
     _MODE_INFO = {
-        "confirm": "每次写操作前确认（最安全）",
-        "plan": "阻止写操作，只读 + 规划",
-        "auto": "自动执行，不确认（需信任）",
+        "plan": "只读模式，阻止所有写操作（最安全）",
+        "confirm": "每次写操作前确认",
+        "auto_edit": "自动编辑文件，bash/网络仍需确认",
+        "full": "全自动，不确认任何操作（需信任）",
     }
 
     def __init__(self, active_mode: str = "") -> None:
@@ -881,7 +882,7 @@ class ModePickerScreen(ModalScreen[str | None]):
 
     def on_mount(self) -> None:
         lv = self.query_one("#mode-list", ListView)
-        for mode in ("confirm", "plan", "auto"):
+        for mode in ("plan", "confirm", "auto_edit", "full"):
             star = "★ " if mode == self._active_mode else "  "
             desc = self._MODE_INFO.get(mode, "")
             lv.append(

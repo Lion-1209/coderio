@@ -24,4 +24,4 @@ def test_auto_permission_gate_allows_all():
     gate = AutoPermissionGate()
     assert gate.check("bash", {}) is True
     assert gate.check("write_file", {}) is True
-    assert gate.mode == "auto"
+    assert gate.mode == "full"
