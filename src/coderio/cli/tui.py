@@ -905,56 +905,6 @@ class ModePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class ConfirmScreen(ModalScreen[bool]):
-    """Permission confirmation dialog for confirm-mode write operations.
-
-    Shows the tool name + args and asks the user to allow or deny. The agent's
-    background thread blocks on a threading.Event while this screen is open
-    (see CoderioTUI.request_confirmation). Without this, confirm mode would
-    use Python's input() which deadlocks against Textual's terminal takeover.
-    """
-
-    CSS = """
-    ConfirmScreen { align: center middle; }
-    #confirm-box {
-        width: 70%; height: auto; max-height: 60%; border: round $accent;
-        background: $surface; padding: 1 2;
-    }
-    #confirm-title { text-align: center; margin-bottom: 1; }
-    #confirm-detail { color: $text-muted; margin-bottom: 1; }
-    """
-
-    BINDINGS = [
-        Binding("y", "allow", "允许", show=True),
-        Binding("n", "deny", "拒绝", show=True),
-        Binding("escape", "deny", "取消", show=True),
-        Binding("enter", "allow", "允许", show=True),
-    ]
-
-    def __init__(self, tool_name: str, args_str: str) -> None:
-        super().__init__()
-        self._tool_name = tool_name
-        self._args_str = args_str
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-box"):
-            yield Static(
-                "[bold yellow]⚠ 权限确认[/bold yellow]",
-                id="confirm-title",
-            )
-            yield Static(
-                f"工具: {self._tool_name}\n参数: {self._args_str}",
-                id="confirm-detail",
-            )
-            yield Static("[dim]Y = 允许 · N/Esc = 拒绝[/dim]")
-
-    def action_allow(self) -> None:
-        self.dismiss(True)
-
-    def action_deny(self) -> None:
-        self.dismiss(False)
-
-
 class SessionPickerScreen(ModalScreen[str | None]):
     """Interactive session picker (Claude-Code-style /resume).
 
@@ -1052,6 +1002,14 @@ class CoderioTUI(App):
     }
     /* interrupt-btn is shown only when the agent is running (via add_class). */
     #interrupt-btn.-visible { display: block; }
+    /* Inline confirmation row — hidden by default, shown when the agent needs
+       permission approval (confirm/auto_edit mode). Inline with the input bar,
+       not a blocking modal overlay. */
+    #confirm-row { display: none; height: auto; padding: 0 1; }
+    #confirm-row.-visible { display: block; }
+    #confirm-text { color: $text; height: 1; padding: 0 1; }
+    #confirm-yes { min-width: 6; }
+    #confirm-no { min-width: 6; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -1116,6 +1074,10 @@ class CoderioTUI(App):
         self._interrupted: bool = False
         self._agent_worker = None
         self._is_running: bool = False  # True while the agent worker is active
+        # Inline confirmation state: when _confirm_event is non-None, the
+        # agent thread is blocked waiting for the user to allow/deny a write.
+        self._confirm_event = None
+        self._confirm_result: bool = False
         # RENDER QUEUE: the agent's background thread pushes render instructions
         # here (thread-safe deque append/popleft). A main-thread set_interval
         # timer drains the queue and executes the instructions on the main thread.
@@ -1143,6 +1105,14 @@ class CoderioTUI(App):
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
+            # Inline permission confirmation row (shown when the agent needs
+            # approval for a destructive action in confirm/auto_edit mode).
+            # Replaces the old ConfirmScreen ModalScreen — this is inline with
+            # the input bar, not a blocking overlay.
+            with Horizontal(id="confirm-row"):
+                yield Static("⚠ confirm", id="confirm-text")
+                yield Button("✓ 允许", id="confirm-yes", variant="success")
+                yield Button("✗ 拒绝", id="confirm-no", variant="error")
             yield Input(
                 placeholder="输入消息, /help 看命令, Esc 中断任务",
                 id="msg",
@@ -1173,34 +1143,51 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- cross-thread confirmation
     def request_confirmation(self, tool_name: str, args: dict) -> bool:
-        """Ask the user to allow/deny a write operation (confirm mode).
+        """Ask the user to allow/deny a write operation (confirm/auto_edit mode).
 
-        Called from the AGENT's background thread. Uses a threading.Event to
-        block until the user responds on the main thread (via ConfirmScreen).
-        Without this, confirm mode would use Python's input() which deadlocks
-        against Textual's terminal takeover — the entire TUI freezes.
+        Called from the AGENT's background thread. Shows an inline confirmation
+        row in the input bar (not a blocking modal) and uses a threading.Event
+        to block until the user responds. Returns True (allow) or False (deny).
 
-        Returns True (allow) or False (deny). The Event has a 120s timeout as a
-        safety net — if the user walks away, the agent doesn't hang forever.
+        The inline row shows the tool name + args and two buttons (✓ 允许 / ✗ 拒绝).
+        The user can also press y/Enter to allow or n/Esc to deny while the row
+        is visible. 120s timeout prevents permanent hang if the user walks away.
         """
         import threading
 
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 120:
             args_str = args_str[:120] + "…"
-        result: dict = {"allowed": False}
-        done = threading.Event()
+        self._confirm_event = threading.Event()
+        self._confirm_result = False
 
-        def _on_result(allowed: bool):
-            result["allowed"] = allowed
-            done.set()
+        def _show():
+            try:
+                txt = self.query_one("#confirm-text", Static)
+                txt.update(f"⚠ {tool_name}({args_str})")
+                row = self.query_one("#confirm-row")
+                row.add_class("-visible")
+            except Exception:
+                pass
 
-        def _push():
-            self.push_screen(ConfirmScreen(tool_name, args_str), _on_result)
+        def _hide():
+            try:
+                row = self.query_one("#confirm-row")
+                row.remove_class("-visible")
+            except Exception:
+                pass
 
-        self.call_from_thread(_push)
-        done.wait(timeout=120)  # block the agent thread until user responds
-        return result["allowed"]
+        self.call_from_thread(_show)
+        self._confirm_event.wait(timeout=120)
+        self.call_from_thread(_hide)
+        self._confirm_event = None
+        return self._confirm_result
+
+    def _resolve_confirmation(self, allowed: bool) -> None:
+        """MAIN THREAD: resolve the pending confirmation and wake the agent."""
+        self._confirm_result = allowed
+        if self._confirm_event is not None:
+            self._confirm_event.set()
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
@@ -1462,9 +1449,13 @@ class CoderioTUI(App):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Interrupt button click → trigger action_interrupt."""
+        """Handle button clicks: interrupt + confirm-yes/no."""
         if event.button.id == "interrupt-btn":
             self.action_interrupt()
+        elif event.button.id == "confirm-yes":
+            self._resolve_confirmation(True)
+        elif event.button.id == "confirm-no":
+            self._resolve_confirmation(False)
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1474,7 +1465,22 @@ class CoderioTUI(App):
         self.query_one(CommandMenu).refresh_for(event.value)
 
     def on_key(self, event) -> None:
-        """Handle command-menu navigation (↑↓/Tab/Enter/Esc) when it's visible."""
+        """Handle command-menu navigation + inline confirmation keys."""
+        # If the inline confirmation row is visible, intercept y/n/enter/esc.
+        try:
+            confirm_row = self.query_one("#confirm-row")
+            if confirm_row.has_class("-visible"):
+                if event.key in ("y", "enter"):
+                    self._resolve_confirmation(True)
+                    event.prevent_default()
+                    return
+                if event.key in ("n", "escape"):
+                    self._resolve_confirmation(False)
+                    event.prevent_default()
+                    return
+        except Exception:
+            pass
+        # Command-menu navigation (only when menu is visible).
         menu = self.query_one(CommandMenu)
         if not menu.visible():
             return
