@@ -129,6 +129,31 @@ def test_verify_gate_blocks_unverified_done():
     assert warn is None
 
 
+def test_verify_gate_skips_non_code_files():
+    """REGRESSION: writing .md/.json/.yaml/.txt docs must NOT trigger VerifyGate.
+
+    The gate exists to catch 'wrote code but didn't run it'. A markdown analysis
+    doc doesn't need pytest — reading it back to confirm formatting is sufficient.
+    This was the most frequent UX complaint: agent writes .md, harness forces
+    pytest, pytest fails (wrong Python), agent concludes 'environment broken'.
+    """
+    for ext in (".md", ".json", ".yaml", ".yml", ".txt", ".toml", ".cfg", ".csv"):
+        h = _harness()
+        h.observe("write_file", {"path": f"report{ext}"}, f"Wrote 100 chars to report{ext}")
+        cont, inject, warn = h.check_termination("Done writing the document.")
+        assert cont is False, f".{ext} file should NOT trigger VerifyGate"
+        assert inject is None, f".{ext} file should not get a bash demand"
+
+
+def test_verify_gate_triggers_for_code_files():
+    """All real code extensions (.py/.js/.ts/.go/.rs/etc.) MUST still trigger."""
+    for ext in (".py", ".js", ".ts", ".go", ".rs", ".java", ".sh", ".cpp"):
+        h = _harness()
+        h.observe("write_file", {"path": f"main{ext}"}, f"Wrote 50 chars to main{ext}")
+        cont, inject, warn = h.check_termination("Done.")
+        assert cont is True, f".{ext} file SHOULD trigger VerifyGate"
+
+
 def test_verify_gate_passes_after_bash():
     h = _harness()
     h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")

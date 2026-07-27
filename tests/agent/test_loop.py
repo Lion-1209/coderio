@@ -235,7 +235,7 @@ class _RecStream(NullStream):
 
 def test_verify_gate_blocks_unverified_done(tmp_path):
     """write_file -> 'done' (no bash) must be intercepted and force-continued."""
-    f = tmp_path / "a.txt"
+    f = tmp_path / "a.py"
     model = _model_returning(
         _tool_call_msg("write_file", {"path": str(f), "content": "hi"}),
         AIMessage(content="All done!", tool_calls=[]),

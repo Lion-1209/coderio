@@ -125,6 +125,28 @@ class BashTool:
             return self._shell
         return detect_shell(self._shell)
 
+    @staticmethod
+    def _prepend_venv_activate(command: str, cwd: str) -> str:
+        """Prepend 'source .venv/bin/activate' (or Scripts path on Windows) if
+        a virtual environment exists in the working directory.
+
+        This ensures `python` / `pip` in the bash command resolve to the
+        project's venv interpreter, not a random system Python. The check is
+        purely additive — if no .venv exists, the command runs unchanged.
+        """
+        if not command or not cwd:
+            return command
+        work = Path(cwd)
+        if sys.platform == "win32":
+            activate = work / ".venv" / "Scripts" / "activate"
+        else:
+            activate = work / ".venv" / "bin" / "activate"
+        if not activate.is_file():
+            return command
+        # Use 'source' (bash builtin) to activate in the same shell session.
+        # 'command' runs after activation, so `python` now points to .venv.
+        return f"source '{activate}' 2>/dev/null; {command}"
+
     def run(
         self,
         command: str,
@@ -134,6 +156,13 @@ class BashTool:
     ) -> str:
         shell = self._resolve()
         work = cwd or os.getcwd()
+        # Auto-activate a project virtual environment if one exists in the
+        # working directory. Without this, bash's login shell inherits the
+        # system PATH, where `python` may resolve to a wrong interpreter (e.g.
+        # Python 2.7 on Windows, or no python at all on macOS). The agent then
+        # sees 'No module named pytest' even though coderio itself runs fine
+        # with all deps installed in .venv.
+        command = self._prepend_venv_activate(command, work)
         if run_in_background:
             proc = subprocess.Popen(
                 [shell, "-l", "-c", command],

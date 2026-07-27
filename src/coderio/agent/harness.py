@@ -136,6 +136,71 @@ def _parse_exit_code(result: str) -> int | None:
     return None
 
 
+# File extensions that represent executable/buildable code — writing these
+# triggers the VerifyGate (the model must run/test them before claiming done).
+# Files NOT in this set (.md docs, .json configs, .yaml manifests, .txt notes,
+# .toml, .cfg, .ini, .csv, images, etc.) skip the gate — they're verified by
+# reading, not by running. This prevents the most common UX complaint: agent
+# writes a .md analysis doc, harness forces pytest, pytest fails (wrong Python
+# in bash env), agent concludes "environment is broken".
+_VERIFIABLE_EXTS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".rb",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".lua",
+        ".php",
+        ".vim",
+        ".sql",
+        # Build files that affect compilation/testing
+        ".cmake",
+        ".makefile",
+        # Web files that need to be tested in a browser/runtime
+        ".html",
+        ".css",
+        ".vue",
+        ".svelte",
+    }
+)
+
+
+def _is_verifiable_code(path: str) -> bool:
+    """Should writing this file trigger the VerifyGate?
+
+    Returns True for source code files (.py, .js, .ts, etc.) and False for
+    documentation/config/data files (.md, .json, .yaml, .txt, .toml, etc.).
+    The gate exists to catch 'wrote code but didn't run it' — a markdown
+    analysis document doesn't need pytest to verify.
+    """
+    import os
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _VERIFIABLE_EXTS:
+        return True
+    # Special case: files with no extension but known code names
+    base = os.path.basename(path).lower()
+    if base in {"dockerfile", "makefile", "rakefile", "gemfile"}:
+        return True
+    return False
+
+
 # Commands that are clearly verification (testing/linting/building code), not
 # just arbitrary shell activity. Matching these means even a `pytest` or `ruff`
 # without an explicit filename still counts as a real verification attempt.
@@ -247,7 +312,15 @@ class Harness:
         if name in WRITE_TOOLS and _is_success(result):
             path = str(args.get("path", ""))
             if path and path not in self.state.writes_since_verify:
-                self.state.writes_since_verify.append(path)
+                # Skip non-code files — VerifyGate exists to catch "wrote code
+                # but didn't run it". Writing a .md doc, .json config, .yaml
+                # manifest, or .txt note does NOT need pytest/bash verification.
+                # The model reads it back to confirm formatting, which is the
+                # appropriate verification for documentation. Forcing bash on
+                # docs wastes rounds and triggers false "environment broken"
+                # conclusions (the most common UX complaint).
+                if _is_verifiable_code(path):
+                    self.state.writes_since_verify.append(path)
         elif name in READ_TOOLS:
             # Record whatever path/pattern the read tool was aimed at. For grep
             # the relevant arg is `pattern`/`path`; for read_file/list_dir/glob
