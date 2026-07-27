@@ -22,17 +22,17 @@
 
 ## 特性
 
-- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；GroundingGate 跨 session 记忆已读文件 + 路径归一化（Windows 大小写不敏感）
+- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；**智能跳过非代码文件**（写 .md/.json/.yaml 文档不强制 pytest）；GroundingGate 跨 session 记忆已读文件 + 路径归一化（Windows 大小写不敏感）+ 跳过不存在的引用路径
 - **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
-- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败；空响应时主动压缩再重试（而非无意义重发"请继续"）
+- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败；空响应时主动压缩再重试（而非无意义重发"请继续"）；压缩摘要持久化到 session，跨轮加载时自动截断旧历史
 - **context-rot 自动重启**：检测到 agent 陷入工具调用循环或耗尽轮数上限时，从压缩后的干净上下文自动重试一次
 - **自动探测上下文窗口**：首次配置时自动查询 provider 的 `/v1/models/{id}` 端点探测真实 context window（如 step-3.7-flash 的 256K），持久化到配置——压缩阈值精确匹配实际模型，不再用硬编码默认值
 - **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
-- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器
-- **两种模式**：交互式单 agent（日常）+ 6-agent crew 流水线（大需求，LangGraph 编排）
-- **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn
-- **工作区沙箱（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
+- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器、**权限/配置可视化选择器**（`/mode` `/profile` 弹窗选择）、**文件修改可视化**（即时黄色提示 + 轮末汇总面板）、**任务中断**（Esc / ⏹ 按钮，不退出 TUI）、**错误恢复**（红色面板 + 输入回填重试）
+- **两种模式**：交互式单 agent（日常）+ 6-agent crew 流水线（大需求，LangGraph 编排）；crew 验证 fail-closed（失败不再伪装绿色完成，显示 partial/failed 状态）
+- **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）、**自动激活项目 .venv**（bash 里的 python 自动指向虚拟环境）
+- **工作区路径策略（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 
 ---
@@ -140,13 +140,24 @@ coderio skills install
 | `/help` | 显示所有命令 |
 | `/exit` `/quit` | 退出 |
 | `/config` | 查看当前配置（provider/model/mode） |
-| `/mode <confirm\|plan\|auto>` | 切换权限模式 |
+| `/mode` | 切换权限模式（无参数弹出可视化选择器：confirm/plan/auto） |
 | `/model <name>` | 运行时切模型 |
+| `/setup` | 重新配置 provider/model（onboarding 向导，自动探测 context window） |
+| `/profile` | 切换已保存的配置 profile（可视化选择器） |
 | `/skills` | 列出 skill（★ = 已激活） |
 | `/cost` | 查看本次会话 token 用量 |
 | `/clear` | 重置上下文（新会话） |
 | `/sessions` | 列出最近会话 |
 | `/resume` | 恢复历史会话（↑↓ 选择、Enter 恢复、输入过滤） |
+| `/think` | 展开最近一轮的思考内容 |
+
+**快捷键**：
+
+| 按键 | 作用 |
+|------|------|
+| `Ctrl+O` | 展开/收起最近一轮的思考 |
+| `Esc` / `⏹ 中断` | 中断当前正在执行的 agent 任务（不退出 TUI） |
+| `↑↓` + `Enter` | 命令菜单导航（输入 `/` 时弹出） |
 
 直接输入自然语言即可对话或下达编码任务。
 
@@ -179,9 +190,9 @@ Agent 层 (agent/)      ReAct 循环 + harness 状态控制 + 提示词构建
 
 | 门 | 强度 | 机制 |
 |----|------|------|
-| **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；解析 bash exit_code，**测试失败（非 0）不算验证通过**；2 次后放行 + 红色警告 |
+| **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；解析 bash exit_code，**测试失败（非 0）不算验证通过**；**写文档/配置文件（.md/.json/.yaml）不触发验证**；2 次后放行 + 红色警告 |
 | **CompletionGate** | 硬 | 有未完成 todo 就声明"完成"→ 拦截 |
-| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上）；**跨 session 记忆已读文件**，路径归一化（Loop.py == loop.py） |
+| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上）；**跨 session 记忆已读文件**，路径归一化（Loop.py == loop.py），跳过不存在的引用路径 |
 | **PlanGate** | 软提醒 | 没 todo 就写代码 → 工具结果追加 nudge |
 
 ### 上下文治理（三层防线）
