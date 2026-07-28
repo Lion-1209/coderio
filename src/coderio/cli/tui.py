@@ -1010,6 +1010,7 @@ class CoderioTUI(App):
     #confirm-text { color: $text; height: 1; padding: 0 1; }
     #confirm-yes { min-width: 6; }
     #confirm-no { min-width: 6; }
+    #confirm-other { min-width: 6; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -1077,7 +1078,8 @@ class CoderioTUI(App):
         # Inline confirmation state: when _confirm_event is non-None, the
         # agent thread is blocked waiting for the user to allow/deny a write.
         self._confirm_event = None
-        self._confirm_result: bool = False
+        self._confirm_result: bool | str = False
+        self._confirm_custom_mode = False  # True when user clicked "其他"
         # RENDER QUEUE: the agent's background thread pushes render instructions
         # here (thread-safe deque append/popleft). A main-thread set_interval
         # timer drains the queue and executes the instructions on the main thread.
@@ -1113,6 +1115,7 @@ class CoderioTUI(App):
                 yield Static("⚠ confirm", id="confirm-text")
                 yield Button("✓ 允许", id="confirm-yes", variant="success")
                 yield Button("✗ 拒绝", id="confirm-no", variant="error")
+                yield Button("✎ 其他", id="confirm-other", variant="default")
             yield Input(
                 placeholder="输入消息, /help 看命令, Esc 中断任务",
                 id="msg",
@@ -1142,16 +1145,18 @@ class CoderioTUI(App):
         self.set_interval(0.06, self._drain_render_queue)
 
     # ----------------------------------------------------- cross-thread confirmation
-    def request_confirmation(self, tool_name: str, args: dict) -> bool:
-        """Ask the user to allow/deny a write operation (confirm/auto_edit mode).
+    def request_confirmation(self, tool_name: str, args: dict) -> bool | str:
+        """Ask the user to allow/deny/custom-respond to a write operation.
 
         Called from the AGENT's background thread. Shows an inline confirmation
-        row in the input bar (not a blocking modal) and uses a threading.Event
-        to block until the user responds. Returns True (allow) or False (deny).
+        row with three options: ✓ 允许 / ✗ 拒绝 / ✎ 其他.
+        - 允许 → True (execute the tool)
+        - 拒绝 → False (block, "Permission denied")
+        - 其他 → user types free text → str (block, but feed user's instruction
+          to the model as a tool result so it can adjust)
 
-        The inline row shows the tool name + args and two buttons (✓ 允许 / ✗ 拒绝).
-        The user can also press y/Enter to allow or n/Esc to deny while the row
-        is visible. 120s timeout prevents permanent hang if the user walks away.
+        The "其他" mode hides the buttons and turns #msg into a custom-reply
+        input. The user types their instruction and presses Enter to submit.
         """
         import threading
 
@@ -1159,7 +1164,8 @@ class CoderioTUI(App):
         if len(args_str) > 120:
             args_str = args_str[:120] + "…"
         self._confirm_event = threading.Event()
-        self._confirm_result = False
+        self._confirm_result: bool | str = False
+        self._confirm_custom_mode = False
 
         def _show():
             try:
@@ -1174,6 +1180,9 @@ class CoderioTUI(App):
             try:
                 row = self.query_one("#confirm-row")
                 row.remove_class("-visible")
+                # Reset #msg placeholder if it was in custom mode.
+                inp = self.query_one("#msg", Input)
+                inp.placeholder = "输入消息, /help 看命令, Esc 中断任务"
             except Exception:
                 pass
 
@@ -1181,13 +1190,28 @@ class CoderioTUI(App):
         self._confirm_event.wait(timeout=120)
         self.call_from_thread(_hide)
         self._confirm_event = None
+        self._confirm_custom_mode = False
         return self._confirm_result
 
-    def _resolve_confirmation(self, allowed: bool) -> None:
+    def _resolve_confirmation(self, result: bool | str) -> None:
         """MAIN THREAD: resolve the pending confirmation and wake the agent."""
-        self._confirm_result = allowed
+        self._confirm_result = result
         if self._confirm_event is not None:
             self._confirm_event.set()
+
+    def _enter_custom_mode(self) -> None:
+        """MAIN THREAD: switch the input bar to custom-reply mode for '其他'."""
+        self._confirm_custom_mode = True
+        try:
+            # Hide the button row, turn #msg into a custom-reply input.
+            row = self.query_one("#confirm-row")
+            row.remove_class("-visible")
+            inp = self.query_one("#msg", Input)
+            inp.placeholder = "输入自定义回复，回车提交..."
+            inp.value = ""
+            inp.focus()
+        except Exception:
+            pass
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
@@ -1449,13 +1473,15 @@ class CoderioTUI(App):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button clicks: interrupt + confirm-yes/no."""
+        """Handle button clicks: interrupt + confirm-yes/no/other."""
         if event.button.id == "interrupt-btn":
             self.action_interrupt()
         elif event.button.id == "confirm-yes":
             self._resolve_confirmation(True)
         elif event.button.id == "confirm-no":
             self._resolve_confirmation(False)
+        elif event.button.id == "confirm-other":
+            self._enter_custom_mode()
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1466,6 +1492,21 @@ class CoderioTUI(App):
 
     def on_key(self, event) -> None:
         """Handle command-menu navigation + inline confirmation keys."""
+        # Custom-reply mode: Enter submits the user's text as a str result.
+        if self._confirm_custom_mode:
+            # Let normal input editing happen; only intercept Enter/Esc.
+            if event.key == "enter":
+                inp = self.query_one("#msg", Input)
+                text = inp.value.strip()
+                inp.value = ""
+                self._resolve_confirmation(text if text else False)
+                event.prevent_default()
+                return
+            if event.key == "escape":
+                self._resolve_confirmation(False)
+                event.prevent_default()
+                return
+            return  # let other keys type into the input
         # If the inline confirmation row is visible, intercept y/n/enter/esc.
         try:
             confirm_row = self.query_one("#confirm-row")

@@ -519,11 +519,17 @@ def _execute_turn(
                 tool_index=tool_index,
                 tool_total=len(tool_calls),
             )
-            if not gate.check(name, args):
-                result = f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
-            else:
+            decision = gate.check(name, args)
+            if decision is True:
                 tool = skill_index.get(name)
                 result = _invoke_tool(tool, name, args) if tool else f"Error: unknown tool {name!r}"
+            elif decision is False:
+                result = f"Permission denied: tool {name!r} blocked in {gate.mode} mode."
+            elif isinstance(decision, str):
+                # User provided a custom response via "其他" — deny the tool
+                # execution but feed the user's instruction to the model so it
+                # can adjust its approach.
+                result = f"Permission denied by user: {decision}"
             # --- Harness observation + PlanGate augmentation (spec §3) ---
             # observe() records ground truth (writes / verifications) for the gates;
             # after_tool_call() may append a soft nudge to the result (never blocks).

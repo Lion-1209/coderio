@@ -35,7 +35,7 @@ class TuiPermissionGate(PermissionGate):
         super().__init__(mode, policy=policy)
         self._tui = tui
 
-    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
+    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         if hasattr(self._tui, "request_confirmation"):
             return self._tui.request_confirmation(tool_name, args)
         # Fallback for tests without a real TUI: auto-allow.

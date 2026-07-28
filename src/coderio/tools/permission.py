@@ -65,7 +65,7 @@ class PermissionGate:
     def mode(self) -> str:
         return self._mode
 
-    def check(self, tool_name: str, args: dict[str, Any]) -> bool:
+    def check(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         # --- Workspace boundary (runs in ALL modes, including FULL) ---
         if self._policy is not None:
             allowed, _reason = self._policy.check(tool_name, args)
@@ -94,7 +94,7 @@ class PermissionGate:
         # CONFIRM: prompt for all destructive tools.
         return self._ask(tool_name, args)
 
-    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
+    def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         raise NotImplementedError
 
 
