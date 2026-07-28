@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from langchain_core.messages import (
@@ -165,6 +167,80 @@ def _extract_thinking(content) -> str:
     return "".join(parts)
 
 
+# Matches <tool_call>...</tool_call> blocks that some models leak into text
+# content when the provider's tool-call parser fails (e.g. Step Plan under
+# long-context pressure). The content inside can be JSON or <function=name>
+# format. This fallback parser recovers them into structured tool_calls.
+_XML_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*(.*?)\s*</tool_call>",
+    re.DOTALL,
+)
+
+
+def _parse_xml_tool_calls(text: str) -> list[dict]:
+    """Parse <tool_call> XML tags leaked into text content.
+
+    Some providers (Step Plan under long-context) fail to convert the model's
+    native <tool_call> output into structured tool_use blocks, leaking raw XML
+    into the text content. This fallback parser detects and recovers them.
+
+    Supports two inner formats:
+      1. JSON: {"name": "todo", "arguments": {"action": "add", ...}}
+      2. Function tag: <function=todo>{"action": "add", ...}</function>
+
+    Returns a list of tool_call dicts (same shape as langchain's), or [] if
+    no valid tool calls were found. If the XML is present but the JSON inside
+    is unparseable (the model already degraded), returns [] — the garbled
+    text is then treated as a normal (failed) text response.
+    """
+    if not text or "<tool_call>" not in text:
+        return []
+    results: list[dict] = []
+    for m in _XML_TOOL_CALL_RE.finditer(text):
+        inner = m.group(1).strip()
+        if not inner:
+            continue
+        tc = None
+        # Format 1: plain JSON {"name": ..., "arguments": ...}
+        if inner.startswith("{"):
+            try:
+                parsed = json.loads(inner)
+                name = parsed.get("name", "")
+                args = parsed.get("arguments") or parsed.get("parameters") or {}
+                if name:
+                    tc = {
+                        "name": name,
+                        "args": args,
+                        "id": f"xml_tc_{len(results)}",
+                        "type": "tool_call",
+                    }
+            except (json.JSONDecodeError, TypeError):
+                pass  # garbled JSON — skip, let it be treated as text
+        # Format 2: <function=NAME>ARGS_JSON</function>
+        elif inner.startswith("<function="):
+            fn_match = re.match(
+                r"<function=(\w+)>\s*(.*?)\s*(?:</function>)?$",
+                inner,
+                re.DOTALL,
+            )
+            if fn_match:
+                name = fn_match.group(1)
+                args_str = fn_match.group(2).strip()
+                try:
+                    args = json.loads(args_str) if args_str else {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}  # args garbled, but still recover the tool name
+                tc = {
+                    "name": name,
+                    "args": args,
+                    "id": f"xml_tc_{len(results)}",
+                    "type": "tool_call",
+                }
+        if tc is not None:
+            results.append(tc)
+    return results
+
+
 def _to_langchain_messages(system_prompt: str, convo: list[Message]) -> list:
     """Convert our Message list to langchain message objects (spec §4.2).
 
@@ -327,6 +403,17 @@ def run_step(
             usage_metadata=usage or None,
         )
     text = _content_to_text(getattr(aggregated, "content", "")) if aggregated is not None else ""
+    # Fallback: some providers (e.g. Step Plan under long-context pressure)
+    # leak the model's native <tool_call> XML into text content instead of
+    # returning structured tool_use blocks. Try to parse it here so the agent
+    # can continue normally instead of treating the tool call as garbled text.
+    fallback_tcs = _parse_xml_tool_calls(text)
+    if fallback_tcs:
+        return AIMessage(
+            content="",
+            tool_calls=fallback_tcs,
+            usage_metadata=usage or None,
+        )
     return AIMessage(content=text, tool_calls=[])
 
 

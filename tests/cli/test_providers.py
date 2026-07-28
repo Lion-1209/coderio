@@ -34,8 +34,13 @@ def test_bigmodel_coding_plan_models():
     assert p.default_model == "glm-5.2"
 
 
-def test_stepfun_coding_plan_base_url_no_v1():
+def test_stepfun_coding_plan_is_anthropic_protocol():
+    # StepFun Step Plan exposes an Anthropic-protocol endpoint at /step_plan
+    # (posts to {base_url}/v1/messages). Must stay kind="anthropic" — switching
+    # to openai_compatible makes ChatOpenAI join paths as {base_url}/chat/
+    # completions, which 404s on this base_url.
     p = get_provider("stepfun_coding_plan")
+    assert p.kind == "anthropic"
     assert p.base_url == "https://api.stepfun.com/step_plan"
     assert not p.base_url.endswith("/v1")
 

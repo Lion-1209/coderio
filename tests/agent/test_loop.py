@@ -4,6 +4,7 @@ from langchain_core.messages import AIMessage
 
 from coderio.agent.loop import (
     _BoundModelCache,
+    _parse_xml_tool_calls,
     _to_langchain_messages,
     run_agent,
     run_step,
@@ -799,3 +800,69 @@ def test_empty_response_shows_notice_not_silent_hang(tmp_path):
     tool_notices = [m for m in session.messages if m.role == "tool" and m.name == "_empty_response"]
     assert tool_notices, "empty response must emit a visible notice, not end silently"
     assert "空响应" in tool_notices[0].content
+
+
+# --- _parse_xml_tool_calls (fallback parser for leaked XML tool calls) ---
+
+
+def test_parse_xml_tool_call_json_format():
+    """Format 1: JSON inside <tool_call> tags (vLLM/SGLang standard)."""
+    text = '<tool_call>\n{"name": "todo", "arguments": {"action": "add", "content": "task"}}\n</tool_call>'
+    tcs = _parse_xml_tool_calls(text)
+    assert len(tcs) == 1
+    assert tcs[0]["name"] == "todo"
+    assert tcs[0]["args"]["action"] == "add"
+    assert tcs[0]["args"]["content"] == "task"
+
+
+def test_parse_xml_tool_call_function_tag_format():
+    """Format 2: <function=NAME>ARGS</function> inside <tool_call> tags."""
+    text = '<tool_call>\n<function=read_file>{"path": "src/foo.py"}</function>\n</tool_call>'
+    tcs = _parse_xml_tool_calls(text)
+    assert len(tcs) == 1
+    assert tcs[0]["name"] == "read_file"
+    assert tcs[0]["args"]["path"] == "src/foo.py"
+
+
+def test_parse_xml_tool_call_multiple():
+    """Multiple <tool_call> blocks in one response."""
+    text = (
+        '<tool_call>\n{"name": "read_file", "arguments": {"path": "a.py"}}\n</tool_call>\n'
+        "some text in between\n"
+        '<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}}\n</tool_call>'
+    )
+    tcs = _parse_xml_tool_calls(text)
+    assert len(tcs) == 2
+    assert tcs[0]["name"] == "read_file"
+    assert tcs[1]["name"] == "bash"
+
+
+def test_parse_xml_tool_call_garbled_returns_empty():
+    """When the XML is present but inner JSON is garbled (model degraded),
+    the parser should return [] — treating it as a failed text response,
+    not a hallucinated tool call."""
+    text = "<tool_call>\n<function=todo》。乱码内容 делал что-то\n</tool_call>"
+    tcs = _parse_xml_tool_calls(text)
+    assert tcs == [], f"garbled XML should return empty, got: {tcs}"
+
+
+def test_parse_xml_tool_call_no_tags_returns_empty():
+    """Normal text without <tool_call> tags returns empty."""
+    tcs = _parse_xml_tool_calls("这是一个普通的回复，没有工具调用。")
+    assert tcs == []
+
+
+def test_parse_xml_tool_call_empty_string():
+    tcs = _parse_xml_tool_calls("")
+    assert tcs == []
+
+
+def test_parse_xml_tool_call_function_tag_garbled_args_recovers_name():
+    """Even if the args JSON is garbled, the tool NAME can sometimes be
+    recovered from <function=NAME>. The args become {} but at least the
+    agent knows which tool was intended."""
+    text = "<tool_call>\n<function=todo>garbled non-json args here</function>\n</tool_call>"
+    tcs = _parse_xml_tool_calls(text)
+    assert len(tcs) == 1
+    assert tcs[0]["name"] == "todo"
+    assert tcs[0]["args"] == {}  # args couldn't be parsed, but name recovered

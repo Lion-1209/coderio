@@ -34,6 +34,10 @@ PROVIDERS: tuple[ProviderInfo, ...] = (
         label="阶跃 StepFun - Step Plan",
         kind="anthropic",
         plan=True,
+        # ChatAnthropic posts to {base_url}/v1/messages. The bare '/step_plan'
+        # base is correct as-is (verified live: returns 200). Do NOT switch
+        # this provider to openai_compatible — ChatOpenAI joins paths
+        # differently ({base_url}/chat/completions) and 404s on this base_url.
         base_url="https://api.stepfun.com/step_plan",
         models=_STEPFUN_MODELS,
         default_model="step-3.7-flash",
