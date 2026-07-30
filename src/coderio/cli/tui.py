@@ -996,9 +996,20 @@ class CoderioTUI(App):
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     #status-row { height: auto; }
+    /* interrupt-btn: NO border — a border adds 2 rows to the widget's outer
+       height, which makes #status-row (height:auto, takes max child height)
+       grow from 1 to 2 rows, leaving a black gap between the status bar and
+       the input whenever the agent is running. Use a tinted background instead
+       so the button stays exactly 1 row tall, matching the StatusBar. */
     #interrupt-btn {
         display: none; height: 1; min-width: 8; padding: 0 1;
-        border: round $error 50%;
+        /* Explicitly kill the border — Button(variant="error") injects a 'tall'
+           border by default, which adds 2 rows to the outer height and makes
+           #status-row grow, leaving a black gap while the agent runs. */
+        border: none;
+        background: $error 20%;
+        color: $error;
+        text-style: bold;
     }
     /* interrupt-btn is shown only when the agent is running (via add_class). */
     #interrupt-btn.-visible { display: block; }
@@ -1830,8 +1841,17 @@ class CoderioTUI(App):
         )
 
     def on_harness_warn(self, message: str) -> None:
+        """Escalation release: the harness allowed a sketchy answer through.
+
+        IMPORTANT: do NOT call _flush_buffer() here. on_harness_warn is always
+        followed by on_finish (see loop.py), which renders self.buffer as the
+        final blue 'coderio' Panel. Flushing here would instead render it as a
+        cyan '中间输出' Panel AND clear the buffer, so on_finish would have
+        nothing left to show — the model's real final answer would appear as
+        misleading intermediate output (the exact bug we fixed). Just clear the
+        live streaming widget so on_finish can mount the final Panel cleanly."""
         self._flush_round_thinking()
-        self._flush_buffer()
+        self._render_q.append(("clear_live",))
         self._render_q.append(
             (
                 "panel",
@@ -1849,11 +1869,20 @@ class CoderioTUI(App):
         Distinct from on_harness_warn (red escalation panel): this is a normal
         control-flow event, not an error. The model produced what looked like a
         final answer but the harness found unfinished work and demanded more.
-        Without this visible cue, the user sees the answer Panel appear, then
-        more thinking/tool calls follow with no explanation — reads as a bug.
-        Renders as a single dim line so it doesn't compete with real output."""
+
+        IMPORTANT: do NOT flush the buffer as a '中间输出' Panel — that would
+        make the model's analysis look like a finished answer (cyan border),
+        confusing the user when the real final answer arrives later. Instead,
+        flush the thinking only (not the text buffer), and show a dim notice.
+        The buffer text is silently dropped (the model will re-output after
+        reading the demanded files), which is the correct behavior — the user
+        sees the harness demand + a dim notice, not a misleading 'answer'."""
         self._flush_round_thinking()
-        self._flush_buffer()
+        # Clear the buffer WITHOUT rendering it as a panel — the model's text
+        # was a draft that harness rejected; the model will produce a better
+        # version after reading the demanded files.
+        self._render_q.append(("clear_live",))
+        self.buffer = ""
         first_line = reason.splitlines()[0] if reason else ""
         if len(first_line) > 120:
             first_line = first_line[:117] + "…"
