@@ -208,6 +208,101 @@ class CommandMenu(Vertical):
         self.remove_class("-visible")
 
 
+class ConfirmMenu(Vertical):
+    """Permission-confirmation menu (zcode/codex-style vertical selection).
+
+    Replaces the old three-button #confirm-row (whose Button borders inflated
+    the layout and left a black gap). This is a vertical ListView floating
+    above the input box: ↑↓ moves the highlight, Enter confirms the choice,
+    Esc cancels (= deny). The user sees all options at once and picks with
+    the keyboard — same interaction model as the slash-command CommandMenu.
+
+    Lifecycle: the agent's background thread calls show() (via call_from_thread);
+    the main thread's on_key drives move()/accept(); accept() returns the chosen
+    option name ("allow"/"deny"/"custom") so on_key can dispatch to
+    _resolve_confirmation / _enter_custom_mode. hide() is called when the agent
+    thread resumes.
+    """
+
+    DEFAULT_CSS = """
+    ConfirmMenu {
+        /* Hidden by default. When visible it sits between #status-row and #msg,
+           expanding the input-bar upward (history shrinks to fit). Fixed height
+           = 1 prompt row + 3 option rows; height:auto lets the ListView grow
+           unbounded and fill the whole screen. */
+        display: none;
+        height: 5;
+        background: $surface;
+        border: round $accent;
+        padding: 0;
+        margin: 0;
+    }
+    ConfirmMenu.-visible { display: block; }
+    ConfirmMenu ListView { background: $surface; height: 3; }
+    ConfirmMenu ListItem { padding: 0 1; }
+    /* Prompt line at the top showing the tool + args. */
+    ConfirmMenu #confirm-prompt { color: $text; padding: 0 1; height: 1; }
+    """
+
+    # Choice constants — accept() returns one of these.
+    ALLOW = "allow"
+    DENY = "deny"
+    CUSTOM = "custom"
+
+    def compose(self) -> ComposeResult:
+        yield Static("⚠", id="confirm-prompt")
+        yield ListView(id="confirm-list")
+
+    def visible(self) -> bool:
+        return self.has_class("-visible")
+
+    def show(self, tool_name: str, args_str: str) -> None:
+        """Populate options and reveal the menu. MAIN THREAD (call_from_thread)."""
+        prompt = self.query_one("#confirm-prompt", Static)
+        prompt.update(f"⚠ {tool_name}({args_str})")
+        lv = self.query_one("#confirm-list", ListView)
+        lv.clear()
+        lv.append(ListItem(Static("✅ 允许执行"), name=self.ALLOW))
+        lv.append(ListItem(Static("❌ 拒绝"), name=self.DENY))
+        lv.append(ListItem(Static("✎ 自定义回复"), name=self.CUSTOM))
+        self.add_class("-visible")
+        try:
+            lv.index = 0  # default-select the first (allow)
+        except Exception:
+            pass
+
+    def hide(self) -> None:
+        self.remove_class("-visible")
+        try:
+            self.query_one("#confirm-list", ListView).clear()
+        except Exception:
+            pass
+
+    def move(self, delta: int) -> None:
+        """Move the selection by delta (+1 down, -1 up); wraps around."""
+        if not self.visible():
+            return
+        lv = self.query_one("#confirm-list", ListView)
+        if not lv.children:
+            return
+        n = len(lv.children)
+        idx = lv.index or 0
+        lv.index = (idx + delta) % n
+
+    def accept(self) -> str | None:
+        """Return the selected option's name, or None if nothing valid.
+
+        Does NOT write to any Input — the caller (on_key) decides what to do
+        with the returned choice.
+        """
+        if not self.visible():
+            return None
+        lv = self.query_one("#confirm-list", ListView)
+        if not lv.children or lv.index is None:
+            return None
+        return lv.children[lv.index].name
+
+
 class StatusBar(Widget):
     """Live status bar: animated spinner + phase + step + elapsed timer.
 
@@ -1013,15 +1108,6 @@ class CoderioTUI(App):
     }
     /* interrupt-btn is shown only when the agent is running (via add_class). */
     #interrupt-btn.-visible { display: block; }
-    /* Inline confirmation row — hidden by default, shown when the agent needs
-       permission approval (confirm/auto_edit mode). Inline with the input bar,
-       not a blocking modal overlay. */
-    #confirm-row { display: none; height: auto; padding: 0 1; }
-    #confirm-row.-visible { display: block; }
-    #confirm-text { color: $text; height: 1; padding: 0 1; }
-    #confirm-yes { min-width: 6; }
-    #confirm-no { min-width: 6; }
-    #confirm-other { min-width: 6; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -1118,15 +1204,11 @@ class CoderioTUI(App):
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
-            # Inline permission confirmation row (shown when the agent needs
-            # approval for a destructive action in confirm/auto_edit mode).
-            # Replaces the old ConfirmScreen ModalScreen — this is inline with
-            # the input bar, not a blocking overlay.
-            with Horizontal(id="confirm-row"):
-                yield Static("⚠ confirm", id="confirm-text")
-                yield Button("✓ 允许", id="confirm-yes", variant="success")
-                yield Button("✗ 拒绝", id="confirm-no", variant="error")
-                yield Button("✎ 其他", id="confirm-other", variant="default")
+            # Vertical permission-confirmation menu (zcode/codex style): floats
+            # above the input box, ↑↓ to choose, Enter to confirm. Replaces the
+            # old three-button #confirm-row whose Button borders inflated the
+            # layout and left a black gap.
+            yield ConfirmMenu()
             yield Input(
                 placeholder="输入消息, /help 看命令, Esc 中断任务",
                 id="msg",
@@ -1180,17 +1262,15 @@ class CoderioTUI(App):
 
         def _show():
             try:
-                txt = self.query_one("#confirm-text", Static)
-                txt.update(f"⚠ {tool_name}({args_str})")
-                row = self.query_one("#confirm-row")
-                row.add_class("-visible")
+                menu = self.query_one(ConfirmMenu)
+                menu.show(tool_name, args_str)
             except Exception:
                 pass
 
         def _hide():
             try:
-                row = self.query_one("#confirm-row")
-                row.remove_class("-visible")
+                menu = self.query_one(ConfirmMenu)
+                menu.hide()
                 # Reset #msg placeholder if it was in custom mode.
                 inp = self.query_one("#msg", Input)
                 inp.placeholder = "输入消息, /help 看命令, Esc 中断任务"
@@ -1211,12 +1291,11 @@ class CoderioTUI(App):
             self._confirm_event.set()
 
     def _enter_custom_mode(self) -> None:
-        """MAIN THREAD: switch the input bar to custom-reply mode for '其他'."""
+        """MAIN THREAD: switch the input bar to custom-reply mode for '自定义回复'."""
         self._confirm_custom_mode = True
         try:
-            # Hide the button row, turn #msg into a custom-reply input.
-            row = self.query_one("#confirm-row")
-            row.remove_class("-visible")
+            # Hide the menu, turn #msg into a custom-reply input.
+            self.query_one(ConfirmMenu).hide()
             inp = self.query_one("#msg", Input)
             inp.placeholder = "输入自定义回复，回车提交..."
             inp.value = ""
@@ -1484,15 +1563,9 @@ class CoderioTUI(App):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button clicks: interrupt + confirm-yes/no/other."""
+        """Handle button clicks (interrupt only — confirm is now a keyboard menu)."""
         if event.button.id == "interrupt-btn":
             self.action_interrupt()
-        elif event.button.id == "confirm-yes":
-            self._resolve_confirmation(True)
-        elif event.button.id == "confirm-no":
-            self._resolve_confirmation(False)
-        elif event.button.id == "confirm-other":
-            self._enter_custom_mode()
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1518,15 +1591,30 @@ class CoderioTUI(App):
                 event.prevent_default()
                 return
             return  # let other keys type into the input
-        # If the inline confirmation row is visible, intercept y/n/enter/esc.
+        # If the confirmation menu is visible, navigate it with ↑↓ + Enter.
+        # (Esc cancels = deny.) This is the zcode/codex vertical-selection model.
         try:
-            confirm_row = self.query_one("#confirm-row")
-            if confirm_row.has_class("-visible"):
-                if event.key in ("y", "enter"):
-                    self._resolve_confirmation(True)
+            confirm_menu = self.query_one(ConfirmMenu)
+            if confirm_menu.visible():
+                if event.key == "up":
+                    confirm_menu.move(-1)
                     event.prevent_default()
                     return
-                if event.key in ("n", "escape"):
+                if event.key == "down":
+                    confirm_menu.move(1)
+                    event.prevent_default()
+                    return
+                if event.key == "enter":
+                    choice = confirm_menu.accept()
+                    if choice == ConfirmMenu.ALLOW:
+                        self._resolve_confirmation(True)
+                    elif choice == ConfirmMenu.CUSTOM:
+                        self._enter_custom_mode()
+                    else:  # DENY or None (nothing selected)
+                        self._resolve_confirmation(False)
+                    event.prevent_default()
+                    return
+                if event.key == "escape":
                     self._resolve_confirmation(False)
                     event.prevent_default()
                     return
