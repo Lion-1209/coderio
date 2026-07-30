@@ -5,20 +5,35 @@ from coderio.tools.web_search import WebSearchTool
 
 
 def test_web_search_returns_results(monkeypatch):
-    class _Fake:
-        def __call__(self, *a, **k):
-            return self
-
-        def json(self):
-            return {"results": [{"title": "T", "url": "http://x", "content": "snippet"}]}
-
-        def raise_for_status(self):
+    """web_search now uses ddgs (DuckDuckGo). Mock the DDGS.text iterator."""
+    class _FakeDDGS:
+        def __init__(self, *a, **k):
             pass
 
-    monkeypatch.setattr(httpx, "get", _Fake())
-    tool = WebSearchTool(api_key="test")
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def text(self, query, max_results=5):
+            return [
+                {"title": "T", "href": "http://x", "body": "snippet"},
+            ]
+
+    # WebSearchTool.run does a local `from ddgs import DDGS`, so patch the
+    # module-level import target by injecting into sys.modules.
+    import sys
+
+    fake_mod = type(sys)("ddgs")
+    fake_mod.DDGS = _FakeDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", fake_mod)
+
+    tool = WebSearchTool()
     out = tool.run(query="query")
     assert isinstance(out, str)
+    assert "http://x" in out
+    assert "T" in out
 
 
 def test_web_fetch_extracts_text(monkeypatch):
