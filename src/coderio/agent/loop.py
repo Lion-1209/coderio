@@ -351,7 +351,10 @@ def run_step(
     (via AIMessageChunk __add__) so the returned AIMessage always carries complete
     tool_calls regardless of provider streaming style.
     """
-    bound = bound_cache.get(langchain_tools, (system_prompt,))
+    # Signature includes the tool-set fingerprint so a skill activation that
+    # adds/removes tools triggers a re-bind even if the prompt text is identical.
+    tool_sig = tuple(sorted(t.name for t in langchain_tools))
+    bound = bound_cache.get(langchain_tools, (system_prompt, tool_sig))
     lc_msgs = _to_langchain_messages(system_prompt, convo)
     aggregated = None  # AIMessageChunk accumulator; its tool_calls are complete at end.
     try:
@@ -648,9 +651,11 @@ def _execute_turn(
             # are in the system prompt — refresh it so the next round sees the
             # updated active set.
             if name in ("activate_skill", "deactivate_skill") and on_activate_skill is not None:
-                new_prompt = on_activate_skill()
-                if new_prompt:
-                    active_prompt = new_prompt
+                refreshed = on_activate_skill()
+                if refreshed:
+                    active_prompt = refreshed["prompt"]
+                    langchain_tools = refreshed["langchain_tools"]
+                    skill_index = refreshed["skill_index"]
     out = _build_max_rounds_notice(harness, max_rounds)
     _emit(Message.assistant(out))
     stream.on_finish()
@@ -690,8 +695,8 @@ def run_agent(
     stream = stream or NullStream()
     activate_tool = ActivateSkillTool(skill_store, active_skills)
     deactivate_tool = DeactivateSkillTool(active_skills)
-    skill_index = _build_skill_index(tools, activate_tool)
-    skill_index[deactivate_tool.name] = deactivate_tool
+    # skill_index is built later via _refresh_prompt() (includes skill-carried
+    # tools). The old _build_skill_index call is removed to avoid a stale index.
 
     # Stage auto-inject uses the TEXT part of the input (user_input may be a
     # multimodal content-block list; detect_stage needs a plain string).
@@ -719,22 +724,44 @@ def run_agent(
             "consider deactivate_skill to free context.",
         )
 
-    langchain_tools = to_langchain_tools(
-        tools,
-        extra={
-            activate_tool.name: activate_tool.args_schema,
-            deactivate_tool.name: deactivate_tool.args_schema,
-        },
-    )
     from coderio.tools.base import to_langchain_tool as _adapt
 
-    langchain_tools = langchain_tools + [
-        _adapt(activate_tool, activate_tool.args_schema),
-        _adapt(deactivate_tool, deactivate_tool.args_schema),
-    ]
-
     def _refresh_prompt():
-        return build_system_prompt(skill_store, active_skills)
+        """Rebuild the system prompt AND the tool set after a skill change.
+
+        Returns a dict so _execute_turn can update both its active_prompt and
+        its langchain_tools / skill_index locals in one shot. Skills may carry
+        executable tools (tools.py); activating/deactivating a skill adds/removes
+        those tools from the agent's bound set. The langchain_tools list and
+        skill_index dict are rebuilt from scratch each call (cheap — ~12 tools).
+        """
+        new_prompt = build_system_prompt(skill_store, active_skills)
+        # Base tools + activate/deactivate + any tools carried by active skills.
+        skill_carried = active_skills.active_tools()
+        skill_carried_schemas = {t.name: t.args_schema for t in skill_carried if hasattr(t, "args_schema")}
+        new_lc = to_langchain_tools(
+            tools + skill_carried,
+            extra={
+                activate_tool.name: activate_tool.args_schema,
+                deactivate_tool.name: deactivate_tool.args_schema,
+                **skill_carried_schemas,
+            },
+        )
+        new_lc = new_lc + [
+            _adapt(activate_tool, activate_tool.args_schema),
+            _adapt(deactivate_tool, deactivate_tool.args_schema),
+        ]
+        # Rebuild the dispatch index so _invoke_tool can find skill-carried tools.
+        new_index = {t.name: t for t in (tools + skill_carried)}
+        new_index[activate_tool.name] = activate_tool
+        new_index[deactivate_tool.name] = deactivate_tool
+        return {"prompt": new_prompt, "langchain_tools": new_lc, "skill_index": new_index}
+
+    # Initial tool set: build via _refresh_prompt so stage-auto-injected skills
+    # (and their carried tools) are included from round 1.
+    _init = _refresh_prompt()
+    langchain_tools = _init["langchain_tools"]
+    skill_index = _init["skill_index"]
 
     # Build the structural harness. It reads the SAME TodoStore the todo tool
     # writes to (find it in the tools list) so the gates see live todo state.

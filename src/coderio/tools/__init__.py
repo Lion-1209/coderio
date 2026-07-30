@@ -80,13 +80,18 @@ def to_langchain_tools(tools: list, extra: dict | None = None) -> list:
     """Adapt coderio tools (+ optional extras like activate_skill) to langchain tools.
 
     `extra` maps tool name -> args_schema for tools not in the default set.
+    Skill-carried tools (loaded from a skill's tools.py) carry their own
+    ``args_schema`` attribute and are picked up automatically here — they don't
+    need to be pre-registered in _ARGS_SCHEMAS.
     """
     schemas = dict(_ARGS_SCHEMAS)
     if extra:
         schemas.update(extra)
     out = []
     for t in tools:
-        schema = schemas.get(t.name)
+        # Prefer the explicit schema registry; fall back to the tool's own
+        # args_schema (skill-carried tools define their schema in tools.py).
+        schema = schemas.get(t.name) or getattr(t, "args_schema", None)
         if schema is None:
             continue
         out.append(to_langchain_tool(t, schema))

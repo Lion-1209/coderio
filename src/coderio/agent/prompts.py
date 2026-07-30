@@ -35,6 +35,24 @@ class ActiveSkills:
     def clear(self) -> None:
         self._active.clear()
 
+    def active_tools(self) -> list:
+        """Aggregate executable tools carried by all active skills.
+
+        Each skill may ship a tools.py with a TOOLS list (see Skill.load_tools).
+        When a skill is activated, its tools are added here so the agent loop
+        can bind them to the model. Deactivation removes them (naturally — the
+        skill is dropped from _active). Deduplicates by tool name (first wins).
+        """
+        tools: list = []
+        seen: set[str] = set()
+        for skill in self._active.values():
+            for t in skill.load_tools():
+                t_name = getattr(t, "name", "")
+                if t_name and t_name not in seen:
+                    tools.append(t)
+                    seen.add(t_name)
+        return tools
+
 
 def _os_context() -> str:
     """Build an OS-specific context clause for the system prompt.
