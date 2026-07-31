@@ -225,24 +225,34 @@ def run_deep_agent(
     if extra_lc_tools:
         build_kwargs["tools"] = extra_lc_tools
 
+    # --- Checkpointer: persist graph state across turns (sqlite) ---
+    # Without a checkpointer, each run_deep_agent call starts from scratch —
+    # SummarizationMiddleware's accumulated state resets, and we'd have to
+    # re-pass the full history every turn (expensive + grows linearly).
+    # With a checkpointer, deepagents restores prior state from the sqlite DB
+    # and we only pass the NEW user message. Falls back to full-history mode
+    # if sqlite is unavailable (package missing or DB corrupted).
+    thread_id = session.id
+    checkpointer = _try_create_checkpointer(session)
+    if checkpointer is not None:
+        build_kwargs["checkpointer"] = checkpointer
+
     agent = create_deep_agent(**build_kwargs)
 
     # --- Drive the graph with three stream modes in parallel ---
     final_text = ""
-    # Stable thread_id so SummarizationMiddleware's offload path is consistent
-    # across turns (uses session file stem, not a per-input hash).
-    thread_id = getattr(session, "stem", None) or f"session-{id(session):x}"
     config = {
         "recursion_limit": recursion_limit,
         "configurable": {"thread_id": thread_id},
     }
-    # Pass conversation history so the model has multi-turn context. Without this,
-    # each turn is amnesiac (only sees the current message). The history comes
-    # from session.messages (the authoritative source). The system prompt is
-    # already injected by create_deep_agent (system_prompt= above), so we do NOT
-    # include SystemMessages here — only user/assistant/tool messages.
-    history_msgs = _build_history_messages(session.messages)
-    inputs = {"messages": history_msgs}
+    if checkpointer is not None:
+        # Checkpoint mode: only pass the new user message. deepagents restores
+        # prior conversation from the sqlite DB via thread_id.
+        inputs = {"messages": [HumanMessage(content=user_input)]}
+    else:
+        # Fallback (no checkpoint): pass full history so the model has context.
+        history_msgs = _build_history_messages(session.messages)
+        inputs = {"messages": history_msgs}
 
     if hasattr(stream, "on_step_start"):
         stream.on_step_start()
@@ -279,6 +289,38 @@ def _final_already_persisted(session: Session) -> bool:
         return False
     last = msgs[-1]
     return last.role == "assistant" and not getattr(last, "tool_calls", None)
+
+
+def _try_create_checkpointer(session: Session):
+    """Create a SqliteSaver for graph state persistence.
+
+    Stores checkpoint state alongside the session jsonl (same directory,
+    {session_id}.sqlite). Returns None if sqlite is unavailable or the DB
+    can't be created (caller falls back to full-history mode).
+
+    The checkpointer lets deepagents restore prior conversation state across
+    run_deep_agent calls — we only pass the new user message instead of the
+    full history. It also makes SummarizationMiddleware's accumulated state
+    (offload tracking, token counts) persist correctly across turns.
+    """
+    try:
+        import sqlite3
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        # Place the sqlite DB next to the session jsonl file.
+        db_path = session.path.parent / f"{session.id}.sqlite"
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
+        # SqliteSaver needs table setup on first use.
+        checkpointer.setup()
+        return checkpointer
+    except ImportError:
+        # langgraph-checkpoint-sqlite not installed — fall back gracefully.
+        return None
+    except Exception:
+        # DB corrupted / locked / permission error — don't crash the agent.
+        return None
 
 
 def _build_history_messages(session_messages: list) -> list:
