@@ -146,6 +146,5 @@ def main_entry() -> None:
     app()
 
 
-
 if __name__ == "__main__":
     main_entry()

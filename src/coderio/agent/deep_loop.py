@@ -249,9 +249,7 @@ def run_deep_agent(
         if mode == "messages":
             _handle_messages_mode(event, stream, session)
         elif mode == "updates":
-            final_text = _handle_updates_mode(
-                event, stream, session, _seen_tool_calls, _turn_writes
-            ) or final_text
+            final_text = _handle_updates_mode(event, stream, session, _seen_tool_calls, _turn_writes) or final_text
         elif mode == "custom":
             _handle_custom_mode(event, stream)
 
