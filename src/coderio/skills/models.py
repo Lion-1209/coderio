@@ -64,4 +64,3 @@ class Skill:
 
         self._tools = loaded
         return list(loaded)
-

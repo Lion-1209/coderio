@@ -146,10 +146,6 @@ def main_entry() -> None:
     app()
 
 
-from coderio.crew.cli_cmd import register as register_crew  # noqa: E402
-
-register_crew(app)
-
 
 if __name__ == "__main__":
     main_entry()

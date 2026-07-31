@@ -6,6 +6,7 @@ from coderio.tools.web_search import WebSearchTool
 
 def test_web_search_returns_results(monkeypatch):
     """web_search now uses ddgs (DuckDuckGo). Mock the DDGS.text iterator."""
+
     class _FakeDDGS:
         def __init__(self, *a, **k):
             pass

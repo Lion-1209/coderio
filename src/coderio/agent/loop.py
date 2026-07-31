@@ -346,7 +346,7 @@ def run_step(
 ) -> AIMessage:
     """Execute a single ReAct step: call the model (streamed) and return its AIMessage.
 
-    This is the S2 crewAI reuse seam (spec §4.5): one model call -> one assistant turn.
+    This is the fallback ReAct engine's core step: one model call -> one assistant turn.
     Streaming text is forwarded token-by-token; tool_call chunks are aggregated
     (via AIMessageChunk __add__) so the returned AIMessage always carries complete
     tool_calls regardless of provider streaming style.
@@ -438,12 +438,12 @@ def _execute_turn(
 ) -> TurnResult:
     """Run one agent turn: loop run_step + tool execution until final text or max_rounds.
 
-    Shared by run_agent (S0) and CrewOrchestrator (S2). `convo` is the message list
+    Used by run_agent (the fallback ReAct engine). `convo` is the message list
     fed to the model (appended in place). `on_message(msg)` is called for EVERY
     message produced (assistant + tool results) so callers can persist them
-    (run_agent writes to the session jsonl; S2 just uses convo). Returns a
-    TurnResult carrying the final text plus context-rot signals
-    (hit_max_rounds / in_tool_loop) for the caller's restart logic.
+    (run_agent writes to the session jsonl). Returns a TurnResult carrying the
+    final text plus context-rot signals (hit_max_rounds / in_tool_loop) for the
+    caller's restart logic.
 
     `on_compact(summary_msg)`: when set, called once with the context_summary
     Message each time compaction shrinks the convo. The caller persists it to
@@ -454,8 +454,7 @@ def _execute_turn(
 
     `harness` (Harness | None): when provided and enabled, the harness layer exerts
     structural control over termination (VerifyGate/CompletionGate) and augments
-    tool results (PlanGate). Pass None to keep the original behavior unchanged
-    (this is what the S2 crew does — it has its own verify→fix loop).
+    tool results (PlanGate). Pass None to disable harness control.
     """
 
     def _emit(msg):

@@ -2,13 +2,13 @@
 
 **中文** | [English](README_en.md)
 
-> 一个技能驱动的编程 agent——结构化 harness 约束、可折叠思考的 TUI、crew 编排。基于 langchain + langgraph + Lion-Skills，Windows 优先，跨平台。
+> 一个技能驱动的编程 agent——结构化 harness 约束、可折叠思考的 TUI、deepagents 引擎。基于 langchain + langgraph + deepagents + Lion-Skills，Windows 优先，跨平台。
 
 ## 为什么做这个项目
 
 一开始只是想花掉阶跃送的 token，顺便走一遍 langchain 全技术栈搭 agent 的流程。框架搭出来之后觉得单纯的 REPL + CLI 不太酷，就开始折腾 TUI 了——目前 TUI 的效果我自己还挺满意的。
 
-不过整体框架并没有细细调优，所以目前只是一个工作之余搓出来的 demo。开源的目的不是做一个产品，而是希望给那些用 langchain 技术栈的人做一点小参考：ReAct 循环怎么搭、harness 怎么做结构约束、TUI 怎么做流式渲染、crew 怎么编排——这些代码都在，能跑，欢迎拿去玩。
+不过整体框架并没有细细调优，所以目前只是一个工作之余搓出来的 demo。开源的目的不是做一个产品，而是希望给那些用 langchain 技术栈的人做一点小参考：deepagents 引擎怎么接、harness 怎么做结构约束、TUI 怎么做流式渲染——这些代码都在，能跑，欢迎拿去玩。
 
 > 关于名字：**coderio = code + rio**（不是 coder + io 哦）。我的英文名是 Lion，本来想叫 codelion，但感觉怪怪的，所以就叫 coderio 了。
 
@@ -30,7 +30,7 @@
 - **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器、**权限/配置可视化选择器**（`/mode` `/profile` 弹窗选择）、**文件修改可视化**（即时黄色提示 + 轮末汇总面板）、**任务中断**（Esc / ⏹ 按钮，不退出 TUI）、**错误恢复**（红色面板 + 输入回填重试）
-- **两种模式**：交互式单 agent（日常）+ 6-agent crew 流水线（大需求，LangGraph 编排）；crew 验证 fail-closed（失败不再伪装绿色完成，显示 partial/failed 状态）
+- **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端；coderio 的 harness 四道门 + 四级权限作为 middleware 保留
 - **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）、**自动激活项目 .venv**（bash 里的 python 自动指向虚拟环境）
 - **工作区路径策略（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
@@ -121,9 +121,6 @@ coderio
 # 指定 provider/model
 coderio --provider bigmodel_coding_plan --model glm-5.2
 
-# 6-agent crew 流水线（大需求）
-coderio crew "实现一个待办事项命令行工具" --auto
-
 # 管理 skill
 coderio skills list
 coderio skills install
@@ -170,21 +167,21 @@ coderio skills install
 ```
 CLI 层 (cli/)          Typer app + Textual TUI + slash 命令
   │
-Agent 层 (agent/)      ReAct 循环 + harness 状态控制 + 提示词构建
-  │
-编排层 (crew/)          6-agent LangGraph StateGraph（可选高级模式）
+Agent 层 (agent/)      deepagents 引擎 + harness/permission middleware + 提示词构建
   │
 能力层                  tools/ · skills/ · llm/ · session/ · config/
 ```
 
-### 两种运行模式
+### 引擎：deepagents + coderio middleware
 
-| | 单 agent（TUI） | crew（流水线） |
-|---|---|---|
-| 适用 | 日常交互、问答、编码任务 | 大需求、完整功能开发 |
-| agent 数 | 1 个（全工具） | 6 个（每阶段工具物理隔离） |
-| harness | 硬约束生效 | 不生效（crew 自有 verify→修复循环） |
-| 编排 | ReAct 循环 | LangGraph StateGraph + interrupt |
+coderio 用 deepagents 作为主引擎（上下文管理、子 agent、文件系统后端），在其上叠加两个 middleware：
+
+| middleware | 作用 |
+|---|---|
+| **HarnessMiddleware** | coderio 的四道门硬约束（验证/完成/grounding/plan），deepagents 本身不强制验证 |
+| **PermissionMiddleware** | 四级权限（plan/confirm/auto_edit/full）+ 工作区路径边界 |
+
+旧的 ReAct 引擎（`agent/loop.py`）保留为 fallback。
 
 ### harness 四道门（核心）
 
@@ -247,13 +244,13 @@ ANTHROPIC_API_KEY=<key> .venv/bin/python scripts/verify_harness_live.py         
 
 | 依赖 | 用途 |
 |------|------|
-| langchain >=0.3 | ReAct agent 基础 |
-| langgraph >=0.2 | crew 流水线状态图编排 |
+| langchain >=0.3 | agent 基础 |
+| langgraph >=0.2 | 状态图编排 |
 | langchain-anthropic >=0.2 | 智谱/阶跃端点接入（Anthropic 协议） |
 | textual >=0.40 | 交互式 TUI |
 | rich >=13 | 终端渲染 |
 | typer >=0.12 | CLI 框架 |
-| deepagents >=0.6 | 实验性 engine（可选：`pip install -e ".[deepagent]"`） |
+| deepagents >=0.6 | 生产引擎（上下文管理、子 agent、文件系统后端） |
 
 ---
 
@@ -261,10 +258,9 @@ ANTHROPIC_API_KEY=<key> .venv/bin/python scripts/verify_harness_live.py         
 
 ```
 src/coderio/
-├── agent/          # ReAct 循环、harness、提示词、流式协议
+├── agent/          # deepagents 引擎、harness/permission middleware、提示词、流式协议
 ├── cli/            # Typer app、Textual TUI、slash 命令、凭证/onboarding
-├── crew/           # 6-agent LangGraph 流水线（orchestrator/agents/state）
-├── tools/          # 12 个工具 + 权限门 + langchain 适配
+├── tools/          # 工具集 + 权限门 + langchain 适配
 ├── skills/         # SkillStore 三层加载 + Lion-Skills 0.3.0（bundled）
 ├── config/         # 三层 TOML 配置合并
 ├── session/        # jsonl 会话存储 + resume
@@ -277,9 +273,7 @@ Lion-Skills 作为 bundled skill 随包分发（`src/coderio/skills/lion-skills/
 
 ## 已知限制
 
-- **deepagents engine 是实验性的**：harness 作为 middleware 可用，但默认仍是 ReAct engine。deepagents 已改为可选依赖
-- **Windows 编码**：shell 输出在 GBK locale 下有内置兼容方案
-- **crew 持久化**：当前用内存 MemorySaver（会话内），sqlite 持久化待后续
+- **Windows 编码**：shell 输出在 GBK locale 下有内置兼容方案（`_WinLocalShellBackend` 用 bytes + errors='replace' 解码）
 
 ---
 

@@ -6,7 +6,7 @@
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
 - **CI**：GitHub Actions，lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke
 
-> 本文档描述的是**当前代码库的实际状态**。S0/S1/S2 早期设计 spec 见 `docs/superpowers/specs/`，本文是它们实现后的整合视图。
+> 本文档描述的是**当前代码库的实际状态**（deepagents 引擎重构后）。
 
 ---
 
@@ -24,15 +24,13 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  CLI 层 (cli/)          Typer app + Rich REPL + 流式 UI       │
-│    app.py · repl.py · stream.py · commands.py · ...          │
+│  CLI 层 (cli/)          Typer app + Textual TUI + 流式 UI     │
+│    app.py · tui.py · repl.py · stream.py · commands.py       │
 ├─────────────────────────────────────────────────────────────┤
-│  Agent 层 (agent/)      ReAct 循环 + harness 状态控制          │
-│    loop.py · harness.py · prompts.py · stream.py              │
+│  Agent 层 (agent/)      deepagents 引擎 + harness/permission   │
+│    deep_loop.py · harness_middleware.py · permission_*.py     │
+│    harness.py · prompts.py · stream.py · loop.py (fallback)   │
 ├─────────────────────────────────────────────────────────────┤
-│  编排层 (crew/)          6-agent 串行流水线（可选高级模式）      │
-│    orchestrator.py · agents.py · state.py                     │
-├────────────────────────────────────────────────────────────────┤
 │  能力层                  tools/ · skills/ · llm/ · session/ · config/  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -41,56 +39,48 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 
 | 模块 | 行数 | 职责 | 关键文件 |
 |------|------|------|----------|
-| `agent/` | 2525 | ReAct 循环、harness 硬约束、提示词构建、流式协议、上下文压缩、状态机 | loop.py, harness.py, prompts.py, compact.py, state.py |
-| `cli/` | 3815 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
-| `tools/` | 1129 | 12 个工具 + 权限门 + 工作区路径策略 + langchain 适配 | bash.py, permission.py, workspace.py, base.py |
-| `crew/` | 715 | 6-agent 流水线编排 + verify→修复循环 + fail-closed 状态 | orchestrator.py, agents.py, state.py, cli_cmd.py |
-| `config/` | 411 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
-| `skills/` | 222 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
+| `agent/` | ~3000 | deepagents 引擎、harness/permission middleware、提示词构建、流式协议、ReAct fallback | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, prompts.py, loop.py |
+| `cli/` | ~3800 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
+| `tools/` | ~1100 | 工具集 + 权限门 + 工作区路径策略 + langchain 适配 | bash.py, permission.py, workspace.py, base.py |
+| `config/` | ~400 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
+| `skills/` | ~220 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
 | `session/` | 260 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
 | `llm/` | 320 | 模型工厂 + provider context window 探测 | factory.py, probe.py |
 
 ### 依赖方向（关键约束）
 
 ```
-cli/ ──调──► agent/loop.run_agent ──调──► tools/, skills/, session/, config/, llm/
-crew/orchestrator ──复用──► agent/loop._execute_turn (传 harness=None)
+cli/ ──调──► agent/deep_loop.run_deep_agent ──调──► tools/, skills/, session/, config/, llm/
 agent/ ──不反向依赖──► cli/   (cli 是壳，agent 是核)
 ```
 
-唯一"复用而非依赖"的特殊接缝：`crew/orchestrator.py` 复用 `agent/loop._execute_turn`，但传 `harness=None`（crew 有自己的 verify→修复循环，见 §5）。
-
 ---
 
-## 2. 两种运行模式
+## 2. 运行引擎：deepagents + coderio middleware
 
-coderio 有两种运行模式，共用底层能力，面向不同场景：
+coderio 使用 [deepagents](https://github.com/langchain-ai/deepagents) 作为主引擎，在其上叠加 coderio 的 harness 和权限 middleware。
 
-### 2.1 单 agent 模式（S0+S1，默认）
+### 2.1 deepagents 引擎（主引擎）
 
-交互式 REPL，日常用。一个 agent + 全套工具 + harness 硬约束。用户说一句，agent 跑一轮（可能多步工具调用 + 验证），回复。
+- **入口**：`coderio` 命令 → `cli/tui.py` → `agent/deep_loop.py:run_deep_agent`
+- **引擎**：`deepagents.create_deep_agent`，提供上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端
+- **coderio middleware**：HarnessMiddleware（四道门硬约束）+ PermissionMiddleware（四级权限 + 工作区边界）
+- **流式**：三模式 stream（messages 逐 token / updates 完整消息 / custom harness 信号）
 
-- **入口**：`coderio` 命令 → `cli/app.py:main_entry` → `cli/repl.py:run_repl`
-- **核心循环**：`agent/loop.py:run_agent` → `_execute_turn`（带 harness）
-- **harness 生效**：写完代码不验证会被硬拦截
+### 2.2 ReAct 引擎（fallback）
 
-### 2.2 Crew 流水线模式（S2，高级）
+- **入口**：`agent/loop.py:run_agent` → `_execute_turn`（带 harness）
+- 保留为 fallback，deepagents 出问题时可切回
+- 不再作为默认引擎
 
-一条命令跑完整需求，6 个专职 agent 串行接力。每个 agent 只拥有自己阶段的工具（物理隔离），通过共享 `ProjectState` 交接。
+### 2.3 为什么不直接用 deepagents 裸跑
 
-- **入口**：`coderio crew "<需求>"` → `crew/cli_cmd.py` → `CrewOrchestrator.run`
-- **核心**：`crew/orchestrator.py`，顺序跑 clarify→spec→task→execute→verify→commit
-- **harness 不生效**：crew 调 `_execute_turn` 时传 `harness=None`，它有自己的 verify→修复循环（见 §5.3）
+deepagents 是"信任 agent"的——它不强制验证、不检查引用、不管工作区边界。coderio 的差异化全在 middleware 层：
 
-### 2.3 两者的关系
-
-| | 单 agent | Crew |
+| middleware | coderio 独有 | deepagents 没有 |
 |---|---|---|
-| 适用 | 日常交互、问答、小修改、单点编码任务 | 大需求、完整功能开发 |
-| agent 数 | 1 个（全工具） | 6 个（每阶段工具隔离） |
-| harness | 硬约束生效 | 不生效（crew 自有 verify 循环） |
-| 人机介入 | 随时对话 | clarify 后、spec 后暂停等确认 |
-| 触发 | `coderio` | `coderio crew "<需求>"` |
+| HarnessMiddleware | 四道门硬约束（验证/完成/grounding/plan） | 不强制验证 |
+| PermissionMiddleware | 四级权限 + 工作区读写分离 | 仅粗粒度 FilesystemPermission |
 
 ---
 
@@ -157,7 +147,7 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 ### 3.4 harness 在循环里的接线
 
-`_execute_turn`（`agent/loop.py`）是 S0 和 S2 共享的 turn 循环。harness 在里面有三处插入点：
+`run_deep_agent`（`agent/deep_loop.py`）是 deepagents 引擎的入口，harness 作为 middleware（`HarnessMiddleware`）挂载。在 ReAct fallback 引擎里，harness 在 `_execute_turn` 中有三处插入点：
 
 ```python
 for _ in range(max_rounds):
@@ -249,48 +239,7 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 
 ---
 
-## 5. Crew 流水线（S2，高级模式）
-
-### 5.1 6 角色 + 物理工具隔离
-
-`crew/agents.py` 定义 6 个 `AgentRole`，**每个角色只拥有自己阶段的工具**（不是提示词约束，是物理隔离）：
-
-| 阶段 | 角色 | 工具 | 产出字段 | 暂停 |
-|------|------|------|---------|------|
-| clarify | Clarifier | read_file/list_dir/glob/grep（**无 write**）| clarification | ✓ |
-| spec | SpecWriter | + write_file | spec | ✓ |
-| task | TaskPlanner | + todo | task_list | |
-| execute | Implementer | + edit_file/multi_edit/bash | implementation | |
-| verify | Verifier | read/glob/grep/bash（**无 write**）| verification | |
-| commit | Committer | bash/read_file/list_dir | commit_message | |
-
-> Clarifier 物理上没有 write_file——它**必须**产出澄清结论才轮到下一个。这是"硬编排"。
-
-### 5.2 共享状态交接
-
-`crew/state.py: ProjectState` 是 6 个 agent 的共享黑板，每个 agent 读上游产出、写自己的字段：
-
-```
-request → clarification → spec → task_list → implementation → verification → commit_message
-```
-
-### 5.3 verify→修复循环（fail-closed）
-
-Verifier 产出后，`_verification_passed()` 判断是否通过。**fail-closed**：空验证、不可读 marker、模糊输出默认失败（不再默认通过）。未通过则回退到 execute 阶段重跑，最多 `max_fix_loops=2` 次：
-
-```
-execute → verify → (未通过) → execute → verify → ... → (达上限) → commit (status=partial)
-```
-
-预算耗尽后仍进入 commit，但 `ProjectState.status` 标记为 `"partial"`，CLI 显示黄色 `⚠ crew 完成（验证未通过，请人工复核）` 而非无条件绿色 `✓`。`status` 有三个值：`success` / `partial` / `failed`。
-
-### 5.4 人机介入点
-
-非 auto 模式下，clarify 后和 spec 后暂停，通过 `on_pause` 回调等用户输入（澄清答案 / spec 确认）。`--auto` 跳过所有暂停。
-
----
-
-## 6. CLI 层与流式 UI
+## 5. CLI 层与流式 UI
 
 ### 6.1 REPL 结构（`cli/repl.py`）
 
@@ -464,9 +413,9 @@ _execute_turn(harness=h)  循环：
 
 1. **子模块状态**：Lion-Skills 作为目录拷贝存在于 `src/coderio/skills/lion-skills/`，是 vendored 拷贝而非 git submodule，更新需手动同步。用户可通过 `coderio skills install` 从上游 repo 拉取最新版到用户目录。
 
-2. **harness 的 `harness_enabled` 只有 run_agent 入口**：crew 路径硬编码 `harness=None`，未来若想让 crew 单个 role 也享受 harness 需 per-role 传入。
+2. **harness 作为 deepagents middleware**：`HarnessMiddleware` 通过 `after_model` 的 `jump_to="model"` 实现 force-continue（需 `@hook_config(can_jump_to=["model"])` 装饰器，否则 langchain factory 不建条件边导致静默失效）。
 
-3. **deepagents engine 实验性**：`deep_loop.py` + `harness_middleware.py` 实现了 deepagents 引擎（harness 作为 middleware），但未接入 CLI（默认用 ReAct）。deepagents 已改为可选依赖（`pip install coderio[deepagent]`）。0% 测试覆盖。
+3. **deepagents 是主依赖**：`deepagents >=0.6` 已从 optional 移到主 dependencies。旧 ReAct 引擎（`loop.py`）保留为 fallback。
 
 4. **WorkspacePolicy 是路径策略，不是 OS 级沙箱**：文件工具（write/edit/multi_edit）的路径被 resolve + relative_to 边界检查拦截，但 bash 命令内容不受控——`printf x > /tmp/out.txt` 等通过重定向/绝对路径的写入可以绕过。真正的隔离需要 OS 级容器/seccomp，当前是"路径策略 + 权限门"的最佳折中。
 
@@ -484,8 +433,7 @@ _execute_turn(harness=h)  循环：
 - **CI**（GitHub Actions）：lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke
 - **Live 验证脚本**（`scripts/verify_*_live.py`）：连真实智谱/阶跃端点验证
   - `verify_harness_live.py`：4 场景（验证门触发/通过/禁用/工具错误韧性）
-  - `verify_crew_live.py`：crew 流水线真实验证
-  - `verify_deepagent_live.py`：deepagents engine 验证（实验性）
+  - `verify_deepagent_live.py`：deepagents 引擎验证
 - **Release 工作流**：tag 驱动，自动构建 wheel + 真实 venv 安装 + `coderio --help` smoke + bundled skills 验证
 
 测试设计原则：mock 只 mock 模型，工具是真的（避免"mock 通过但真实 provider 翻车"——这是项目历史教训）。
@@ -497,5 +445,5 @@ _execute_turn(harness=h)  循环：
 1. **skill 是手册，harness 是纪律，工具是手**——三层不互相替代。skill 告诉"该怎么做"，harness 强制"必须这么做"，工具让它"能这么做"。
 2. **硬约束靠 ground truth，软路由靠提示词**——harness 读工具调用历史（事实），意图分类读用户消息（语义）。两者正交。
 3. **工具错误是信号不是错误**——agent 的容错边界只在 LLM API 层，工具调用失败是模型该读到并自我修正的反馈。
-4. **物理隔离胜过提示词约束**——crew 的 Clarifier 没有 write_file 工具，比"提示词叫它别写"可靠得多。
-5. **逐级升级，永不无限循环、永不静默**——harness 拦截 2 次后放行+警告，既硬又不卡死。
+4. **逐级升级，永不无限循环、永不静默**——harness 拦截 2 次后放行+警告，既硬又不卡死。
+5. **站在巨人肩膀上**——deepagents 提供上下文管理/子 agent/文件系统，coderio 聚焦 harness 纪律和权限控制，不重复造轮子。

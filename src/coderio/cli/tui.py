@@ -2294,7 +2294,6 @@ def run_tui(
         f"[bold magenta]coderio[/bold magenta]  [dim]model=[/dim]{cfg.model.default}  "
         f"[dim]perm=[/dim]{gate.mode}"
         "\n[dim]模式:[/dim] [cyan]single-agent (Textual TUI)[/cyan]. "
-        "大需求可用 [yellow]/crew[/yellow] 进 6-agent 流水线."
         "\n[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
     )
 

@@ -26,9 +26,9 @@ from langchain_core.messages import ToolMessage
 
 # deepagents → coderio tool-name translation (shared with HarnessMiddleware).
 _NAME_MAP = {
-    "execute": "bash",        # deepagents shell → coderio bash
-    "write_todos": "todo",    # deepagents planning → coderio todo
-    "ls": "list_dir",         # deepagents ls → coderio list_dir
+    "execute": "bash",  # deepagents shell → coderio bash
+    "write_todos": "todo",  # deepagents planning → coderio todo
+    "ls": "list_dir",  # deepagents ls → coderio list_dir
 }
 # Arg key translation: deepagents write/edit use 'file_path', gate expects 'path'.
 _ARG_FILE_KEY = "file_path"

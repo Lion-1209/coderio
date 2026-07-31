@@ -34,8 +34,7 @@ class WebSearchTool:
             # unreachable. Surface a clear, retryable message — the model can
             # wait and retry, or fall back to its own knowledge.
             return (
-                f"Error: web search failed ({type(e).__name__}: {e}). "
-                "The service may be rate-limiting; retry shortly."
+                f"Error: web search failed ({type(e).__name__}: {e}). The service may be rate-limiting; retry shortly."
             )
 
         if not results:

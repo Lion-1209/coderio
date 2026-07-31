@@ -2,13 +2,13 @@
 
 [中文](README.md) | **English**
 
-> A skill-driven coding agent with a structural harness, foldable-thinking TUI, and crew orchestration. Built on langchain + langgraph + Lion-Skills. Windows-first, cross-platform.
+> A skill-driven coding agent with a structural harness, foldable-thinking TUI, and deepagents engine. Built on langchain + langgraph + deepagents + Lion-Skills. Windows-first, cross-platform.
 
 ## Why this project
 
 It started as a way to burn through some free tokens from StepFun, and to go through the full langchain tech stack to build an agent. Once the framework was up, a plain REPL + CLI didn't feel cool enough — so the TUI journey began. I'm quite happy with how the TUI turned out.
 
-That said, the overall framework hasn't been finely tuned. This is a demo built in my spare time, not a product. The goal of open-sourcing is simply to offer a small reference for anyone using the langchain stack: how to build a ReAct loop, how to do structural harness constraints, how to do streaming TUI rendering, how to orchestrate a crew pipeline — the code is all here, it runs, feel free to play with it.
+That said, the overall framework hasn't been finely tuned. This is a demo built in my spare time, not a product. The goal of open-sourcing is simply to offer a small reference for anyone using the langchain stack: how to integrate the deepagents engine, how to do structural harness constraints, how to do streaming TUI rendering — the code is all here, it runs, feel free to play with it.
 
 > About the name: **coderio = code + rio** (not coder + io). My English name is Lion — I wanted "codelion" but it sounded weird, so coderio it is.
 
@@ -29,7 +29,7 @@ Core philosophy: **skills are the playbook, the harness is discipline, tools are
 - **Intent classification**: automatically distinguishes CODE / QA / ANALYZE intents — coding tasks follow the workflow, questions get direct answers (bilingual CN/EN signal words)
 - **Progressive disclosure**: skill bodies load on-demand, system prompt ~2K tokens instead of dumping everything
 - **Interactive TUI**: Textual terminal UI with foldable thinking (Ctrl+O), streaming output, tool-call status bar (animated spinner + step + task phase + timer), slash-command autocomplete, session resume picker
-- **Two modes**: interactive single-agent (daily use) + 6-agent crew pipeline (large tasks, LangGraph orchestration)
+- **deepagents engine**: production engine built on [deepagents](https://github.com/langchain-ai/deepagents), with built-in context management (offload + summarization), subagents (task tool), and filesystem backend; coderio's harness four gates + four-tier permissions retained as middleware
 - **Tool error resilience**: tool failures become tool results fed back to the model for self-correction, never crash the turn
 - **Multi-provider + named profiles**: Zhipu GLM / StepFun coding plans (Anthropic protocol) + OpenAI + Anthropic + Ollama + custom; supports multiple config profiles with `/profile` runtime switching
 
@@ -99,9 +99,6 @@ coderio
 # Specify provider/model
 coderio --provider bigmodel_coding_plan --model glm-5.2
 
-# 6-agent crew pipeline (large tasks)
-coderio crew "implement a todo list CLI tool" --auto
-
 # Manage skills
 coderio skills list
 coderio skills install
@@ -137,21 +134,21 @@ Layered monolith, dependencies flow downward:
 ```
 CLI layer (cli/)          Typer app + Textual TUI + slash commands
   │
-Agent layer (agent/)      ReAct loop + harness state control + prompt building
-  │
-Orchestration (crew/)     6-agent LangGraph StateGraph (optional advanced mode)
+Agent layer (agent/)      deepagents engine + harness/permission middleware + prompt building
   │
 Capability layer          tools/ · skills/ · llm/ · session/ · config/
 ```
 
-### Two run modes
+### Engine: deepagents + coderio middleware
 
-| | Single-agent (TUI) | Crew (pipeline) |
-|---|---|---|
-| Use case | Daily interaction, Q&A, coding tasks | Large tasks, full feature development |
-| Agents | 1 (all tools) | 6 (tools physically isolated per stage) |
-| Harness | Hard constraint active | Inactive (crew has its own verify→fix loop) |
-| Orchestration | ReAct loop | LangGraph StateGraph + interrupt |
+coderio uses deepagents as its primary engine (context management, subagents, filesystem backend), with two middleware layers on top:
+
+| Middleware | Purpose |
+|---|---|
+| **HarnessMiddleware** | coderio's four-gate hard constraint (verify/completion/grounding/plan) — deepagents itself doesn't enforce verification |
+| **PermissionMiddleware** | four-tier permissions (plan/confirm/auto_edit/full) + workspace path boundary |
+
+The old ReAct engine (`agent/loop.py`) is kept as a fallback.
 
 ### Harness four gates (core)
 
@@ -213,13 +210,13 @@ Three-layer test design: unit tests (logic) + live verification (real integratio
 
 | Dependency | Purpose |
 |------------|---------|
-| langchain >=0.3 | ReAct agent foundation |
-| langgraph >=0.2 | Crew pipeline state graph orchestration |
+| langchain >=0.3 | Agent foundation |
+| langgraph >=0.2 | State graph orchestration |
 | langchain-anthropic >=0.2 | Zhipu/StepFun endpoint access (Anthropic protocol) |
 | textual >=0.40 | Interactive TUI |
 | rich >=13 | Terminal rendering |
 | typer >=0.12 | CLI framework |
-| deepagents >=0.6 | Experimental engine (optional: `pip install -e ".[deepagent]"`) |
+| deepagents >=0.6 | Production engine (context management, subagents, filesystem backend) |
 
 ---
 
@@ -227,10 +224,9 @@ Three-layer test design: unit tests (logic) + live verification (real integratio
 
 ```
 src/coderio/
-├── agent/          # ReAct loop, harness, prompts, streaming protocol
+├── agent/          # deepagents engine, harness/permission middleware, prompts, streaming protocol
 ├── cli/            # Typer app, Textual TUI, slash commands, credentials/onboarding
-├── crew/           # 6-agent LangGraph pipeline (orchestrator/agents/state)
-├── tools/          # 12 tools + permission gate + langchain adapter
+├── tools/          # Tool set + permission gate + langchain adapter
 ├── skills/         # SkillStore 3-layer loading + Lion-Skills 0.3.0 (bundled)
 ├── config/         # 3-layer TOML config merge
 ├── session/        # jsonl session storage + resume
@@ -243,9 +239,7 @@ Lion-Skills is distributed as a bundled skill (`src/coderio/skills/lion-skills/`
 
 ## Known Limitations
 
-- **deepagents engine is experimental**: harness as middleware works, but the default is still the ReAct engine. deepagents is now an optional dependency
-- **Windows encoding**: shell output has a built-in compatibility solution for GBK locale
-- **Crew persistence**: currently uses in-memory MemorySaver (per-session), sqlite persistence is future work
+- **Windows encoding**: shell output has a built-in compatibility solution for GBK locale (`_WinLocalShellBackend` decodes bytes with errors='replace')
 
 ---
 
