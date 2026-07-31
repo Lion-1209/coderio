@@ -236,7 +236,13 @@ def run_deep_agent(
         "recursion_limit": recursion_limit,
         "configurable": {"thread_id": thread_id},
     }
-    inputs = {"messages": [HumanMessage(content=user_input)]}
+    # Pass conversation history so the model has multi-turn context. Without this,
+    # each turn is amnesiac (only sees the current message). The history comes
+    # from session.messages (the authoritative source). The system prompt is
+    # already injected by create_deep_agent (system_prompt= above), so we do NOT
+    # include SystemMessages here — only user/assistant/tool messages.
+    history_msgs = _build_history_messages(session.messages)
+    inputs = {"messages": history_msgs}
 
     if hasattr(stream, "on_step_start"):
         stream.on_step_start()
@@ -273,6 +279,37 @@ def _final_already_persisted(session: Session) -> bool:
         return False
     last = msgs[-1]
     return last.role == "assistant" and not getattr(last, "tool_calls", None)
+
+
+def _build_history_messages(session_messages: list) -> list:
+    """Convert session messages to langchain messages for deepagents input.
+
+    Unlike _to_langchain_messages (which prepends a SystemMessage), this only
+    returns user/assistant/tool messages — the system prompt is injected
+    separately by create_deep_agent's system_prompt parameter.
+
+    Drops phase_timeline system messages (observability metadata). Keeps
+    context_summary system messages (they carry compacted history the model
+    needs). The current turn's user message is the LAST element (already
+    appended to session before this call).
+    """
+    msgs: list = []
+    for m in session_messages:
+        if m.role == "user":
+            msgs.append(HumanMessage(content=m.content))
+        elif m.role == "assistant":
+            tcs = None
+            if m.tool_calls:
+                tcs = [{"name": tc.name, "args": tc.args, "id": tc.id, "type": "tool_call"} for tc in m.tool_calls]
+            msgs.append(AIMessage(content=m.content, tool_calls=tcs or []))
+        elif m.role == "tool":
+            msgs.append(ToolMessage(content=m.content, tool_call_id=m.tool_call_id or ""))
+        elif m.role == "system":
+            # Phase timelines are metadata — never shown to the model.
+            # Context summaries ARE shown (that's their purpose).
+            if getattr(m, "kind", None) != "phase_timeline":
+                msgs.append(HumanMessage(content=m.content))
+    return msgs
 
 
 def _handle_messages_mode(event, stream, session) -> None:
