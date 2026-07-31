@@ -157,6 +157,7 @@ def run_deep_agent(
     stream = stream or NullStream()
     # Lazy import: deepagents is a heavy dependency.
     from deepagents import create_deep_agent
+    from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
 
     session.append(Message.user(user_input))
 
@@ -224,6 +225,48 @@ def run_deep_agent(
         build_kwargs["system_prompt"] = system_prompt
     if extra_lc_tools:
         build_kwargs["tools"] = extra_lc_tools
+
+    # --- Research subagent: read-only analysis with context isolation ---
+    # The main agent delegates research/analysis tasks (read files, understand
+    # structure, summarize findings) to this subagent via the `task` tool. The
+    # subagent only has read-only tools (no write/execute) — physical isolation,
+    # not just prompt-level. Its tool calls don't pollute the main agent's
+    # context window. deepagents also adds the default general-purpose subagent
+    # (full tool access) alongside this one.
+    build_kwargs["subagents"] = [
+        {
+            "name": "research",
+            "description": (
+                "Read-only research and analysis agent. Use for: exploring an "
+                "unfamiliar codebase section, finding where a feature is "
+                "implemented, summarizing a file's purpose, or gathering "
+                "evidence to ground an analysis. This agent can read files "
+                "and search but CANNOT write or execute — it returns findings "
+                "as text. Use it when you need to read many files without "
+                "cluttering your own context."
+            ),
+            "system_prompt": (
+                "You are a research subagent. Your job is to investigate the "
+                "codebase and return clear, grounded findings.\n\n"
+                "Rules:\n"
+                "- Read the relevant files thoroughly before concluding.\n"
+                "- Quote specific lines/functions as evidence.\n"
+                "- Separate what you verified by reading from what you infer.\n"
+                "- Be concise: return only the findings the caller needs, not "
+                "a full retelling of every file you read.\n"
+                "- If you can't find something, say so explicitly.\n"
+                "- The calling agent only sees your final message, not your "
+                "intermediate tool calls — make sure your answer is complete."
+            ),
+            # Physical tool isolation: strip write/execute tools so the research
+            # subagent literally cannot modify files or run commands. Without
+            # this, subagents inherit ALL parent tools — a "read-only" claim in
+            # the description would be just a prompt-level suggestion.
+            "middleware": [
+                _ToolExclusionMiddleware(excluded=frozenset({"write_file", "edit_file", "execute", "write_todos"})),
+            ],
+        },
+    ]
 
     # --- Checkpointer: persist graph state across turns (sqlite) ---
     # Without a checkpointer, each run_deep_agent call starts from scratch —
