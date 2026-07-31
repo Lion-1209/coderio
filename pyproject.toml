@@ -29,6 +29,7 @@ authors = [
 project-urls = { Homepage = "https://github.com/Lion-1209/coderio", Issues = "https://github.com/Lion-1209/coderio/issues" }
 dependencies = [
     "ddgs>=4.0",
+    "deepagents>=0.6",
     "httpx>=0.27",
     "langchain-anthropic>=0.2",
     "langchain-core>=0.3",

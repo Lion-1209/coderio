@@ -1,4 +1,4 @@
-"""EXPERIMENTAL: Harness as a deepagents AgentMiddleware.
+"""Harness as a deepagents AgentMiddleware.
 
 This ports coderio's structural harness (the "wrote code but never verified →
 block done" hard constraint) into deepagents' middleware layer. The existing
@@ -13,15 +13,19 @@ constraint that must survive the migration. As a middleware, it intercepts:
   - after_model:    decide whether the model's "no tool_calls" (want-to-end) is
                     allowed, or force-continue via jump_to='model' (VerifyGate)
 
-Verified feasible via PoC: after_model returning {'jump_to':'model',
-'messages':[...]} forces the deepagents loop to continue (the core harness mechanic).
+CRITICAL: after_model MUST be decorated with @hook_config(can_jump_to=["model"]).
+Without it, langchain's factory sees can_jump_to=[] and does NOT build the
+conditional edge for this middleware, so jump_to='model' silently does nothing —
+the agent ends despite the harness wanting to force-continue. This was a latent
+bug in the original experimental version (verified against langchain factory.py
+_get_can_jump_to, which reads method.__can_jump_to__).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware
+from langchain.agents.middleware.types import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
 from coderio.agent.harness import Harness, HarnessState
@@ -51,6 +55,13 @@ def _result_to_text(result: Any) -> str:
     the harness success/failure heuristic."""
     if isinstance(result, str):
         return result
+    # deepagents ReadResult has an `error` attr for failed reads, and `file_data`
+    # for successful ones. Extract the error so the harness's not-found detection
+    # (harness.py: "not found" in result) works — otherwise ReadResult str() is
+    # "ReadResult(error='...')" which doesn't contain the bare "not found" phrase.
+    error = getattr(result, "error", None)
+    if isinstance(error, str) and error:
+        return error
     content = getattr(result, "content", None)
     if isinstance(content, str):
         return content
@@ -67,19 +78,46 @@ class HarnessMiddleware(AgentMiddleware):
     to track writes-since-verify, and intercepts the model's termination to block
     "done" when code was written but never run (escalating: force-continue twice,
     then release with a warning — never silent, never infinite).
+
+    Harness signals (force-continue / escalation-warn) are emitted via
+    runtime.stream_writer so the TUI's StreamHandler can show them. This is the
+    'custom' stream channel — distinct from 'messages' (token stream) and
+    'updates' (complete messages).
     """
 
     def __init__(self, stream=None, enabled: bool = True) -> None:
-        # deepagents manages its own todos via the write_todos tool; we keep a
-        # local TodoStore mirror so the CompletionGate has something to read.
-        # (In practice the VerifyGate is the critical one; CompletionGate is
-        # best-effort here since deepagents' todo model differs from coderio's.)
         self.harness = Harness(state=HarnessState(), todos=TodoStore(), enabled=enabled)
         self.stream = stream
+        self._runtime = None  # captured in wrap_tool_call / after_model
+
+    def _emit(self, runtime: Any, payload: dict) -> None:
+        """Send a custom stream event (harness_continue / harness_warn).
+
+        Uses runtime.stream_writer so the stream consumer (deep_loop.py) picks
+        it up via stream_mode='custom'. Falls back to the legacy stream callback
+        if no runtime (e.g. in unit tests without a real graph).
+        """
+        try:
+            if runtime is not None and hasattr(runtime, "stream_writer"):
+                runtime.stream_writer(payload)
+                return
+        except Exception:  # noqa: S110 — stream_writer may not be available in tests; fall back
+            pass
+        # Fallback: direct stream callback (for tests / non-graph contexts).
+        if self.stream is not None:
+            t = payload.get("type")
+            if t == "harness_continue" and hasattr(self.stream, "on_harness_continue"):
+                self.stream.on_harness_continue(payload.get("reason", ""))
+            elif t == "harness_warn" and hasattr(self.stream, "on_harness_warn"):
+                self.stream.on_harness_warn(payload.get("message", ""))
 
     # ------------------------------------------------------- observe tool calls
     def wrap_tool_call(self, request, handler):
-        """Observe every tool execution (ground truth) + apply PlanGate nudge."""
+        """Observe every tool execution (ground truth) + apply PlanGate nudge.
+
+        Also captures the runtime reference for after_model's stream_writer use.
+        """
+        self._runtime = getattr(request, "runtime", None) or self._runtime
         tc = getattr(request, "tool_call", None) or {}
         name = tc.get("name", "")
         args = dict(tc.get("args", {}) or {})
@@ -108,14 +146,20 @@ class HarnessMiddleware(AgentMiddleware):
         return result
 
     # ------------------------------------------------------- intercept termination
+    @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):
         """The model produced output. If it wants to end (no tool_calls) but the
         harness says verification is missing, force the loop to continue.
 
         Returns a state update dict: {'jump_to':'model','messages':[...]} to
         force-continue, or None to let the agent end normally. On escalation
-        release, fires stream.on_harness_warn (if a stream is attached).
+        release, emits a harness_warn signal via stream_writer.
+
+        The @hook_config(can_jump_to=["model"]) decorator is REQUIRED — without
+        it, langchain's factory doesn't build the conditional edge and jump_to
+        silently fails (the agent ends anyway).
         """
+        self._runtime = runtime or self._runtime
         messages = state.get("messages", []) if hasattr(state, "get") else getattr(state, "messages", [])
         last = messages[-1] if messages else None
         # Only intercept when the model returned final text (no tool calls).
@@ -139,8 +183,10 @@ class HarnessMiddleware(AgentMiddleware):
                 .replace("with bash", "with execute")
                 .replace("Run them with bash", "Run them with execute")
             )
+            # Emit a visible signal so the TUI explains why the agent keeps running.
+            self._emit(runtime, {"type": "harness_continue", "reason": inject})
             # Force-continue: inject the harness demand as a user message.
             return {"jump_to": "model", "messages": [HumanMessage(content=inject)]}
-        if warn and self.stream is not None and hasattr(self.stream, "on_harness_warn"):
-            self.stream.on_harness_warn(warn)
+        if warn:
+            self._emit(runtime, {"type": "harness_warn", "message": warn})
         return None

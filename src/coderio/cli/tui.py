@@ -2446,7 +2446,7 @@ def run_tui(
                         rt["cfg"] = c
                         rt["model"] = build_chat_model(c, creds_path=creds_path)
             return
-        from coderio.agent.loop import run_agent
+        from coderio.agent.deep_loop import run_deep_agent
         from coderio.cli.multimodal import build_user_content, extract_images
 
         imgs = extract_images(line)
@@ -2456,20 +2456,20 @@ def run_tui(
                 style="dim",
             )
         user_content = build_user_content(line)
-        eff_ctx = _resolve_effective_context(rt["cfg"])
-        run_agent(
+        # deepagents engine: provides context management, subagents, filesystem.
+        # coderio's harness + permission run as middleware. The old ReAct engine
+        # (loop.run_agent) is kept as fallback but no longer the default.
+        run_deep_agent(
             user_input=user_content,
             model=rt["model"],
-            tools=tools,
+            session=rt["session"],
+            stream=tui,
             gate=rt["gate"],
             skill_store=store,
             active_skills=active,
-            session=rt["session"],
-            stream=tui,
-            max_rounds=rt["cfg"].tools.max_tool_rounds,
-            stage_auto_inject=rt["cfg"].skills.stage_auto_inject,
+            tools=tools,
+            workdir=rt["cfg"].tools.workspace_root or None,
             harness_enabled=rt["cfg"].skills.harness,
-            context_cfg=eff_ctx,
         )
 
     def _load_session(sid: str) -> None:

@@ -345,7 +345,11 @@ class Harness:
                         # If the read returned "file not found", record it so the
                         # GroundingGate doesn't force re-reading a nonexistent path
                         # (regex false positives on prose path-like strings).
-                        if result and "file not found" in result.lower():
+                        # Match "not found" (not just "file not found") because
+                        # deepagents' ReadResult uses "File '...' not found"
+                        # and the ReAct engine uses "file not found" — both
+                        # contain "not found".
+                        if result and "not found" in result.lower():
                             self.state.not_found_files.add(_norm_path(v))
         elif name == VERIFY_TOOL:
             # A bash call clears "unverified writes" ONLY if it plausibly runs
@@ -629,10 +633,20 @@ def _cited_files(text: str) -> list[str]:
     Requires a code-ish extension so ordinary words ("step 2", "the loader") do
     not false-positive. De-dupes on basename+line so the same file cited twice
     with different line numbers only lists once for the user-facing message.
+
+    EXCLUDES file paths inside markdown table rows (``| src/foo.py | ... |``):
+    those are structural listings in a project map ("this file does X"), not
+    code-level citations claiming specific behavior. Without this exclusion,
+    a project-analysis table listing every module triggers the GroundingGate
+    on files the model listed but didn't deep-read — defeating the purpose of
+    the onboarding skill's first-pass overview.
     """
+    # Strip markdown table rows before matching — a path inside | ... | is a
+    # directory listing, not a citation. Only paths in prose/inline-code count.
+    prose = re.sub(r"^\s*\|.*\|\s*$", "", text, flags=re.MULTILINE)
     seen: set[str] = set()
     out: list[str] = []
-    for m in _CITED_FILE_RE.finditer(text):
+    for m in _CITED_FILE_RE.finditer(prose):
         path = m.group(0)
         if path not in seen:
             seen.add(path)
