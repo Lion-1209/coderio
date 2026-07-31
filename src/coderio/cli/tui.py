@@ -1132,7 +1132,31 @@ class SessionPickerScreen(ModalScreen[str | None]):
 
     def on_mount(self) -> None:
         self._populate()
-        self.query_one("#picker-filter", Input).focus()
+        # Focus the ListView (not the filter input) so ↑↓ navigation works
+        # immediately. The filter input still receives keystrokes via on_key
+        # forwarding when the user starts typing.
+        lv = self.query_one("#picker-list", ListView)
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+        lv.focus()
+
+    def on_key(self, event) -> None:
+        """Forward printable keys to the filter input; let ListView handle nav."""
+        inp = self.query_one("#picker-filter", Input)
+        if event.key in ("up", "down", "enter", "escape", "pageup", "pagedown"):
+            return  # ListView handles these natively when it has focus
+        # Printable character → route to filter input for live search
+        if len(event.character) == 1 and event.character.isprintable():
+            inp.focus()
+            inp.value += event.character
+            event.prevent_default()
+        elif event.key == "backspace":
+            inp.focus()
+            if inp.value:
+                inp.value = inp.value[:-1]
+            event.prevent_default()
 
     def _populate(self) -> None:
         """Rebuild the list from the (filtered) summaries."""
