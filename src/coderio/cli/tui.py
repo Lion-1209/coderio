@@ -340,6 +340,9 @@ class StatusBar(Widget):
         # to self.phase (which tracks model micro-activity: thinking/responding/tool).
         # Derived from harness ground truth via AgentStateTracker. Empty = unknown.
         self.task_phase: str = ""
+        # Turn-level token consumption (input + output). Reset on step_start,
+        # accumulated via add_usage, cleared on finish. 0 = not shown (idle).
+        self.turn_tokens: int = 0
         self._app = None
         self._spin_frame = 0  # cycles through _SPINNER each heartbeat while active
 
@@ -401,6 +404,14 @@ class StatusBar(Widget):
         """
         self.task_phase = task_phase
 
+    def set_turn_tokens(self, tokens: int) -> None:
+        """Update the turn-level token count shown in the status bar.
+
+        Safe from any thread (plain attribute write). Repainted by the heartbeat.
+        Pass 0 to hide (idle state).
+        """
+        self.turn_tokens = tokens
+
     def render(self) -> RenderableType:
         # Build a phase label that shows WHERE in the task the agent is, so the
         # user can distinguish "still working, step 3" from "frozen". The step
@@ -439,6 +450,9 @@ class StatusBar(Widget):
             parts.append(f"[{task_label}]")
         parts.append(label)
         parts.append(f"{elapsed:.1f}s")
+        # Turn-level token consumption (only while a turn is active).
+        if self.turn_tokens > 0:
+            parts.append(f"{self.turn_tokens} tok")
         body = " · ".join(parts)
         t = Text(no_wrap=True, overflow="ellipsis")
         t.append(spin + " ", style="bold cyan")
@@ -1798,6 +1812,11 @@ class CoderioTUI(App):
     # call_from_thread here.
     def on_step_start(self, step: int = 1) -> None:
         self._flush_round_thinking()
+        # Reset turn token counter at the start of each turn (step 1 = new turn).
+        if step == 1:
+            self.usage = {"input_tokens": 0, "output_tokens": 0}
+            if self._status_bar:
+                self._status_bar.set_turn_tokens(0)
         self._set_phase("thinking", step=step)
 
     def is_interrupted(self) -> bool:
@@ -2003,6 +2022,7 @@ class CoderioTUI(App):
         self._render_q.append(("finalize", buf, think_text, secs, had_live))
         if self._status_bar:
             self._status_bar.set_phase("idle")
+            self._status_bar.set_turn_tokens(0)
 
     def on_turn_end(self, writes: list[str]) -> None:
         """Turn-end summary: show a panel listing all files modified this turn.
@@ -2026,6 +2046,10 @@ class CoderioTUI(App):
         for k in ("input_tokens", "output_tokens"):
             if k in meta:
                 self.usage[k] += meta[k]
+        # Push the turn total to the StatusBar so it shows live token consumption.
+        if self._status_bar:
+            total = self.usage["input_tokens"] + self.usage["output_tokens"]
+            self._status_bar.set_turn_tokens(total)
 
     def on_phase_change(self, state: str, step: int, hint: str) -> None:
         """Task-level phase change (explore/plan/implement/verify/...).
