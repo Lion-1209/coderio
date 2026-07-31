@@ -133,6 +133,20 @@ class HarnessMiddleware(AgentMiddleware):
         coderio_name = _to_coderio_name(name)
         self.harness.observe(coderio_name, args, result_text)
 
+        # Subagent delegation: the task tool returns a subagent's findings,
+        # which may cite files the subagent read but the MAIN agent didn't.
+        # Without this, GroundingGate would flag those citations as ungrounded
+        # and force-continue — turning a complete analysis into a "correction".
+        # We extract file paths from the subagent's result and add them to the
+        # main agent's read set, so the gate treats them as "read via subagent".
+        if name == "task" and result_text:
+            from coderio.agent.harness import _cited_files, _norm_path
+
+            for cited in _cited_files(result_text):
+                # Strip :line suffix, normalize.
+                clean = cited.rsplit(":", 1)[0] if ":" in cited else cited
+                self.harness.state.content_read_files.add(_norm_path(clean))
+
         # PlanGate: nudge if writing without a todo list (soft, appends to result).
         aug = self.harness.after_tool_call(coderio_name, args, result_text)
         if aug and isinstance(result, str):

@@ -460,6 +460,74 @@ class StatusBar(Widget):
         return t
 
 
+class TodoPanel(Widget):
+    """Live todo list panel showing task progress.
+
+    Renders a compact bordered panel with each todo item prefixed by a status
+    icon (✓ completed / → in_progress / ○ pending). The title shows progress
+    count (e.g. '任务清单 2/5'). Hidden when there are no todos (height 0,
+    display none). Updated via the render queue's 'todo_update' instruction
+    (thread-safe — the agent thread pushes, the main thread drains).
+
+    Data comes from deepagents' write_todos tool: each call replaces the whole
+    list, so we just overwrite on every update.
+    """
+
+    DEFAULT_CSS = """
+    TodoPanel {
+        display: none;
+        height: auto;
+        max-height: 8;
+        background: $surface;
+        border: round $boost;
+        padding: 0 1;
+        margin: 0;
+    }
+    TodoPanel.-visible { display: block; }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._todos: list[dict] = []
+
+    def update_todos(self, todos: list[dict]) -> None:
+        """Replace the todo list and refresh (safe from any thread via render q).
+
+        `todos` is a list of {content: str, status: "pending"|"in_progress"|"completed"}.
+        """
+        self._todos = todos or []
+
+    def render(self) -> RenderableType:
+        if not self._todos:
+            return Text("")
+        done = sum(1 for t in self._todos if t.get("status") == "completed")
+        total = len(self._todos)
+        lines = []
+        for t in self._todos:
+            status = t.get("status", "pending")
+            content = t.get("content", "")
+            if status == "completed":
+                icon = "✓"
+                style = "dim green"
+            elif status == "in_progress":
+                icon = "→"
+                style = "bold yellow"
+            else:
+                icon = "○"
+                style = ""
+            lines.append((icon, content, style))
+        # Build the panel content
+        from rich.panel import Panel as RPanel
+        from rich.table import Table
+
+        table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
+        table.add_column(no_wrap=True, width=1)
+        table.add_column(overflow="ellipsis", no_wrap=True)
+        for icon, content, style in lines:
+            table.add_row(icon, content, style=style)
+        return RPanel(table, title=f"[bold]任务清单 {done}/{total}[/bold]", border_style="dim cyan", padding=(0, 1))
+
+
 class OnboardingScreen(ModalScreen[dict | None]):
     """TUI-based onboarding wizard (multi-step ModalScreen).
 
@@ -1215,6 +1283,7 @@ class CoderioTUI(App):
         # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
             yield CommandMenu(slash_completions())
+            yield TodoPanel()
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
@@ -1419,6 +1488,21 @@ class CoderioTUI(App):
         self.exit()
         return "none"
 
+    @staticmethod
+    def _h_todo_update(self, args):
+        """Update the TodoPanel with a new todo list (main thread)."""
+        try:
+            panel = self.query_one(TodoPanel)
+            panel.update_todos(args[0])
+            if args[0]:
+                panel.add_class("-visible")
+            else:
+                panel.remove_class("-visible")
+            panel.refresh()
+        except Exception:
+            pass
+        return "none"
+
     # Dispatch table: action name -> handler. Built once at class definition.
     # Handlers are staticmethods taking (self, args) so they can live in the
     # table without binding overhead.
@@ -1432,6 +1516,7 @@ class CoderioTUI(App):
         "panel": _h_panel,
         "clear_live": _h_clear_live,
         "exit": _h_exit,
+        "todo_update": _h_todo_update,
     }
 
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
@@ -1887,6 +1972,17 @@ class CoderioTUI(App):
             tool_index=tool_index,
             tool_total=tool_total,
         )
+        # Special-case the `task` tool (subagent delegation): show a friendly
+        # notice instead of the raw (very long) args. The subagent runs
+        # synchronously inside the tools node — the main agent blocks until it
+        # finishes, which can take minutes. Without this notice the user sees
+        # a frozen "执行 task(…)" with no indication that a subagent is working.
+        if name == "task":
+            subagent = args.get("subagent_type", "general-purpose")
+            desc = args.get("description", "") or args.get("instructions", "")
+            desc_short = desc.split("\n")[0][:80] if desc else ""
+            self._render_q.append(("static", f"🔄 委派子 agent [{subagent}]：{desc_short}…（执行中，请稍候）", "cyan"))
+            return
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"
@@ -2039,6 +2135,15 @@ class CoderioTUI(App):
         if self._status_bar:
             total = self.usage["input_tokens"] + self.usage["output_tokens"]
             self._status_bar.set_turn_tokens(total)
+
+    def on_todos_update(self, todos: list[dict]) -> None:
+        """Push a todo list update to the render queue (agent background thread).
+
+        Called when deepagents' write_todos tool fires. The whole list is
+        replaced each call. The main-thread drain picks this up and updates
+        the TodoPanel widget.
+        """
+        self._render_q.append(("todo_update", todos))
 
     def on_phase_change(self, state: str, step: int, hint: str) -> None:
         """Task-level phase change (explore/plan/implement/verify/...).

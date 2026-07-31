@@ -510,25 +510,20 @@ def test_non_retryable_tool_error_is_classified(tmp_path):
     assert "PermissionError" in tool_results[0].content
 
 
-def test_grounding_gate_intercepts_unread_citation_then_passes(tmp_path):
-    """Loop-level integration of GroundingGate.
+def test_grounding_gate_skipped_in_analyze_mode(tmp_path):
+    """GroundingGate does NOT fire in ANALYZE mode (pure reads, no writes).
 
-    Scenario: the model analyzes loader.py, citing 'loader.py:81', but never read
-    the file. The gate must force-continue (inject a demand to read it). On the
-    next round the model reads the file, then its answer passes cleanly.
+    The model cites a file it didn't read, but since there are no writes this
+    turn, the gate is skipped — analysis output passes through unblocked.
 
-    This is the exact failure mode observed in coderio's self-analysis: it trusted
-    documentation over source and made wrong claims about config.harness wiring.
+    CODE-mode grounding behavior (writes → gate checks citations) is covered
+    by the unit tests in test_harness.py with with_write=True.
     """
     f = tmp_path / "loader.py"
     f.write_text("HARNESS = True\n", encoding="utf-8")
     model = _model_returning(
-        # round 1: cites loader.py:81 WITHOUT reading it
+        # round 0: cites loader.py:81 WITHOUT reading it, no writes this turn
         AIMessage(content="loader.py:81 已经接入了 config.harness，没问题。", tool_calls=[]),
-        # round 2: after the harness nudge, reads the file
-        _tool_call_msg("read_file", {"path": str(f)}),
-        # round 3: grounded answer
-        AIMessage(content="loader.py 确认接入了。", tool_calls=[]),
     )
     session = Session.create(tmp_path, {"meta": "test"})
     stream = _RecStream()
@@ -541,14 +536,11 @@ def test_grounding_gate_intercepts_unread_citation_then_passes(tmp_path):
         active_skills=ActiveSkills(),
         session=session,
         stream=stream,
-        max_rounds=10,
+        max_rounds=5,
     )
-    # the harness injected a [harness] demand to read the cited file
+    # No harness force-continue — the answer passes through (ANALYZE mode skip).
     harness_msgs = [m.content for m in session.messages if m.role == "user" and m.content.startswith("[harness]")]
-    assert len(harness_msgs) == 1, "expected grounding gate to force-continue once"
-    assert "loader.py" in harness_msgs[0]
-    assert "read_file" in harness_msgs[0]
-    # after reading, the final answer passes — no escalation warning
+    assert len(harness_msgs) == 0, "GroundingGate should NOT fire in ANALYZE mode (no writes)"
     assert "loader.py" in final
     assert stream.warnings == [], "should pass cleanly once the file is read"
 

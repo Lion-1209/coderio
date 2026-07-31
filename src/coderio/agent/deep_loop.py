@@ -484,6 +484,11 @@ def _emit_message(m, stream, session, seen_ids: set, turn_writes: list) -> str:
                     if hasattr(stream, "on_tool_start"):
                         stream.on_tool_start(name, args)
                     seen_ids.add(tc_id)
+                # Intercept write_todos: deepagents replaces the whole list each
+                # call, so args["todos"] is the current full todo list. Push it
+                # to the UI for the live todo panel.
+                if name == "write_todos" and "todos" in args and hasattr(stream, "on_todos_update"):
+                    stream.on_todos_update(args["todos"])
                 tcs.append(ToolCall(id=tc_id, name=name, args=args))
             session.append(Message.assistant(text, tool_calls=tcs))
             return ""

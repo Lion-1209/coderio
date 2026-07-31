@@ -39,6 +39,11 @@ class StreamHandler(Protocol):
     # edit_file / multi_edit). Lets the UI show a "files changed" summary —
     # matching the "always show what changed" UX of claude code / zcode.
     def on_turn_end(self, writes: list[str]) -> None: ...
+    # Todo list updated (deepagents write_todos tool). `todos` is a list of
+    # {content: str, status: "pending"|"in_progress"|"completed"}. The whole
+    # list is replaced each time (not incremental). Lets the UI render a live
+    # todo progress panel.
+    def on_todos_update(self, todos: list[dict]) -> None: ...
 
 
 class NullStream:
@@ -82,4 +87,7 @@ class NullStream:
         pass
 
     def on_turn_end(self, writes: list[str]) -> None:
+        pass
+
+    def on_todos_update(self, todos: list[dict]) -> None:
         pass

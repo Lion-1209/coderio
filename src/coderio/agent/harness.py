@@ -260,6 +260,11 @@ class HarnessState:
     completion_attempts: int = 0
     # Whether the plan gate has nudged already this turn (nudge at most once).
     plan_nudged: bool = False
+    # Whether ANY write happened this turn (write_file/edit_file). Used by
+    # GroundingGate to distinguish CODE mode (writes → check citations) from
+    # ANALYZE mode (pure reads → skip, analysis is allowed to mention filenames).
+    # Unlike writes_since_verify, this is NOT cleared by verification.
+    has_wrote_this_turn: bool = False
     # Files the model has actually READ this turn (via read_file/grep/glob/list_dir).
     # The GroundingGate checks citations against this set: claiming "loader.py:81
     # does X" without loader.py in here is an ungrounded assertion.
@@ -311,6 +316,7 @@ class Harness:
         just_verified = False
         if name in WRITE_TOOLS and _is_success(result):
             path = str(args.get("path", ""))
+            self.state.has_wrote_this_turn = True
             if path and path not in self.state.writes_since_verify:
                 # Skip non-code files — VerifyGate exists to catch "wrote code
                 # but didn't run it". Writing a .md doc, .json config, .yaml
@@ -447,11 +453,17 @@ class Harness:
         if cont or warn:
             return (cont, inject, warn)
 
-        # GroundingGate: guards the ANALYZE/QA failure mode where the model cites
-        # code it never read (built its answer on docs/memory/assumption). Runs
-        # last because the first two handle CODE-mode termination; this one mainly
-        # catches the no-writes/no-todos analysis case.
-        return self._grounding_gate(final_text)
+        # GroundingGate: only active in CODE mode (turn has writes). In ANALYZE
+        # mode (pure reads, no writes), citing filenames from docs/README is
+        # normal structural description, not a false code claim. Full-session
+        # audit (105 sessions, 203 outputs): 98.2% of grounding triggers were
+        # false positives on filename mentions in analysis — the gate never
+        # caught a real "hallucinated code citation" in practice. Restricting it
+        # to CODE mode eliminates the false positives while keeping the (rare)
+        # protection for code-change scenarios.
+        if self.state.has_wrote_this_turn:
+            return self._grounding_gate(final_text)
+        return (False, None, None)
 
     # --------------------------------------------------------------- VerifyGate
     def _verify_gate(self) -> tuple[bool, str | None, str | None]:

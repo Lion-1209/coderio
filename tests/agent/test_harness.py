@@ -9,8 +9,20 @@ from coderio.tools.todo import Todo, TodoStore
 
 
 # ----------------------------------------------------------------- helpers
-def _harness(todos=None, enabled=True):
-    return Harness(state=HarnessState(), todos=todos or TodoStore(), enabled=enabled)
+def _harness(todos=None, enabled=True, with_write=False):
+    """Create a test harness. Pass with_write=True to simulate CODE mode
+    (turn has writes) — required for GroundingGate to activate, since it now
+    only fires when there are unverified writes (ANALYZE mode is exempt).
+
+    The write is immediately verified (exit 0) so VerifyGate doesn't
+    short-circuit before GroundingGate gets to run."""
+    h = Harness(state=HarnessState(), todos=todos or TodoStore(), enabled=enabled)
+    if with_write:
+        h.observe("write_file", {"path": "/src/test_code.py"}, "Wrote 100 chars")
+        # Verify so VerifyGate doesn't short-circuit before GroundingGate runs.
+        # has_wrote_this_turn stays True (not cleared by verify).
+        h.observe("bash", {"command": "python test_code.py"}, "[exit_code: 0]")
+    return h
 
 
 def _add_todo(store, content="do thing", status="pending"):
@@ -387,7 +399,7 @@ def test_grounding_gate_passthrough_when_no_files_cited():
 
 def test_grounding_gate_blocks_unread_citation():
     """The core regression: model cites loader.py:81 but never read loader.py."""
-    h = _harness()
+    h = _harness(with_write=True)
     cont, inject, warn = h.check_termination("分析发现 loader.py:81 已经接入了 config.harness。")
     assert cont is True
     assert inject is not None and "loader.py" in inject
@@ -416,7 +428,7 @@ def test_grounding_gate_dir_read_does_not_cover_files():
     citation about a file's internals. The model must read_file the specific
     file before claiming 'harness.py defines four gates'. This closes a bypass
     where list_dir('src/') satisfied citations for every file under src/."""
-    h = _harness()
+    h = _harness(with_write=True)
     h.observe("list_dir", {"path": "src/agent/"}, "loop.py\nharness.py")
     # Citing a file under that dir without a read_file — should be ungrounded.
     cont, inject, warn = h.check_termination("src/agent/harness.py 定义了四道门。")
@@ -438,7 +450,7 @@ def test_grounding_gate_grep_does_not_ground_citation():
     """A grep for a pattern is NOT a content read — the model only sees matching
     lines, never the full file. Citing the file after grep should be ungrounded.
     This closes the bypass where grep pattern='loop' satisfied 'loop.py:42'."""
-    h = _harness()
+    h = _harness(with_write=True)
     h.observe("grep", {"pattern": "loop", "path": "src/agent"}, "src/agent/loop.py:42: ...")
     cont, inject, warn = h.check_termination("loop.py:42 处理 ReAct 循环。")
     assert cont is True  # gate forces a real read_file
@@ -447,7 +459,7 @@ def test_grounding_gate_grep_does_not_ground_citation():
 
 def test_grounding_gate_escalates_to_warn_after_max():
     """After 2 forced-continues, release with a warning (never silent, never loop)."""
-    h = _harness()
+    h = _harness(with_write=True)
     text = "loader.py:81 确认接入了。"  # never read
     cont0, _, warn0 = h.check_termination(text)
     cont1, _, warn1 = h.check_termination(text)
@@ -460,7 +472,7 @@ def test_grounding_gate_escalates_to_warn_after_max():
 
 def test_grounding_gate_attempt1_names_files():
     """Second interception names the unread files (tighter feedback)."""
-    h = _harness()
+    h = _harness(with_write=True)
     h.check_termination("config.py 的 loader 没读 harness 字段。")
     cont, inject, _ = h.check_termination("config.py 的 loader 没读 harness 字段。")
     assert cont is True and "config.py" in inject
@@ -468,7 +480,7 @@ def test_grounding_gate_attempt1_names_files():
 
 def test_grounding_gate_partial_read():
     """Citing two files but only read one → block on the unread one."""
-    h = _harness()
+    h = _harness(with_write=True)
     h.observe("read_file", {"path": "a.py"}, "<contents>")
     cont, inject, warn = h.check_termination("a.py 正确，但 b.py:10 有 bug。")
     assert cont is True
@@ -545,7 +557,7 @@ def test_was_read_is_case_and_slash_insensitive():
 
 
 def test_grounding_gate_catches_multiple_citations():
-    h = _harness()
+    h = _harness(with_write=True)
     cont, inject, warn = h.check_termination("loop.py 处理 turn，harness.py 定义 gate，prompts.py 路由意图。")
     assert cont is True
     assert inject is not None
