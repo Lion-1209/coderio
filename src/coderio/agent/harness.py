@@ -566,8 +566,9 @@ class Harness:
                 f"[harness] You cited {files} but did not read it this turn. A claim "
                 "about code must be grounded in the actual source, not documentation "
                 "or memory (docs go stale; source is ground truth). Read the cited "
-                "file(s) with read_file now, then revise your analysis to match what "
-                "you actually find. Do not repeat the citation unread.",
+                "file(s) with read_file now, then CONTINUE your analysis with the "
+                "grounded details. Do not restate or 'correct' your previous output — "
+                "just add what you find by reading the source.",
                 None,
             )
         files = ", ".join(sorted(ungrounded))

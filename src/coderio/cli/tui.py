@@ -1720,7 +1720,7 @@ class CoderioTUI(App):
                         (
                             "panel",
                             Panel(
-                                f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。",
+                                Text(f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。"),
                                 title="⚠ 运行错误",
                                 border_style="red",
                             ),
@@ -1916,7 +1916,7 @@ class CoderioTUI(App):
                 (
                     "panel",
                     Panel(
-                        f"⚠ {result}\n\n建议用 /clear 清理上下文后重试，或检查模型状态。",
+                        Text(f"⚠ {result}\n\n建议用 /clear 清理上下文后重试，或检查模型状态。"),
                         title="⚠ 会话中断",
                         border_style="red",
                     ),
@@ -1940,7 +1940,7 @@ class CoderioTUI(App):
             (
                 "panel",
                 Panel(
-                    f"⚠ 输出被截断 (stop_reason: {stop_reason})。",
+                    Text(f"⚠ 输出被截断 (stop_reason: {stop_reason})。"),
                     title="截断警告",
                     border_style="yellow",
                 ),
@@ -1963,7 +1963,7 @@ class CoderioTUI(App):
             (
                 "panel",
                 Panel(
-                    f"⚠ {message}\n\n产出可能未经验证，请人工复核。",
+                    Text(f"⚠ {message}\n\n产出可能未经验证，请人工复核。"),
                     title="⚠ harness 警告",
                     border_style="red",
                 ),
@@ -1973,23 +1973,12 @@ class CoderioTUI(App):
     def on_harness_continue(self, reason: str) -> None:
         """Surface a harness force-continue as a dim notice line.
 
-        Distinct from on_harness_warn (red escalation panel): this is a normal
-        control-flow event, not an error. The model produced what looked like a
-        final answer but the harness found unfinished work and demanded more.
-
-        IMPORTANT: do NOT flush the buffer as a '中间输出' Panel — that would
-        make the model's analysis look like a finished answer (cyan border),
-        confusing the user when the real final answer arrives later. Instead,
-        flush the thinking only (not the text buffer), and show a dim notice.
-        The buffer text is silently dropped (the model will re-output after
-        reading the demanded files), which is the correct behavior — the user
-        sees the harness demand + a dim notice, not a misleading 'answer'."""
+        The model produced what looked like a final answer but the harness found
+        unfinished work and demanded more. Flush the first output as an
+        intermediate panel (user can see it) then show a dim notice.
+        """
         self._flush_round_thinking()
-        # Clear the buffer WITHOUT rendering it as a panel — the model's text
-        # was a draft that harness rejected; the model will produce a better
-        # version after reading the demanded files.
-        self._render_q.append(("clear_live",))
-        self.buffer = ""
+        self._flush_buffer()
         first_line = reason.splitlines()[0] if reason else ""
         if len(first_line) > 120:
             first_line = first_line[:117] + "…"

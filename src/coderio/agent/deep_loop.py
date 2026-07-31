@@ -318,10 +318,6 @@ def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: lis
         msgs = payload.get("messages", [])
         for m in msgs:
             final_text = _emit_message(m, stream, session, seen_ids, turn_writes) or final_text
-        # Usage metadata (for /cost).
-        usage = payload.get("usage_metadata") or {}
-        if usage and hasattr(stream, "add_usage"):
-            stream.add_usage(usage)
     return final_text
 
 
@@ -347,6 +343,13 @@ def _emit_message(m, stream, session, seen_ids: set, turn_writes: list) -> str:
     if isinstance(m, AIMessage):
         text = _content_to_text(getattr(m, "content", ""))
         tool_calls = getattr(m, "tool_calls", None) or []
+        # Usage metadata lives on the AIMessage object (not in the updates
+        # payload dict). Extract it here so the status bar can show live token
+        # consumption. Without this, add_usage is never called (the old code
+        # looked for it in payload.get("usage_metadata") which is always empty).
+        usage = getattr(m, "usage_metadata", None)
+        if usage and hasattr(stream, "add_usage"):
+            stream.add_usage(usage)
         if tool_calls:
             from coderio.session import ToolCall
 
