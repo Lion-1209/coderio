@@ -276,7 +276,7 @@ def run_deep_agent(
     # and we only pass the NEW user message. Falls back to full-history mode
     # if sqlite is unavailable (package missing or DB corrupted).
     thread_id = session.id
-    checkpointer = _try_create_checkpointer(session)
+    checkpointer, _db_conn = _try_create_checkpointer(session)
     if checkpointer is not None:
         build_kwargs["checkpointer"] = checkpointer
 
@@ -304,13 +304,22 @@ def run_deep_agent(
     _seen_tool_calls: set[str] = set()
     _turn_writes: list[str] = []
 
-    for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
-        if mode == "messages":
-            _handle_messages_mode(event, stream, session)
-        elif mode == "updates":
-            final_text = _handle_updates_mode(event, stream, session, _seen_tool_calls, _turn_writes) or final_text
-        elif mode == "custom":
-            _handle_custom_mode(event, stream)
+    try:
+        for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
+            if mode == "messages":
+                _handle_messages_mode(event, stream, session)
+            elif mode == "updates":
+                final_text = _handle_updates_mode(event, stream, session, _seen_tool_calls, _turn_writes) or final_text
+            elif mode == "custom":
+                _handle_custom_mode(event, stream)
+    finally:
+        # Close the sqlite connection to avoid leaking file handles (Windows
+        # locks open sqlite files, preventing deletion of the session dir).
+        if _db_conn is not None:
+            try:
+                _db_conn.close()
+            except Exception:  # noqa: S110 — best-effort close, don't crash on cleanup
+                pass
 
     if hasattr(stream, "on_finish"):
         stream.on_finish()
@@ -337,33 +346,27 @@ def _final_already_persisted(session: Session) -> bool:
 def _try_create_checkpointer(session: Session):
     """Create a SqliteSaver for graph state persistence.
 
-    Stores checkpoint state alongside the session jsonl (same directory,
-    {session_id}.sqlite). Returns None if sqlite is unavailable or the DB
-    can't be created (caller falls back to full-history mode).
+    Returns (checkpointer, conn) or (None, None). The caller MUST close the
+    conn after use to avoid leaking file handles (especially on Windows where
+    open sqlite files can't be deleted).
 
-    The checkpointer lets deepagents restore prior conversation state across
-    run_deep_agent calls — we only pass the new user message instead of the
-    full history. It also makes SummarizationMiddleware's accumulated state
-    (offload tracking, token counts) persist correctly across turns.
+    Stores checkpoint state alongside the session jsonl (same directory,
+    {session_id}.sqlite).
     """
     try:
         import sqlite3
 
         from langgraph.checkpoint.sqlite import SqliteSaver
 
-        # Place the sqlite DB next to the session jsonl file.
         db_path = session.path.parent / f"{session.id}.sqlite"
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
         checkpointer = SqliteSaver(conn)
-        # SqliteSaver needs table setup on first use.
         checkpointer.setup()
-        return checkpointer
+        return checkpointer, conn
     except ImportError:
-        # langgraph-checkpoint-sqlite not installed — fall back gracefully.
-        return None
+        return None, None
     except Exception:
-        # DB corrupted / locked / permission error — don't crash the agent.
-        return None
+        return None, None
 
 
 def _build_history_messages(session_messages: list) -> list:

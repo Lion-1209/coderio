@@ -133,6 +133,21 @@ class HarnessMiddleware(AgentMiddleware):
         coderio_name = _to_coderio_name(name)
         self.harness.observe(coderio_name, args, result_text)
 
+        # Sync deepagents' write_todos into the harness's TodoStore so
+        # CompletionGate can check for pending todos. Without this, the store
+        # stays empty and CompletionGate short-circuits (never blocks "done"
+        # even when todos are unfinished).
+        if name == "write_todos" and "todos" in args:
+            from coderio.tools.todo import Todo
+
+            todos_data = args["todos"]
+            if isinstance(todos_data, list):
+                self.harness.todos.todos = [
+                    Todo(content=t.get("content", ""), status=t.get("status", "pending"))
+                    for t in todos_data
+                    if isinstance(t, dict)
+                ]
+
         # Subagent delegation: the task tool returns a subagent's findings,
         # which may cite files the subagent read but the MAIN agent didn't.
         # Without this, GroundingGate would flag those citations as ungrounded
