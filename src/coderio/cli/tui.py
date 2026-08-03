@@ -1114,6 +1114,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "取消", show=True),
+        Binding("delete", "delete_selected", "删除", show=True),
     ]
 
     def __init__(self, summaries: list[dict]) -> None:
@@ -1124,7 +1125,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
             yield Static(
-                "[bold]恢复会话[/bold]  ↑↓ 选择 · Enter 恢复 · Esc 取消 · 输入过滤",
+                "[bold]恢复会话[/bold]  ↑↓ 选择 · Enter 恢复 · Del 删除 · Esc 取消 · 输入过滤",
                 id="picker-title",
             )
             yield ListView(id="picker-list")
@@ -1185,6 +1186,43 @@ class SessionPickerScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_delete_selected(self) -> None:
+        """Delete the currently highlighted session (jsonl + sqlite).
+
+        Removes the session files from disk, drops the entry from the list,
+        and re-populates. Stays in the picker so the user can resume another
+        session or cancel. If the list becomes empty, auto-dismiss.
+        """
+        lv = self.query_one("#picker-list", ListView)
+        if not lv.children or lv.index is None:
+            return
+        item = lv.children[lv.index]
+        sid = item.name or ""
+        if not sid:
+            return
+        # Delete the session files (jsonl + optional sqlite checkpoint).
+        from pathlib import Path
+
+        sessions_dir = Path.home() / ".coderio" / "sessions"
+        for suffix in (".jsonl", ".sqlite", ".sqlite-wal", ".sqlite-shm"):
+            p = sessions_dir / f"{sid}{suffix}"
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+        # Remove from the in-memory list and re-populate.
+        self._all = [s for s in self._all if s["id"] != sid]
+        self._populate()
+        if not self._all:
+            self.dismiss(None)  # no sessions left → close picker
+        else:
+            # Re-select an item (index may be None after _populate clears).
+            try:
+                lv.index = 0
+            except Exception:
+                pass
 
 
 class CoderioTUI(App):
