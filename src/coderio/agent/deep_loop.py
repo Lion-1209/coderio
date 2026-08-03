@@ -156,8 +156,17 @@ def run_deep_agent(
     """
     stream = stream or NullStream()
     # Lazy import: deepagents is a heavy dependency.
+    # Neutralize deepagents' BASE_AGENT_PROMPT. create_deep_agent appends it
+    # after coderio's system_prompt (graph.py:863), causing conflicts (e.g.
+    # "explore first" vs "match effort", macOS path examples vs virtual paths).
+    # coderio's prompt already covers everything — set BASE to empty so only
+    # coderio's prompt reaches the model. Done once per process (idempotent).
+    import deepagents.graph as _dg_graph
     from deepagents import create_deep_agent
     from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
+
+    if _dg_graph.BASE_AGENT_PROMPT:
+        _dg_graph.BASE_AGENT_PROMPT = ""
 
     session.append(Message.user(user_input))
 

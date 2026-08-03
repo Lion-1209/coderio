@@ -24,11 +24,12 @@ Core philosophy: **skills are the playbook, the harness is discipline, tools are
 
 - **Harness four-gate hard constraint**: when the agent writes code but tries to declare "done" without running it, the harness intercepts and force-continues — not a soft prompt rule, but system-level structural control (based on tool-call ground truth)
 - **Explicit state machine**: real-time phase derivation (explore→plan→implement→verify→complete), status bar shows task phase + model activity dual-axis; per-turn phase timeline persisted to session for replay/debugging
-- **Automatic context compaction**: when a long conversation approaches the token limit, old messages are summarized into a system message, preserving recent context + tool_call/tool_result pair integrity to avoid window-overflow failures
-- **Context-rot auto-restart**: when the agent gets stuck in a tool-call loop or exhausts max rounds, automatically retries once from a compacted clean context
+- **deepagents engine**: production engine built on [deepagents](https://github.com/langchain-ai/deepagents), with built-in context management (offload + summarization), subagents (task tool, including a read-only research subagent), filesystem backend, and persistent checkpoints (SqliteSaver); **fully replaces deepagents' default prompt** — coderio's system prompt is the only one, no conflicts
+- **Persistent checkpoints**: graph state persists across turns to sqlite; only the new user message is passed (not full history); SummarizationMiddleware's accumulated state persists correctly
+- **Automatic context compaction**: deepagents' SummarizationMiddleware triggers at 85% of the context window — old messages are offloaded to files + LLM-summarized, preserving recent context
 - **Intent classification**: automatically distinguishes CODE / QA / ANALYZE intents — coding tasks follow the workflow, questions get direct answers (bilingual CN/EN signal words)
 - **Progressive disclosure**: skill bodies load on-demand, system prompt ~2K tokens instead of dumping everything
-- **Interactive TUI**: Textual terminal UI with foldable thinking (Ctrl+O), streaming output, tool-call status bar (animated spinner + step + task phase + timer), slash-command autocomplete, session resume picker
+- **Interactive TUI**: Textual terminal UI with foldable thinking (Ctrl+O), streaming output, tool-call status bar (animated spinner + step + task phase + timer + **turn token count**), slash-command autocomplete, **collapsible TODO panel** (live progress ✓/→/○), **vertical permission menu** (↑↓ + Enter, zcode/codex style), **session management** (`/resume` + Del to delete), **visual pickers** (`/mode` `/profile`), **file change visualization**, **task interrupt** (Esc / ⏹ button), **error recovery**
 - **deepagents engine**: production engine built on [deepagents](https://github.com/langchain-ai/deepagents), with built-in context management (offload + summarization), subagents (task tool), and filesystem backend; coderio's harness four gates + four-tier permissions retained as middleware
 - **Tool error resilience**: tool failures become tool results fed back to the model for self-correction, never crash the turn
 - **Multi-provider + named profiles**: Zhipu GLM / StepFun coding plans (Anthropic protocol) + OpenAI + Anthropic + Ollama + custom; supports multiple config profiles with `/profile` runtime switching
@@ -156,18 +157,20 @@ The old ReAct engine (`agent/loop.py`) is kept as a fallback.
 |------|----------|-----------|
 | **VerifyGate** | Hard, progressive escalation | Wrote code but didn't run bash before declaring "done" → intercept, inject forced continuation; released after 2 attempts + red warning |
 | **CompletionGate** | Hard | Non-trivial todos remain when declaring "done" → intercept |
-| **GroundingGate** | Hard | Cites code locations never read_file'd when declaring "done" → intercept (grep/list_dir don't count as reading content — prevents analysis built on assumptions) |
+| **GroundingGate** | Hard (CODE mode only) | After writing code, cites files never read_file'd when declaring "done" → intercept; **ANALYZE mode (pure reads) skips** — mentioning filenames in analysis is normal (based on 105-session audit: 98.2% false positive rate, never caught a real hallucinated citation) |
 | **PlanGate** | Soft nudge | Writes code without any todos → append nudge to tool result |
 
-### Context management (three layers)
+### Context management
 
-The hardest problems in long sessions are context-window overflow and the agent "spinning". coderio has three defense layers:
+deepagents' SummarizationMiddleware manages context automatically:
 
-| Layer | Trigger | Mechanism |
-|-------|---------|-----------|
-| **Context compaction** | input_tokens > 75% of window | Old messages summarized into a system message, preserving recent context + tool_call pair integrity |
-| **Context-rot detection** | Same tool call repeated >3 times / max rounds exhausted | Flagged as `TurnResult.in_tool_loop` / `hit_max_rounds` |
-| **Auto-restart** | Context-rot detected | Retries the same prompt once from a compacted clean context (max 1 retry) |
+| Mechanism | Trigger | Behavior |
+|-----------|---------|----------|
+| **Offload** | tool input/output >20k tokens | Large content stored to file + pointer left, doesn't consume context |
+| **Summarize** | token count reaches 85% of window | Old messages LLM-summarized + original offloaded to `/conversation_history/` |
+| **Checkpoint** | each turn ends | graph state persisted to sqlite, next turn only passes the new message |
+
+The old ReAct engine's self-built compaction (`compact.py`) is kept as a fallback.
 
 ### Explicit state machine
 

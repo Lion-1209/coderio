@@ -22,14 +22,14 @@
 
 ## 特性
 
-- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；**智能跳过非代码文件**（写 .md/.json/.yaml 文档不强制 pytest）；GroundingGate 跨 session 记忆已读文件 + 路径归一化（Windows 大小写不敏感）+ 跳过不存在的引用路径
+- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；**智能跳过非代码文件**（写 .md/.json/.yaml 文档不强制 pytest）；GroundingGate 只在 CODE 模式生效（分析/问答场景不拦截文件名提及）；CompletionGate 检查未完成 todo
 - **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
-- **上下文自动压缩**：长会话接近 token 上限时，旧消息自动总结成摘要，保留近期上下文 + tool_call/tool_result 配对完整性，避免超窗失败；空响应时主动压缩再重试（而非无意义重发"请继续"）；压缩摘要持久化到 session，跨轮加载时自动截断旧历史
-- **context-rot 自动重启**：检测到 agent 陷入工具调用循环或耗尽轮数上限时，从压缩后的干净上下文自动重试一次
-- **自动探测上下文窗口**：首次配置时自动查询 provider 的 `/v1/models/{id}` 端点探测真实 context window（如 step-3.7-flash 的 256K），持久化到配置——压缩阈值精确匹配实际模型，不再用硬编码默认值
+- **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具，含只读 research 子 agent）、文件系统后端、持久化检查点（SqliteSaver）；**完全替换 deepagents 默认 prompt**，coderio 的 system prompt 独占，无冲突
+- **持久化检查点**：graph state 跨 turn 持久化到 sqlite，只需传新消息（不重传完整历史）；SummarizationMiddleware 的累积状态正确保持
+- **上下文自动压缩**：deepagents 的 SummarizationMiddleware 在接近上下文窗口 85% 时自动触发——旧消息 offload 到文件 + LLM 摘要，保留近期上下文
 - **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
-- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器）、slash 命令自动补全、会话恢复选择器、**权限/配置可视化选择器**（`/mode` `/profile` 弹窗选择）、**文件修改可视化**（即时黄色提示 + 轮末汇总面板）、**任务中断**（Esc / ⏹ 按钮，不退出 TUI）、**错误恢复**（红色面板 + 输入回填重试）
+- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器 + **turn token 计数**）、slash 命令自动补全、**可折叠 TODO 面板**（实时进度 ✓/→/○）、**纵向权限确认菜单**（↑↓ + Enter，zcode/codex 风格）、**会话管理**（`/resume` 恢复 + Del 删除）、**权限/配置可视化选择器**（`/mode` `/profile`）、**文件修改可视化**、**任务中断**（Esc / ⏹ 按钮）、**错误恢复**
 - **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端；coderio 的 harness 四道门 + 四级权限作为 middleware 保留
 - **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）、**自动激活项目 .venv**（bash 里的 python 自动指向虚拟环境）
 - **工作区路径策略（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
@@ -181,6 +181,10 @@ coderio 用 deepagents 作为主引擎（上下文管理、子 agent、文件系
 | **HarnessMiddleware** | coderio 的四道门硬约束（验证/完成/grounding/plan），deepagents 本身不强制验证 |
 | **PermissionMiddleware** | 四级权限（plan/confirm/auto_edit/full）+ 工作区路径边界 |
 
+deepagents 的默认 BASE_AGENT_PROMPT 被清空——coderio 的 system prompt 独占，避免两套指令冲突。
+
+**子 agent**：内置 research 子 agent（只读，物理隔离不能写不能执行）+ general-purpose（全工具）。主 agent 通过 task 工具按需委派，上下文隔离。
+
 旧的 ReAct 引擎（`agent/loop.py`）保留为 fallback。
 
 ### harness 四道门（核心）
@@ -189,19 +193,20 @@ coderio 用 deepagents 作为主引擎（上下文管理、子 agent、文件系
 |----|------|------|
 | **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；解析 bash exit_code，**测试失败（非 0）不算验证通过**；**写文档/配置文件（.md/.json/.yaml）不触发验证**；2 次后放行 + 红色警告 |
 | **CompletionGate** | 硬 | 有未完成 todo 就声明"完成"→ 拦截 |
-| **GroundingGate** | 硬 | 引用了从未 read_file 的代码位置就声明"完成"→ 拦截（grep/list_dir 不算读内容，防止分析建立在臆测上）；**跨 session 记忆已读文件**，路径归一化（Loop.py == loop.py），跳过不存在的引用路径 |
+| **GroundingGate** | 硬（仅 CODE 模式） | 写代码后引用了从未 read_file 的文件就声明"完成"→ 拦截；**ANALYZE 模式（纯读）跳过**——分析里提到文件名是正常行为（基于 105 session 审计：98.2% 误判率，从未拦住真正的虚假引用） |
 | **PlanGate** | 软提醒 | 没 todo 就写代码 → 工具结果追加 nudge |
 
-### 上下文治理（三层防线）
+### 上下文治理
 
-长会话最容易遇到的问题就是上下文窗口溢出和 agent"转晕"。coderio 有三层防线：
+deepagents 的 SummarizationMiddleware 自动管理上下文：
 
-| 层 | 触发 | 机制 |
-|----|------|------|
-| **上下文压缩** | input_tokens > 窗口的 60% | 旧消息总结成 system 摘要，保留近期消息 + tool_call 配对完整性 |
-| **空响应压缩** | 模型返回空响应（通常上下文过载） | 先压缩上下文再重试，而非无意义重发"请继续" |
-| **context-rot 检测** | 同一工具调用重复 >3 次 / 达到 max_rounds | 标记为 `TurnResult.in_tool_loop` / `hit_max_rounds` |
-| **自动重启** | 检测到 context-rot | 从压缩后的干净上下文重跑同一 prompt（最多 1 次） |
+| 机制 | 触发 | 行为 |
+|------|------|------|
+| **offload** | 工具输入/输出 >2万 token | 大块内容自动存盘 + 留指针，不占上下文 |
+| **summarize** | token 数达到窗口的 85% | 旧消息 LLM 摘要 + 原文 offload 到 `/conversation_history/` |
+| **checkpoint** | 每次 turn 结束 | graph state 持久化到 sqlite，下次只传新消息 |
+
+旧 ReAct 引擎的自研压缩（`compact.py`）保留为 fallback。
 
 ### 显式状态机
 
