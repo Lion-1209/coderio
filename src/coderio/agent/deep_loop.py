@@ -289,31 +289,30 @@ def run_deep_agent(
     if checkpointer is not None:
         build_kwargs["checkpointer"] = checkpointer
 
-    agent = create_deep_agent(**build_kwargs)
-
-    # --- Drive the graph with three stream modes in parallel ---
     final_text = ""
-    config = {
-        "recursion_limit": recursion_limit,
-        "configurable": {"thread_id": thread_id},
-    }
-    if checkpointer is not None:
-        # Checkpoint mode: only pass the new user message. deepagents restores
-        # prior conversation from the sqlite DB via thread_id.
-        inputs = {"messages": [HumanMessage(content=user_input)]}
-    else:
-        # Fallback (no checkpoint): pass full history so the model has context.
-        history_msgs = _build_history_messages(session.messages)
-        inputs = {"messages": history_msgs}
-
-    if hasattr(stream, "on_step_start"):
-        stream.on_step_start()
-
-    # Track which AIMessage tool_calls we've already announced (dedup across modes).
     _seen_tool_calls: set[str] = set()
     _turn_writes: list[str] = []
 
+    # Wrap everything from create_deep_agent through stream in try/finally so
+    # the sqlite connection is closed even if agent factory or on_step_start
+    # throws (not just the stream loop).
     try:
+        agent = create_deep_agent(**build_kwargs)
+
+        # --- Drive the graph with three stream modes in parallel ---
+        config = {
+            "recursion_limit": recursion_limit,
+            "configurable": {"thread_id": thread_id},
+        }
+        if checkpointer is not None:
+            inputs = {"messages": [HumanMessage(content=user_input)]}
+        else:
+            history_msgs = _build_history_messages(session.messages)
+            inputs = {"messages": history_msgs}
+
+        if hasattr(stream, "on_step_start"):
+            stream.on_step_start()
+
         for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
             if mode == "messages":
                 _handle_messages_mode(event, stream, session)
@@ -322,8 +321,6 @@ def run_deep_agent(
             elif mode == "custom":
                 _handle_custom_mode(event, stream)
     finally:
-        # Close the sqlite connection to avoid leaking file handles (Windows
-        # locks open sqlite files, preventing deletion of the session dir).
         if _db_conn is not None:
             try:
                 _db_conn.close()
@@ -369,12 +366,20 @@ def _try_create_checkpointer(session: Session):
 
         db_path = session.path.parent / f"{session.id}.sqlite"
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
-        checkpointer.setup()
-        return checkpointer, conn
     except ImportError:
         return None, None
     except Exception:
+        return None, None
+    # conn is now open. If SqliteSaver() or setup() fails, close it.
+    try:
+        checkpointer = SqliteSaver(conn)
+        checkpointer.setup()
+        return checkpointer, conn
+    except Exception:
+        try:
+            conn.close()
+        except Exception:  # noqa: S110
+            pass
         return None, None
 
 

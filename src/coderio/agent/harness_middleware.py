@@ -52,23 +52,40 @@ def _to_coderio_name(name: str) -> str:
 
 def _result_to_text(result: Any) -> str:
     """Normalize a deepagents tool result (ToolMessage/str/object) to text for
-    the harness success/failure heuristic."""
+    the harness success/failure heuristic.
+
+    For ExecuteResponse (deepagents shell results), appends the exit_code as
+    ``[exit_code: N]`` so the harness's VerifyGate can parse it. Without this,
+    a failed test run (exit != 0) would be treated as "verified" because the
+    raw output text doesn't contain the exit code marker.
+    """
     if isinstance(result, str):
         return result
     # deepagents ReadResult has an `error` attr for failed reads, and `file_data`
     # for successful ones. Extract the error so the harness's not-found detection
-    # (harness.py: "not found" in result) works — otherwise ReadResult str() is
-    # "ReadResult(error='...')" which doesn't contain the bare "not found" phrase.
+    # (harness.py: "not found" in result) works.
     error = getattr(result, "error", None)
     if isinstance(error, str) and error:
         return error
+    # Build the text from content/output fields.
+    text = ""
     content = getattr(result, "content", None)
     if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        # list of content blocks
-        return "".join(b.get("text", "") for b in content if isinstance(b, dict))
-    return str(result) if result is not None else ""
+        text = content
+    elif isinstance(content, list):
+        text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    else:
+        output = getattr(result, "output", None)
+        if isinstance(output, str):
+            text = output
+        elif result is not None:
+            text = str(result)
+    # Append exit_code marker if the result has one (ExecuteResponse). This
+    # lets _parse_exit_code in harness.py extract it for VerifyGate.
+    exit_code = getattr(result, "exit_code", None)
+    if exit_code is not None and "[exit_code:" not in text:
+        text = f"{text}\n[exit_code: {exit_code}]"
+    return text
 
 
 class HarnessMiddleware(AgentMiddleware):
@@ -134,10 +151,10 @@ class HarnessMiddleware(AgentMiddleware):
         self.harness.observe(coderio_name, args, result_text)
 
         # Sync deepagents' write_todos into the harness's TodoStore so
-        # CompletionGate can check for pending todos. Without this, the store
-        # stays empty and CompletionGate short-circuits (never blocks "done"
-        # even when todos are unfinished).
-        if name == "write_todos" and "todos" in args:
+        # CompletionGate can check for pending todos. Only sync when the tool
+        # actually succeeded — a failed write_todos (Error result) means the
+        # graph state wasn't updated, so syncing args would create a mismatch.
+        if name == "write_todos" and "todos" in args and not result_text.startswith("Error"):
             from coderio.tools.todo import Todo
 
             todos_data = args["todos"]

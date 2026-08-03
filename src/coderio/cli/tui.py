@@ -1117,10 +1117,14 @@ class SessionPickerScreen(ModalScreen[str | None]):
         Binding("delete", "delete_selected", "删除", show=True),
     ]
 
-    def __init__(self, summaries: list[dict]) -> None:
+    def __init__(self, summaries: list[dict], save_dir: str = "") -> None:
         super().__init__()
         self._all = summaries  # full list; filtered view derived on typing
         self._filter = ""
+        # The directory where session files actually live. Must match the
+        # source that populated `summaries` — hardcoding ~/.coderio/sessions
+        # would delete the wrong files when a custom save_dir is configured.
+        self._save_dir = save_dir
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
@@ -1204,25 +1208,36 @@ class SessionPickerScreen(ModalScreen[str | None]):
         # Delete the session files (jsonl + optional sqlite checkpoint).
         from pathlib import Path
 
-        sessions_dir = Path.home() / ".coderio" / "sessions"
+        # Use the actual save_dir (from config), not a hardcoded path.
+        if self._save_dir:
+            sessions_dir = Path(self._save_dir).expanduser()
+        else:
+            sessions_dir = Path.home() / ".coderio" / "sessions"
+        deleted_any = False
+        delete_failed = False
         for suffix in (".jsonl", ".sqlite", ".sqlite-wal", ".sqlite-shm"):
             p = sessions_dir / f"{sid}{suffix}"
             if p.exists():
                 try:
                     p.unlink()
+                    deleted_any = True
+                except Exception:
+                    delete_failed = True
+        # Only remove from UI if deletion succeeded. If it failed, keep the
+        # entry so the user knows it's still on disk (no false success).
+        if deleted_any and not delete_failed:
+            self._all = [s for s in self._all if s["id"] != sid]
+            self._populate()
+            if not self._all:
+                self.dismiss(None)  # no sessions left → close picker
+            else:
+                try:
+                    lv.index = 0
                 except Exception:
                     pass
-        # Remove from the in-memory list and re-populate.
-        self._all = [s for s in self._all if s["id"] != sid]
-        self._populate()
-        if not self._all:
-            self.dismiss(None)  # no sessions left → close picker
-        else:
-            # Re-select an item (index may be None after _populate clears).
-            try:
-                lv.index = 0
-            except Exception:
-                pass
+        elif delete_failed:
+            # Show a brief error notice without closing the picker.
+            self.app.bell()
 
 
 class CoderioTUI(App):
@@ -1713,7 +1728,12 @@ class CoderioTUI(App):
         bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
     def _show_interrupt_btn(self, show: bool) -> None:
-        """Show/hide the interrupt button (main thread, called via call_from_thread)."""
+        """Show/hide the interrupt button. Safe from any thread."""
+        # add_class/remove_class on a Button are plain attribute mutations
+        # (GIL-safe). We don't need call_from_thread here — the CSS class
+        # toggle is picked up by the next layout pass. This avoids the race
+        # where call_from_thread is deferred until after the blocking agent
+        # call returns (too late — the button never showed during the turn).
         try:
             btn = self.query_one("#interrupt-btn", Button)
             if show:
@@ -2515,7 +2535,11 @@ def run_tui(
                         return
                     _load_session(sid)
 
-                tui.call_from_thread(tui.push_screen, SessionPickerScreen(summaries), _on_picked)
+                tui.call_from_thread(
+                    tui.push_screen,
+                    SessionPickerScreen(summaries, save_dir=str(_P(rt["cfg"].session.save_dir).expanduser())),
+                    _on_picked,
+                )
                 return
             if res.message == "__OPEN_ONBOARDING__":
                 # /setup → open the OnboardingScreen to reconfigure provider/model.
