@@ -212,6 +212,21 @@ class HarnessMiddleware(AgentMiddleware):
         if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):
             return None
 
+        # Sync todos from graph state before checking termination. This covers
+        # the case where write_todos was called in a PREVIOUS turn (restored
+        # from checkpoint) but the HarnessMiddleware's TodoStore was reset (it's
+        # recreated each run_deep_agent call). Without this, CompletionGate
+        # would see an empty todo list even though graph state has pending todos.
+        state_todos = state.get("todos") if hasattr(state, "get") else getattr(state, "todos", None)
+        if state_todos and isinstance(state_todos, list):
+            from coderio.tools.todo import Todo
+
+            self.harness.todos.todos = [
+                Todo(content=t.get("content", ""), status=t.get("status", "pending"))
+                for t in state_todos
+                if isinstance(t, dict)
+            ]
+
         text = ""
         content = getattr(last, "content", "")
         if isinstance(content, str):

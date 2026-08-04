@@ -1121,6 +1121,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
         super().__init__()
         self._all = summaries  # full list; filtered view derived on typing
         self._filter = ""
+        self._delete_confirm_sid: str | None = None  # pending delete confirmation
         # The directory where session files actually live. Must match the
         # source that populated `summaries` — hardcoding ~/.coderio/sessions
         # would delete the wrong files when a custom save_dir is configured.
@@ -1129,7 +1130,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
             yield Static(
-                "[bold]恢复会话[/bold]  ↑↓ 选择 · Enter 恢复 · Del 删除 · Esc 取消 · 输入过滤",
+                "[bold]恢复会话[/bold]  ↑↓ 选择 · Enter 恢复 · Del 删除(按2次确认) · Esc 取消 · 输入过滤",
                 id="picker-title",
             )
             yield ListView(id="picker-list")
@@ -1149,6 +1150,9 @@ class SessionPickerScreen(ModalScreen[str | None]):
 
     def on_key(self, event) -> None:
         """Forward printable keys to the filter input; let ListView handle nav."""
+        # Cancel pending delete on any key other than Del.
+        if event.key != "delete" and self._delete_confirm_sid is not None:
+            self._delete_confirm_sid = None
         inp = self.query_one("#picker-filter", Input)
         if event.key in ("up", "down", "enter", "escape", "pageup", "pagedown"):
             return  # ListView handles these natively when it has focus
@@ -1194,9 +1198,9 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def action_delete_selected(self) -> None:
         """Delete the currently highlighted session (jsonl + sqlite).
 
-        Removes the session files from disk, drops the entry from the list,
-        and re-populates. Stays in the picker so the user can resume another
-        session or cancel. If the list becomes empty, auto-dismiss.
+        Two-step confirmation: first Del selects the item for deletion (shows
+        a confirmation prompt), second Del on the SAME item executes. Moving
+        the cursor or pressing any other key cancels the pending delete.
         """
         lv = self.query_one("#picker-list", ListView)
         if not lv.children or lv.index is None:
@@ -1205,8 +1209,22 @@ class SessionPickerScreen(ModalScreen[str | None]):
         sid = item.name or ""
         if not sid:
             return
-        # Delete the session files (jsonl + optional sqlite checkpoint).
+
+        # Two-step confirmation: if there's a pending delete for THIS sid,
+        # execute it. Otherwise, mark it pending and wait for second Del.
+        if self._delete_confirm_sid == sid:
+            self._delete_confirm_sid = None  # clear before executing
+            self._do_delete(lv, sid)
+        else:
+            # First Del — mark pending. User must press Del again to confirm.
+            self._delete_confirm_sid = sid
+            self.app.bell()
+
+    def _do_delete(self, lv: ListView, sid: str) -> None:
+        """Actually delete the session files and update the list."""
         from pathlib import Path
+
+        # Use the actual save_dir (from config), not a hardcoded path.
 
         # Use the actual save_dir (from config), not a hardcoded path.
         if self._save_dir:

@@ -31,15 +31,24 @@ jobs:
           pip install build
           python -m build --wheel
 
-      - name: Verify wheel in clean venv
-        # ACTUALLY install the wheel in a fresh venv and run coderio --help.
-        # This catches missing entry points, broken imports, missing bundled
-        # resources (skills), and packaging regressions — not just 'file exists'.
+      - name: Verify wheel in clean venv (full deps)
+        # Install the wheel WITH all dependencies (not --no-deps) to verify
+        # the full user install path. Then run --help + import the deepagents
+        # engine + verify bundled skills. This catches missing deps that the
+        # old --no-deps + manual 5-package approach missed (deepagents, ddgs,
+        # langgraph-checkpoint-sqlite, etc.).
         run: |
           python -m venv /tmp/wheel-test-venv
-          /tmp/wheel-test-venv/bin/pip install --no-deps dist/*.whl
-          /tmp/wheel-test-venv/bin/pip install typer rich textual langchain langchain-core
+          /tmp/wheel-test-venv/bin/pip install dist/*.whl
           /tmp/wheel-test-venv/bin/coderio --help
+          # Verify the deepagents engine imports (the production path).
+          /tmp/wheel-test-venv/bin/python -c "
+          from coderio.agent.deep_loop import run_deep_agent
+          from coderio.agent.harness_middleware import HarnessMiddleware
+          from coderio.agent.permission_middleware import PermissionMiddleware
+          from coderio.cli.tui import CoderioTUI
+          print('deepagents engine imports OK')
+          "
           # Verify bundled skills are importable from the installed package.
           /tmp/wheel-test-venv/bin/python -c "
           from coderio.skills.store import load_skill_store
