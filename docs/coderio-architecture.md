@@ -281,7 +281,7 @@ Textual 8.x App，核心设计：
 - **线程模型**：agent 在 Textual Worker 后台线程跑，UI 更新通过 `_render_q`（thread-safe deque）+ 60ms 定时器排空
 - **流式渲染**：dict 分派表（`_RENDER_DISPATCH`）映射 action → handler，每个 handler返回 streaming/final/none 决定滚动策略
 - **中断**：`Esc` / `⏹ 中断` 按钮 → `_interrupted` 标志位，agent 在每轮 ReAct 循环开头检查 `is_interrupted()` → `InterruptedError` → 黄色"已中断"面板
-- **confirm 模式**：`TuiPermissionGate` 用 `ConfirmScreen`（ModalScreen）+ `threading.Event` 跨线程同步，避免 `input()` 死锁
+- **confirm 模式**：`TuiPermissionGate` 用 `ConfirmMenu`（纵向选择菜单）+ `threading.Event` 跨线程同步，↑↓ 选择 + Enter 确认
 - **可视化选择器**：`/mode`（ModePickerScreen）、`/profile`（ProfilePickerScreen）、`/resume`（SessionPickerScreen）
 - **文件修改可视化**：写工具结果用黄色 `📝` 行（即时）+ 轮末汇总面板（`on_turn_end`）
 - **错误恢复**：异常红色 Panel + 输入框回填失败的用户消息（Enter 重试）

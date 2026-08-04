@@ -2404,27 +2404,6 @@ def _switch_active_profile(profile_name: str) -> str:
     return profile_name
 
 
-def _resolve_effective_context(cfg):
-    """Pick the effective context_limit for the active model.
-
-    Priority: active profile's probed value > [model].context_limit > the
-    ContextConfig default (200K). Extracted from on_input to reduce that
-    closure's complexity — it's a pure calculation with no side effects.
-
-    Without this, a 256K-context model is mistreated as the 200K default and
-    gets compacted at 120K instead of 153K.
-    """
-    from dataclasses import replace as _replace
-
-    eff_ctx = cfg.context
-    active_profile = next((p for p in (cfg.profiles or []) if p.name == cfg.active_profile), None)
-    if active_profile is not None and active_profile.context_limit > 0:
-        return _replace(eff_ctx, model_context_limit=active_profile.context_limit)
-    if getattr(cfg.model, "context_limit", 0) > 0:
-        return _replace(eff_ctx, model_context_limit=cfg.model.context_limit)
-    return eff_ctx
-
-
 def run_tui(
     provider_override: str | None = None,
     model_override: str | None = None,
@@ -2661,7 +2640,7 @@ def run_tui(
         user_content = build_user_content(line)
         # deepagents engine: provides context management, subagents, filesystem.
         # coderio's harness + permission run as middleware. The old ReAct engine
-        # (loop.run_agent) is kept as fallback but no longer the default.
+        # (loop.run_agent) is retained for crew + tests but not used here.
         run_deep_agent(
             user_input=user_content,
             model=rt["model"],

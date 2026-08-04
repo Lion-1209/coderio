@@ -11,7 +11,9 @@ What coderio ADDS on top via middleware:
   - PermissionMiddleware: 4-tier access system (plan/confirm/auto_edit/full) +
     workspace boundary. deepagents' FilesystemPermission is coarser.
 
-The old ReAct engine (loop.py) is kept as a fallback.
+The old ReAct engine (loop.py) is retained for crew (which uses _execute_turn)
+and its test suite, but is NOT used as a production fallback — there is no
+automatic fallback path from deepagents to ReAct.
 _execute_turn directly). This module is the production path invoked by the TUI.
 
 Streaming: uses THREE stream modes in parallel —
