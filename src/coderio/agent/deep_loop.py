@@ -118,6 +118,109 @@ class _WinLocalShellBackend:
         return cls._RealCls(**kwargs)
 
 
+def _resolve_system_prompt(system_prompt, skill_store, active_skills):
+    """Build coderio's system prompt, adapting tool names for deepagents."""
+    if system_prompt is not None:
+        return system_prompt
+    from coderio.agent.prompts import ActiveSkills, build_system_prompt
+    from coderio.skills.store import SkillStore
+
+    store = skill_store or SkillStore()
+    active = active_skills or ActiveSkills()
+    sp = build_system_prompt(store, active)
+    return (
+        sp.replace("run bash commands", "run shell commands via the `execute` tool")
+        .replace("use bash to execute", "use `execute` to run")
+        .replace("call bash", "call `execute`")
+    )
+
+
+def _build_extra_tools(tools, skill_store, active_skills):
+    """Collect coderio tools not already provided by deepagents."""
+    from coderio.tools.base import to_langchain_tool as _adapt
+
+    _SKIP = frozenset({"read_file", "write_file", "edit_file", "glob", "grep", "bash", "todo", "list_dir"})
+    extra: list = []
+    if tools:
+        for t in tools:
+            name = getattr(t, "name", "")
+            if name in _SKIP:
+                continue
+            schema = getattr(t, "args_schema", None)
+            if schema is not None:
+                extra.append(_adapt(t, schema))
+    if skill_store is not None and active_skills is not None:
+        from coderio.agent.skill_tool import ActivateSkillTool, DeactivateSkillTool
+
+        act = ActivateSkillTool(skill_store, active_skills)
+        deact = DeactivateSkillTool(active_skills)
+        extra.append(_adapt(act, act.args_schema))
+        extra.append(_adapt(deact, deact.args_schema))
+    return extra
+
+
+def _build_research_subagent():
+    """Return the research subagent spec (read-only, physically isolated)."""
+    from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
+
+    return {
+        "name": "research",
+        "description": (
+            "Read-only research and analysis agent. Use for: exploring an "
+            "unfamiliar codebase section, finding where a feature is "
+            "implemented, summarizing a file's purpose, or gathering "
+            "evidence to ground an analysis. This agent can read files "
+            "and search but CANNOT write or execute — it returns findings "
+            "as text. Use it when you need to read many files without "
+            "cluttering your own context."
+        ),
+        "system_prompt": (
+            "You are a research subagent. Your job is to investigate the "
+            "codebase and return clear, grounded findings.\n\n"
+            "Rules:\n"
+            "- Read the relevant files thoroughly before concluding.\n"
+            "- Quote specific lines/functions as evidence.\n"
+            "- Separate what you verified by reading from what you infer.\n"
+            "- Be concise: return only the findings the caller needs, not "
+            "a full retelling of every file you read.\n"
+            "- If you can't find something, say so explicitly.\n"
+            "- The calling agent only sees your final message, not your "
+            "intermediate tool calls — make sure your answer is complete."
+        ),
+        "middleware": [
+            _ToolExclusionMiddleware(excluded=frozenset({"write_file", "edit_file", "execute", "write_todos"})),
+        ],
+    }
+
+
+def _build_inputs(checkpointer, user_input: str, session: Session) -> dict:
+    """Build the messages input for the agent stream.
+
+    With a checkpointer: only pass the new user message (deepagents restores
+    prior state from sqlite). Without: pass full conversation history.
+    """
+    if checkpointer is not None:
+        return {"messages": [HumanMessage(content=user_input)]}
+    return {"messages": _build_history_messages(session.messages)}
+
+
+def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen_ids, turn_writes):
+    """Drive the deepagents graph with three stream modes. Returns final text."""
+    config = {
+        "recursion_limit": recursion_limit,
+        "configurable": {"thread_id": thread_id},
+    }
+    final_text = ""
+    for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
+        if mode == "messages":
+            _handle_messages_mode(event, stream, session)
+        elif mode == "updates":
+            final_text = _handle_updates_mode(event, stream, session, seen_ids, turn_writes) or final_text
+        elif mode == "custom":
+            _handle_custom_mode(event, stream)
+    return final_text
+
+
 def run_deep_agent(
     user_input: str,
     model,
@@ -165,119 +268,35 @@ def run_deep_agent(
     # coderio's prompt reaches the model. Done once per process (idempotent).
     import deepagents.graph as _dg_graph
     from deepagents import create_deep_agent
-    from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
 
     if _dg_graph.BASE_AGENT_PROMPT:
         _dg_graph.BASE_AGENT_PROMPT = ""
 
     session.append(Message.user(user_input))
 
-    # Build coderio's system prompt (behavioral guidance) unless overridden.
-    # Adapt tool names: deepagents uses 'execute' for shell (coderio says 'bash').
-    if system_prompt is None:
-        from coderio.agent.prompts import ActiveSkills, build_system_prompt
-        from coderio.skills.store import SkillStore
-
-        store = skill_store or SkillStore()
-        active = active_skills or ActiveSkills()
-        sp = build_system_prompt(store, active)
-        system_prompt = (
-            sp.replace("run bash commands", "run shell commands via the `execute` tool")
-            .replace("use bash to execute", "use `execute` to run")
-            .replace("call bash", "call `execute`")
-        )
-
-    # --- Middleware stack: harness (verification) + permission (access control) ---
+    sp = _resolve_system_prompt(system_prompt, skill_store, active_skills)
     middleware = [HarnessMiddleware(stream=stream, enabled=harness_enabled)]
     if gate is not None:
         middleware.append(PermissionMiddleware(gate))
 
-    # --- Windows-safe shell backend ---
     backend = _WinLocalShellBackend(
         root_dir=str(workdir or Path.cwd()),
         virtual_mode=True,
         inherit_env=True,
     )
 
-    # --- Extra tools: coderio's web_search/web_fetch/note/skill tools ---
-    # deepagents provides read_file/write_file/edit_file/glob/grep/execute/write_todos.
-    # coderio's tools complement these (web search, notes, skill activation).
-    extra_lc_tools: list = []
-    if tools:
-        from coderio.tools.base import to_langchain_tool as _adapt
-
-        for t in tools:
-            name = getattr(t, "name", "")
-            # Skip tools that deepagents already provides (avoid name collisions).
-            if name in ("read_file", "write_file", "edit_file", "glob", "grep", "bash", "todo", "list_dir"):
-                continue
-            schema = getattr(t, "args_schema", None)
-            if schema is not None:
-                extra_lc_tools.append(_adapt(t, schema))
-
-    # Skill activation tools — coderio's skill system. These must be registered
-    # explicitly (they're not in build_default_tools). Without them the model
-    # gets "activate_skill is not a valid tool" errors.
-    if skill_store is not None and active_skills is not None:
-        from coderio.agent.skill_tool import ActivateSkillTool, DeactivateSkillTool
-        from coderio.tools.base import to_langchain_tool as _adapt
-
-        act = ActivateSkillTool(skill_store, active_skills)
-        deact = DeactivateSkillTool(active_skills)
-        extra_lc_tools.append(_adapt(act, act.args_schema))
-        extra_lc_tools.append(_adapt(deact, deact.args_schema))
+    extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)
 
     build_kwargs: dict[str, Any] = {
         "model": model,
         "middleware": middleware,
         "backend": backend,
+        "subagents": [_build_research_subagent()],
     }
-    if system_prompt:
-        build_kwargs["system_prompt"] = system_prompt
+    if sp:
+        build_kwargs["system_prompt"] = sp
     if extra_lc_tools:
         build_kwargs["tools"] = extra_lc_tools
-
-    # --- Research subagent: read-only analysis with context isolation ---
-    # The main agent delegates research/analysis tasks (read files, understand
-    # structure, summarize findings) to this subagent via the `task` tool. The
-    # subagent only has read-only tools (no write/execute) — physical isolation,
-    # not just prompt-level. Its tool calls don't pollute the main agent's
-    # context window. deepagents also adds the default general-purpose subagent
-    # (full tool access) alongside this one.
-    build_kwargs["subagents"] = [
-        {
-            "name": "research",
-            "description": (
-                "Read-only research and analysis agent. Use for: exploring an "
-                "unfamiliar codebase section, finding where a feature is "
-                "implemented, summarizing a file's purpose, or gathering "
-                "evidence to ground an analysis. This agent can read files "
-                "and search but CANNOT write or execute — it returns findings "
-                "as text. Use it when you need to read many files without "
-                "cluttering your own context."
-            ),
-            "system_prompt": (
-                "You are a research subagent. Your job is to investigate the "
-                "codebase and return clear, grounded findings.\n\n"
-                "Rules:\n"
-                "- Read the relevant files thoroughly before concluding.\n"
-                "- Quote specific lines/functions as evidence.\n"
-                "- Separate what you verified by reading from what you infer.\n"
-                "- Be concise: return only the findings the caller needs, not "
-                "a full retelling of every file you read.\n"
-                "- If you can't find something, say so explicitly.\n"
-                "- The calling agent only sees your final message, not your "
-                "intermediate tool calls — make sure your answer is complete."
-            ),
-            # Physical tool isolation: strip write/execute tools so the research
-            # subagent literally cannot modify files or run commands. Without
-            # this, subagents inherit ALL parent tools — a "read-only" claim in
-            # the description would be just a prompt-level suggestion.
-            "middleware": [
-                _ToolExclusionMiddleware(excluded=frozenset({"write_file", "edit_file", "execute", "write_todos"})),
-            ],
-        },
-    ]
 
     # --- Checkpointer: persist graph state across turns (sqlite) ---
     # Without a checkpointer, each run_deep_agent call starts from scratch —
@@ -295,38 +314,19 @@ def run_deep_agent(
     _seen_tool_calls: set[str] = set()
     _turn_writes: list[str] = []
 
-    # Wrap everything from create_deep_agent through stream in try/finally so
-    # the sqlite connection is closed even if agent factory or on_step_start
-    # throws (not just the stream loop).
     try:
         agent = create_deep_agent(**build_kwargs)
-
-        # --- Drive the graph with three stream modes in parallel ---
-        config = {
-            "recursion_limit": recursion_limit,
-            "configurable": {"thread_id": thread_id},
-        }
-        if checkpointer is not None:
-            inputs = {"messages": [HumanMessage(content=user_input)]}
-        else:
-            history_msgs = _build_history_messages(session.messages)
-            inputs = {"messages": history_msgs}
-
+        inputs = _build_inputs(checkpointer, user_input, session)
         if hasattr(stream, "on_step_start"):
             stream.on_step_start()
-
-        for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
-            if mode == "messages":
-                _handle_messages_mode(event, stream, session)
-            elif mode == "updates":
-                final_text = _handle_updates_mode(event, stream, session, _seen_tool_calls, _turn_writes) or final_text
-            elif mode == "custom":
-                _handle_custom_mode(event, stream)
+        final_text = _run_stream(
+            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes
+        )
     finally:
         if _db_conn is not None:
             try:
                 _db_conn.close()
-            except Exception:  # noqa: S110 — best-effort close, don't crash on cleanup
+            except Exception:  # noqa: S110
                 pass
 
     if hasattr(stream, "on_finish"):

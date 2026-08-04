@@ -59,10 +59,13 @@ jobs:
         shell: bash
         run: pip check
 
-      - name: Run tests
+      - name: Run tests with coverage
+        # Report coverage per-module. No hard threshold yet — this establishes
+        # a baseline so coverage trends are visible in CI output. Failures are
+        # still caught by pytest itself; coverage is informational only.
         shell: bash
         run: |
-          python -m pytest -q
+          python -m pytest -q --cov=coderio --cov-report=term-missing
 
       - name: Build wheel (smoke)
         shell: bash
