@@ -185,7 +185,7 @@ deepagents 的默认 BASE_AGENT_PROMPT 被清空——coderio 的 system prompt 
 
 **子 agent**：内置 research 子 agent（只读，物理隔离不能写不能执行）+ general-purpose（全工具）。主 agent 通过 task 工具按需委派，上下文隔离。
 
-旧的 ReAct 引擎（`agent/loop.py`）保留为 fallback。
+旧的 ReAct 引擎已移除——deepagents 是唯一引擎。
 
 ### harness 四道门（核心）
 
@@ -205,8 +205,6 @@ deepagents 的 SummarizationMiddleware 自动管理上下文：
 | **offload** | 工具输入/输出 >2万 token | 大块内容自动存盘 + 留指针，不占上下文 |
 | **summarize** | token 数达到窗口的 85% | 旧消息 LLM 摘要 + 原文 offload 到 `/conversation_history/` |
 | **checkpoint** | 每次 turn 结束 | graph state 持久化到 sqlite，下次只传新消息 |
-
-旧 ReAct 引擎的自研压缩（`compact.py`）保留为 fallback。
 
 ### 显式状态机
 

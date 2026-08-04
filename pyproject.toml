@@ -110,9 +110,6 @@ select = ["E", "F", "W", "I", "S"]
 "src/coderio/cli/repl.py" = ["S110"]
 # App entry: S110 — stream.reconfigure may fail on some platforms; skip is safe.
 "src/coderio/cli/app.py" = ["S110"]
-# Loop: S110 — compaction/restart are best-effort; a failure falls through to
-# the original result rather than crashing the agent turn.
-"src/coderio/agent/loop.py" = ["S110"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

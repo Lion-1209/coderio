@@ -149,7 +149,7 @@ coderio uses deepagents as its primary engine (context management, subagents, fi
 | **HarnessMiddleware** | coderio's four-gate hard constraint (verify/completion/grounding/plan) — deepagents itself doesn't enforce verification |
 | **PermissionMiddleware** | four-tier permissions (plan/confirm/auto_edit/full) + workspace path boundary |
 
-The old ReAct engine (`agent/loop.py`) is kept as a fallback.
+The old ReAct engine has been removed — deepagents is the sole engine.
 
 ### Harness four gates (core)
 
@@ -169,8 +169,6 @@ deepagents' SummarizationMiddleware manages context automatically:
 | **Offload** | tool input/output >20k tokens | Large content stored to file + pointer left, doesn't consume context |
 | **Summarize** | token count reaches 85% of window | Old messages LLM-summarized + original offloaded to `/conversation_history/` |
 | **Checkpoint** | each turn ends | graph state persisted to sqlite, next turn only passes the new message |
-
-The old ReAct engine's self-built compaction (`compact.py`) is kept as a fallback.
 
 ### Explicit state machine
 

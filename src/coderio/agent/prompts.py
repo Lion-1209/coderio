@@ -223,7 +223,7 @@ apply (they are what make you a usable agent, not just a code-spitter):
 
   The framework's built-in prompt may show macOS-style paths like `/Users/name/...` —
   IGNORE those examples. This project uses **virtual paths** rooted at `/`:
-  - `/AGENTS.md`, `/src/coderio/agent/loop.py`, `/pyproject.toml` — always leading `/`
+  - `/AGENTS.md`, `/src/coderio/agent/deep_loop.py`, `/pyproject.toml` — always leading `/`
   - NEVER use Windows paths (C:\\... or E:\\...) or macOS paths (/Users/...) with read_file/ls/etc.
   - If a path doesn't exist, it's not a system error — the file just isn't there.
 

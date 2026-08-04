@@ -44,7 +44,7 @@ class DeactivateSkillArgs(BaseModel):
 class DeactivateSkillTool:
     """Tool that deactivates an active skill, dropping its body from context.
 
-    Mirrors ActivateSkillTool. The budget warning in loop.py points the model at
+    Mirrors ActivateSkillTool. The budget warning in the system prompt points the model at
     `deactivate_skill` when active skill bodies exceed ~30% of the context budget;
     without this tool that hint would reference a non-existent tool and the model
     would get an 'unknown tool' error. After deactivation the prompt is refreshed

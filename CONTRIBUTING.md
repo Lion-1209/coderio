@@ -57,7 +57,7 @@ The codebase is a layered monolith (dependencies flow downward):
 ```
 cli/          Typer app + Textual TUI + slash commands
 crew/         6-agent LangGraph orchestration
-agent/        ReAct loop, structural harness (4 gates)
+agent/        deepagents engine, harness/permission middleware, prompts
 llm/          Model factory (ChatAnthropic / ChatOpenAI)
 tools/        bash, file ops, search, web, todo, edit
 skills/       Skill store (3-layer: bundled + user + project)

@@ -29,7 +29,7 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 ├─────────────────────────────────────────────────────────────┤
 │  Agent 层 (agent/)      deepagents 引擎 + harness/permission   │
 │    deep_loop.py · harness_middleware.py · permission_*.py     │
-│    harness.py · prompts.py · stream.py · loop.py (fallback)   │
+│    harness.py · prompts.py · stream.py                        │
 ├─────────────────────────────────────────────────────────────┤
 │  能力层                  tools/ · skills/ · llm/ · session/ · config/  │
 └─────────────────────────────────────────────────────────────┘
@@ -39,7 +39,7 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 
 | 模块 | 行数 | 职责 | 关键文件 |
 |------|------|------|----------|
-| `agent/` | ~3000 | deepagents 引擎、harness/permission middleware、提示词构建、流式协议、ReAct fallback | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, prompts.py, loop.py |
+| `agent/` | ~2500 | deepagents 引擎、harness/permission middleware、提示词构建、流式协议 | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, prompts.py |
 | `cli/` | ~3800 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
 | `tools/` | ~1100 | 工具集 + 权限门 + 工作区路径策略 + langchain 适配 | bash.py, permission.py, workspace.py, base.py |
 | `config/` | ~400 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
@@ -67,13 +67,7 @@ coderio 使用 [deepagents](https://github.com/langchain-ai/deepagents) 作为�
 - **coderio middleware**：HarnessMiddleware（四道门硬约束）+ PermissionMiddleware（四级权限 + 工作区边界）
 - **流式**：三模式 stream（messages 逐 token / updates 完整消息 / custom harness 信号）
 
-### 2.2 ReAct 引擎（fallback）
-
-- **入口**：`agent/loop.py:run_agent` → `_execute_turn`（带 harness）
-- 保留为 fallback，deepagents 出问题时可切回
-- 不再作为默认引擎
-
-### 2.3 为什么不直接用 deepagents 裸跑
+### 2.2 为什么不直接用 deepagents 裸跑
 
 deepagents 是"信任 agent"的——它不强制验证、不检查引用、不管工作区边界。coderio 的差异化全在 middleware 层：
 
@@ -84,7 +78,7 @@ deepagents 是"信任 agent"的——它不强制验证、不检查引用、不�
 
 ---
 
-## 3. Agent 层：ReAct 循环 + harness 状态控制（核心）
+## 3. Agent 层：deepagents 引擎 + harness 状态控制（核心）
 
 这是 coderio 最关键的设计——**把"遵循工作流"从软提示词规则变成系统级结构约束**。
 
@@ -139,7 +133,7 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 - **触发**：已过验证门和完成门，模型最终文本里**显式引用了代码位置**（`foo.py`、`src/x.py:42`），但该文件**本 turn 从未被 read_file/grep/glob/list_dir 读过**
 - **逐级升级**：同 VerifyGate（0/1 强制续跑要求先读，2 放行+警告）
-- **"已读"定义**：`HarnessState.content_read_files` 记录所有 read_file 的 path（归一化：小写 + 正斜杠 + 折叠 `..`）。匹配是 basename 或完整路径精确比较。跨 session 记忆——`run_agent` 从 `session.messages` 预填充。
+- **"已读"定义**：`HarnessState.content_read_files` 记录所有 read_file 的 path（归一化：小写 + 正斜杠 + 折叠 `..`）。匹配是 basename 或完整路径精确比较。
 - **路径归一化**：`_norm_path()` 统一小写 + 正斜杠 + 折叠 `../`，Windows 大小写不敏感文件系统（NTFS/APFS）正确处理 `Loop.py` == `loop.py`。
 - **跳过不存在的路径**：`not_found_files` 记录 read_file 返回 "file not found" 的路径，gate 不再强制模型读不存在的文件（正则可能匹配到文档文本里的路径字符串）。
 - **只守代码声明，不碰对话**：正则要求有点扩展名（`.py/.js/.md...`），纯散文（"the loader"、"step 2"、"config.harness"无扩展名）不触发
@@ -147,7 +141,7 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 ### 3.4 harness 在循环里的接线
 
-`run_deep_agent`（`agent/deep_loop.py`）是 deepagents 引擎的入口，harness 作为 middleware（`HarnessMiddleware`）挂载。在 ReAct fallback 引擎里，harness 在 `_execute_turn` 中有三处插入点：
+`run_deep_agent`（`agent/deep_loop.py`）是 deepagents 引擎的入口，harness 作为 middleware（`HarnessMiddleware`）挂载，通过 deepagents 的 hook 机制（wrap_tool_call / after_model）实现四道门：
 
 ```python
 for _ in range(max_rounds):
@@ -258,7 +252,7 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 
 ### 6.3 on_step_start：消除"卡住"感
 
-`_execute_turn` 每次 `run_step` 前调 `stream.on_step_start()`，启动 busy 指示器。这样工具结果出来后到下一轮模型输出的间隙也有动效，不再"一动不动"。
+`run_deep_agent` 在 stream 循环开始前调 `stream.on_step_start()`，启动 busy 指示器。
 
 ### 6.4 StreamHandler 协议（`agent/stream.py`）
 
