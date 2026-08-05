@@ -154,8 +154,12 @@ def _build_extra_tools(tools, skill_store, active_skills):
 
 
 def _build_research_subagent():
-    """Return the research subagent spec (read-only, physically isolated)."""
-    from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
+    """Return the research subagent spec (read-only, physically isolated).
+
+    Tool exclusion uses the compat layer (_deepagents_compat) so that a
+    deepagents API change degrades gracefully instead of crashing.
+    """
+    from coderio.agent._deepagents_compat import make_research_subagent_middleware
 
     return {
         "name": "research",
@@ -181,9 +185,7 @@ def _build_research_subagent():
             "- The calling agent only sees your final message, not your "
             "intermediate tool calls — make sure your answer is complete."
         ),
-        "middleware": [
-            _ToolExclusionMiddleware(excluded=frozenset({"write_file", "edit_file", "execute", "write_todos"})),
-        ],
+        "middleware": make_research_subagent_middleware(),
     }
 
 
@@ -255,17 +257,13 @@ def run_deep_agent(
             (harness escalates after 2 force-continues, each round uses ~5-10 recursions).
     """
     stream = stream or NullStream()
-    # Lazy import: deepagents is a heavy dependency.
-    # Neutralize deepagents' BASE_AGENT_PROMPT. create_deep_agent appends it
-    # after coderio's system_prompt (graph.py:863), causing conflicts (e.g.
-    # "explore first" vs "match effort", macOS path examples vs virtual paths).
-    # coderio's prompt already covers everything — set BASE to empty so only
-    # coderio's prompt reaches the model. Done once per process (idempotent).
-    import deepagents.graph as _dg_graph
     from deepagents import create_deep_agent
 
-    if _dg_graph.BASE_AGENT_PROMPT:
-        _dg_graph.BASE_AGENT_PROMPT = ""
+    # Neutralize deepagents' BASE_AGENT_PROMPT via compat layer (graceful
+    # degradation if the internal API changes).
+    from coderio.agent._deepagents_compat import neutralize_base_prompt
+
+    neutralize_base_prompt()
 
     session.append(Message.user(user_input))
 
