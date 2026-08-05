@@ -460,74 +460,6 @@ class StatusBar(Widget):
         return t
 
 
-class TodoPanel(Widget):
-    """Live todo list panel showing task progress.
-
-    Renders a compact bordered panel with each todo item prefixed by a status
-    icon (✓ completed / → in_progress / ○ pending). The title shows progress
-    count (e.g. '任务清单 2/5'). Hidden when there are no todos (height 0,
-    display none). Updated via the render queue's 'todo_update' instruction
-    (thread-safe — the agent thread pushes, the main thread drains).
-
-    Data comes from deepagents' write_todos tool: each call replaces the whole
-    list, so we just overwrite on every update.
-    """
-
-    DEFAULT_CSS = """
-    TodoPanel {
-        display: none;
-        height: auto;
-        max-height: 8;
-        background: $surface;
-        border: round $boost;
-        padding: 0 1;
-        margin: 0;
-    }
-    TodoPanel.-visible { display: block; }
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._todos: list[dict] = []
-
-    def update_todos(self, todos: list[dict]) -> None:
-        """Replace the todo list and refresh (safe from any thread via render q).
-
-        `todos` is a list of {content: str, status: "pending"|"in_progress"|"completed"}.
-        """
-        self._todos = todos or []
-
-    def render(self) -> RenderableType:
-        if not self._todos:
-            return Text("")
-        done = sum(1 for t in self._todos if t.get("status") == "completed")
-        total = len(self._todos)
-        lines = []
-        for t in self._todos:
-            status = t.get("status", "pending")
-            content = t.get("content", "")
-            if status == "completed":
-                icon = "✓"
-                style = "dim green"
-            elif status == "in_progress":
-                icon = "→"
-                style = "bold yellow"
-            else:
-                icon = "○"
-                style = ""
-            lines.append((icon, content, style))
-        # Build the panel content
-        from rich.panel import Panel as RPanel
-        from rich.table import Table
-
-        table = Table(show_header=False, box=None, padding=(0, 0), expand=True)
-        table.add_column(no_wrap=True, width=1)
-        table.add_column(overflow="ellipsis", no_wrap=True)
-        for icon, content, style in lines:
-            table.add_row(icon, content, style=style)
-        return RPanel(table, title=f"[bold]任务清单 {done}/{total}[/bold]", border_style="dim cyan", padding=(0, 1))
-
-
 class OnboardingScreen(ModalScreen[dict | None]):
     """TUI-based onboarding wizard (multi-step ModalScreen).
 
@@ -1154,10 +1086,10 @@ class SessionPickerScreen(ModalScreen[str | None]):
         if event.key != "delete" and self._delete_confirm_sid is not None:
             self._delete_confirm_sid = None
         inp = self.query_one("#picker-filter", Input)
-        if event.key in ("up", "down", "enter", "escape", "pageup", "pagedown"):
-            return  # ListView handles these natively when it has focus
+        if event.key in ("up", "down", "enter", "escape", "delete", "pageup", "pagedown"):
+            return  # ListView / bindings handle these natively when it has focus
         # Printable character → route to filter input for live search
-        if len(event.character) == 1 and event.character.isprintable():
+        if event.character and len(event.character) == 1 and event.character.isprintable():
             inp.focus()
             inp.value += event.character
             event.prevent_default()
@@ -1378,7 +1310,6 @@ class CoderioTUI(App):
         # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
             yield CommandMenu(slash_completions())
-            yield TodoPanel()
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
@@ -1585,18 +1516,30 @@ class CoderioTUI(App):
 
     @staticmethod
     def _h_todo_update(self, args):
-        """Update the TodoPanel with a new todo list (main thread)."""
-        try:
-            panel = self.query_one(TodoPanel)
-            panel.update_todos(args[0])
-            if args[0]:
-                panel.add_class("-visible")
+        """Render todos as a Markdown checklist in the output area (main thread).
+
+        Claude Code style: todos appear inline in the conversation history as a
+        Markdown checklist, not in a separate panel. Each write_todos call
+        appends a fresh checklist view to the history stream.
+        """
+        todos = args[0] if args else []
+        if not todos:
+            return "none"
+        done = sum(1 for t in todos if t.get("status") == "completed")
+        total = len(todos)
+        lines = [f"**任务清单 ({done}/{total})**"]
+        for t in todos:
+            status = t.get("status", "pending")
+            content = t.get("content", "")
+            if status == "completed":
+                lines.append(f"- [x] {content}")
+            elif status == "in_progress":
+                lines.append(f"- [ ] {content} ←")
             else:
-                panel.remove_class("-visible")
-            panel.refresh()
-        except Exception:
-            pass
-        return "none"
+                lines.append(f"- [ ] {content}")
+        text = "\n".join(lines)
+        self._render_q.append(("panel", Panel(Markdown(text), title="📝 任务清单", border_style="cyan")))
+        return "final"
 
     # Dispatch table: action name -> handler. Built once at class definition.
     # Handlers are staticmethods taking (self, args) so they can live in the
@@ -2240,8 +2183,8 @@ class CoderioTUI(App):
         """Push a todo list update to the render queue (agent background thread).
 
         Called when deepagents' write_todos tool fires. The whole list is
-        replaced each call. The main-thread drain picks this up and updates
-        the TodoPanel widget.
+        replaced each call. The main-thread drain renders it as a Markdown
+        checklist in the output area (Claude Code style).
         """
         self._render_q.append(("todo_update", todos))
 

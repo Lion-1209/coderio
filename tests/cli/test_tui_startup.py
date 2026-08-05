@@ -25,7 +25,6 @@ async def test_tui_starts_and_widgets_exist():
         app.query_one("StatusBar")
         app.query_one("CommandMenu")
         app.query_one("ConfirmMenu")
-        app.query_one("TodoPanel")
 
 
 @pytest.mark.asyncio
@@ -66,15 +65,27 @@ async def test_interrupt_btn_hidden_on_idle():
 
 
 @pytest.mark.asyncio
-async def test_todo_panel_hidden_on_idle():
-    """TodoPanel is hidden when there are no todos."""
+async def test_todos_render_as_checklist_in_history():
+    """Todos render as a Markdown checklist in the output area (Claude Code style)."""
+    from textual.containers import VerticalScroll
+
     from coderio.cli.tui import CoderioTUI
 
     app = CoderioTUI()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause(0.3)
-        panel = app.query_one("TodoPanel")
-        assert panel.styles.display == "none", "todo panel should be hidden when idle"
+        # Simulate write_todos firing.
+        app.on_todos_update(
+            [
+                {"content": "fix typo", "status": "completed"},
+                {"content": "add tests", "status": "in_progress"},
+                {"content": "update docs", "status": "pending"},
+            ]
+        )
+        await pilot.pause(0.5)
+        # The checklist should appear in history as a Panel.
+        history = app.query_one("#history", VerticalScroll)
+        assert len(list(history.children)) >= 1, "history should have the todo checklist panel"
 
 
 @pytest.mark.asyncio

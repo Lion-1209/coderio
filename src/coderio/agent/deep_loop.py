@@ -210,12 +210,13 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
         "recursion_limit": recursion_limit,
         "configurable": {"thread_id": thread_id},
     }
+    tc_args: dict[str, tuple] = {}  # tool_call_id → (name, args) for file path tracking
     final_text = ""
     for mode, event in agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]):
         if mode == "messages":
             _handle_messages_mode(event, stream, session)
         elif mode == "updates":
-            final_text = _handle_updates_mode(event, stream, session, seen_ids, turn_writes) or final_text
+            final_text = _handle_updates_mode(event, stream, session, seen_ids, turn_writes, tc_args) or final_text
         elif mode == "custom":
             _handle_custom_mode(event, stream)
     return final_text
@@ -444,7 +445,7 @@ def _handle_messages_mode(event, stream, session) -> None:
         stream.on_token(text)
 
 
-def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: list) -> str:
+def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: list, tc_args: dict) -> str:
     """Process 'updates' mode: complete messages (tool calls, tool results, final text).
 
     Returns the final assistant text if this event carries it (for the caller to
@@ -458,7 +459,7 @@ def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: lis
             continue
         msgs = payload.get("messages", [])
         for m in msgs:
-            final_text = _emit_message(m, stream, session, seen_ids, turn_writes) or final_text
+            final_text = _emit_message(m, stream, session, seen_ids, turn_writes, tc_args) or final_text
     return final_text
 
 
@@ -476,7 +477,7 @@ def _handle_custom_mode(event, stream) -> None:
         stream.on_harness_warn(event.get("message", ""))
 
 
-def _emit_message(m, stream, session, seen_ids: set, turn_writes: list) -> str:
+def _emit_message(m, stream, session, seen_ids: set, turn_writes: list, tc_args: dict | None = None) -> str:
     """Map a complete langchain message to stream callbacks + session persistence.
 
     Returns the assistant text if this is a final (no tool_calls) AIMessage.
@@ -509,6 +510,10 @@ def _emit_message(m, stream, session, seen_ids: set, turn_writes: list) -> str:
                 if name == "write_todos" and "todos" in args and hasattr(stream, "on_todos_update"):
                     stream.on_todos_update(args["todos"])
                 tcs.append(ToolCall(id=tc_id, name=name, args=args))
+                # Remember args by tool_call_id so ToolMessage handler can
+                # extract file paths for the turn-end summary.
+                if tc_args is not None:
+                    tc_args[tc_id] = (name, args)
             session.append(Message.assistant(text, tool_calls=tcs))
             return ""
         elif text:
@@ -520,8 +525,14 @@ def _emit_message(m, stream, session, seen_ids: set, turn_writes: list) -> str:
         if hasattr(stream, "on_tool_end"):
             stream.on_tool_end(name, content)
         session.append(Message.tool_result(m.tool_call_id, name, content))
-        # Track file writes for the turn-end summary.
+        # Track file writes for the turn-end summary. Use tc_args to get the
+        # actual file path (ToolMessage only has content, not args).
         if name in ("write_file", "edit_file") and not content.startswith(("Error", "Permission denied")):
-            # Args aren't on ToolMessage; best-effort from content.
-            turn_writes.append(f"{name}")
+            file_path = ""
+            if tc_args is not None:
+                _stored = tc_args.get(m.tool_call_id)
+                if _stored:
+                    _sname, _sargs = _stored
+                    file_path = str(_sargs.get("file_path", _sargs.get("path", "")))
+            turn_writes.append(file_path or name)
     return ""
