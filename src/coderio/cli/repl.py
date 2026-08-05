@@ -18,7 +18,6 @@ from coderio.tools.permission import (
     PermissionMode,
     RichPromptPermissionGate,
 )
-from coderio.tools.workspace import WorkspacePolicy
 
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
@@ -27,59 +26,48 @@ class TuiPermissionGate(PermissionGate):
     """Gate for CONFIRM and AUTO_EDIT modes in the TUI.
 
     Uses a Textual ModalScreen (via request_confirmation) instead of input(),
-    which would deadlock against Textual's terminal takeover. The mode is
-    passed through so check() applies the right tier logic before _ask fires.
+    which would deadlock against Textual's terminal takeover.
     """
 
-    def __init__(self, mode, tui, policy=None):
-        super().__init__(mode, policy=policy)
+    def __init__(self, mode, tui):
+        super().__init__(mode)
         self._tui = tui
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         if hasattr(self._tui, "request_confirmation"):
             return self._tui.request_confirmation(tool_name, args)
-        # Fallback for tests without a real TUI: auto-allow.
         return True
 
 
 def build_gate(cfg: Config, console=None, tui=None):
-    """Construct the permission gate with a workspace policy attached.
+    """Construct the permission gate.
 
     Four permission tiers (least → most permissive):
-      plan      — read-only, blocks all writes/bash
+      plan      — read-only, blocks all writes/shell
       confirm   — prompts before each destructive action
-      auto_edit — auto-allow file edits, bash/web/note still confirm
+      auto_edit — auto-allow file edits, shell/web/note still confirm
       full      — auto-allow everything
 
-    The policy enforces path boundaries in ALL tiers. The root defaults to
-    the process CWD when workspace_root is unset.
-
-    When ``tui`` is provided, confirm/auto_edit modes use a Textual ModalScreen
-    instead of input() (which deadlocks against Textual's terminal takeover).
+    Path isolation is handled by deepagents' backend virtual_mode, not by
+    this gate. This gate only controls WHICH tool types may execute.
     """
-    policy = WorkspacePolicy(root=cfg.tools.workspace_root)
     mode = PermissionMode.normalize(cfg.tools.permission_mode)
     if mode == PermissionMode.FULL:
-        return AutoPermissionGate(policy=policy)
+        return AutoPermissionGate()
     if mode == PermissionMode.PLAN:
-        return PermissionGate(PermissionMode.PLAN, policy=policy)
-    # CONFIRM and AUTO_EDIT both need _ask for some tools — use TuiPermissionGate
-    # (with tui) or RichPromptPermissionGate (without tui, e.g. REPL/CLI mode).
+        return PermissionGate(PermissionMode.PLAN)
     if tui is not None:
-        return TuiPermissionGate(mode, tui=tui, policy=policy)
-    # Non-TUI fallback: RichPromptPermissionGate for CONFIRM, or base
-    # PermissionGate for AUTO_EDIT (check() handles tier logic, _ask uses
-    # input() — fine in REPL where Textual isn't active).
+        return TuiPermissionGate(mode, tui=tui)
     if mode == PermissionMode.AUTO_EDIT:
-        return _ReplAutoEditGate(console=console, policy=policy)
-    return RichPromptPermissionGate(console=console, policy=policy)
+        return _ReplAutoEditGate(console=console)
+    return RichPromptPermissionGate(console=console)
 
 
 class _ReplAutoEditGate(PermissionGate):
     """AUTO_EDIT gate for the non-TUI REPL (uses input() for high-risk tools)."""
 
-    def __init__(self, console=None, policy=None):
-        super().__init__(PermissionMode.AUTO_EDIT, policy=policy)
+    def __init__(self, console=None):
+        super().__init__(PermissionMode.AUTO_EDIT)
         self._console = console
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:

@@ -34,19 +34,18 @@ def to_langchain_tool(tool: "Tool", args_schema: type[BaseModel]) -> StructuredT
     )
 
 
-DESTRUCTIVE_TOOLS = {
-    "write_file",
-    "edit_file",
-    "multi_edit",
-    "bash",
-    "web_fetch",
-    "note",
-}
-READONLY_TOOLS = {"read_file", "list_dir", "glob", "grep", "todo", "web_search"}
+# Tool classification by permission risk level. Uses deepagents native tool
+# names (execute/write_todos/ls) since the production engine is deepagents.
+# The old ReAct engine names (bash/todo/list_dir) are no longer in use.
 
-# Auto Edit 模式细分：文件编辑工具自动放行，高危工具仍需确认。
-# This is the key distinction between Auto Edit and Full Access — file edits
-# are fast and reversible (git), but bash/network/note-writes have side
-# effects that are harder to undo.
-FILE_EDIT_TOOLS = {"write_file", "edit_file", "multi_edit"}
-HIGH_RISK_TOOLS = {"bash", "web_fetch", "note"}
+# Destructive tools: require permission in CONFIRM/AUTO_EDIT/PLAN modes.
+DESTRUCTIVE_TOOLS = {"write_file", "edit_file", "execute", "web_fetch", "note"}
+# Read-only tools: always allowed in all modes (backend virtual_mode handles
+# path isolation — these tools cannot access files outside the workspace root).
+READONLY_TOOLS = {"ls", "read_file", "glob", "grep", "write_todos", "web_search"}
+
+# Auto Edit mode: file edits auto-allowed, high-risk tools still prompt.
+# File edits are fast and reversible (git), but shell/network/note-writes
+# have side effects that are harder to undo.
+FILE_EDIT_TOOLS = {"write_file", "edit_file"}
+HIGH_RISK_TOOLS = {"execute", "web_fetch", "note"}

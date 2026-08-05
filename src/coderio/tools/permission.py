@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-
-# Forward-declared type-only import to avoid a circular dependency at runtime
-# (workspace.py imports nothing from permission.py, but we keep the typing tight).
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any, Callable
 
 from coderio.tools.base import DESTRUCTIVE_TOOLS, FILE_EDIT_TOOLS
-
-if TYPE_CHECKING:
-    from coderio.tools.workspace import WorkspacePolicy
 
 
 class PermissionMode(StrEnum):
@@ -19,12 +13,17 @@ class PermissionMode(StrEnum):
     raise ValueError at construction — catching config typos early.
 
     Levels (least → most permissive):
-      PLAN      — read-only, blocks ALL writes/bash (safe exploration)
+      PLAN      — read-only, blocks ALL writes/shell (safe exploration)
       CONFIRM   — prompts before each destructive action
-      AUTO_EDIT — auto-allow file edits, but bash/web/note still need confirm
+      AUTO_EDIT — auto-allow file edits, but shell/web/note still need confirm
       FULL      — auto-allow everything (no prompts)
 
     Backward compat: the old "auto" string maps to FULL via normalize().
+
+    Security model: file path isolation is handled by deepagents' backend
+    virtual_mode (not by WorkspacePolicy — which was deleted because it
+    couldn't handle virtual paths). Permission gates only control WHICH tools
+    may execute, not WHERE they can write.
     """
 
     PLAN = "plan"
@@ -46,48 +45,37 @@ class PermissionMode(StrEnum):
 
 
 class PermissionGate:
-    """Abstract permission gate. Subclasses implement _ask() for CLI/GUI UI.
+    """Permission gate based on tool type + mode (no path checking).
 
-    Spec §3.4: confirm mode prompts; plan blocks all destructive; auto allows all.
-
-    ``policy`` (WorkspacePolicy | None): when set, ALL modes (including AUTO)
-    enforce the workspace path boundary BEFORE the mode-specific check. This
-    means --auto skips interactive confirmation but NEVER skips the workspace
-    boundary — a model in auto mode still can't write outside the workspace.
-    None = no path check (back-compat for tests / headless use).
+    Path isolation is delegated to deepagents' backend virtual_mode, which
+    maps virtual paths (e.g. /foo.py) to the workspace root and enforces
+    that all file operations stay inside it. This gate only decides whether
+    a tool TYPE is allowed in the current MODE — it does NOT inspect paths.
     """
 
-    def __init__(self, mode: str, policy: "WorkspacePolicy | None" = None):
+    def __init__(self, mode: str):
         self._mode = PermissionMode.normalize(mode)
-        self._policy = policy
 
     @property
     def mode(self) -> str:
         return self._mode
 
     def check(self, tool_name: str, args: dict[str, Any]) -> bool | str:
-        # --- Workspace boundary (runs in ALL modes, including FULL) ---
-        if self._policy is not None:
-            allowed, _reason = self._policy.check(tool_name, args)
-            if not allowed:
-                return False
-        # --- Mode-specific checks ---
         # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
-        # read-only and shouldn't prompt (same as read_file/list_dir).
+        # read-only and shouldn't prompt (same as read_file/ls).
         if tool_name == "note":
             action = str(args.get("action", "")).lower()
             if action in ("read", "list"):
                 return True
         if tool_name not in DESTRUCTIVE_TOOLS:
             return True
-        # FULL: auto-allow everything (policy already checked above).
+        # FULL: auto-allow everything.
         if self._mode == PermissionMode.FULL:
             return True
-        # AUTO_EDIT: auto-allow file edits, but bash/web_fetch/note still confirm.
+        # AUTO_EDIT: auto-allow file edits, shell/web/note still confirm.
         if self._mode == PermissionMode.AUTO_EDIT:
             if tool_name in FILE_EDIT_TOOLS:
                 return True
-            # High-risk tools (bash, web_fetch, note-write) fall through to _ask.
             return self._ask(tool_name, args)
         if self._mode == PermissionMode.PLAN:
             return False
@@ -105,7 +93,7 @@ def _default_prompt(tool_name: str, args) -> bool:
 
 
 class RichPromptPermissionGate(PermissionGate):
-    """Concrete confirm-mode gate using a Rich console (spec §3.4, §5.6 #5).
+    """Concrete confirm-mode gate using a Rich console.
 
     `prompt_fn` is injectable so tests can answer without a real TTY.
     """
@@ -114,9 +102,8 @@ class RichPromptPermissionGate(PermissionGate):
         self,
         console=None,
         prompt_fn: Callable[[str, dict[str, Any]], bool] | None = None,
-        policy: "WorkspacePolicy | None" = None,
     ):
-        super().__init__(PermissionMode.CONFIRM, policy=policy)
+        super().__init__(PermissionMode.CONFIRM)
         self._console = console
         self._prompt_fn = prompt_fn or _default_prompt
 
@@ -127,14 +114,10 @@ class RichPromptPermissionGate(PermissionGate):
 
 
 class AutoPermissionGate(PermissionGate):
-    """Convenience: auto-approve everything — EXCEPT workspace boundary violations.
+    """Auto-approve everything (FULL mode). For tests / explicit trust."""
 
-    For tests / explicit trust. ``policy`` is still enforced when provided:
-    full-access mode skips interactive confirmation, not the security floor.
-    """
-
-    def __init__(self, policy: "WorkspacePolicy | None" = None):
-        super().__init__(PermissionMode.FULL, policy=policy)
+    def __init__(self):
+        super().__init__(PermissionMode.FULL)
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:
         return True

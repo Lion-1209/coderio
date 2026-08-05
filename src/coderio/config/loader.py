@@ -130,7 +130,7 @@ def _from_dict(data: dict) -> Config:
     perm = t.get("permission_mode", cfg.tools.permission_mode)
     if isinstance(perm, str):
         perm_lower = perm.lower()
-        valid = ("confirm", "plan", "auto")
+        valid = ("confirm", "plan", "auto", "full", "auto_edit")
         if perm_lower not in valid:
             raise ValueError(f"config.toml [tools] permission_mode='{perm}' 无效。可选值: {', '.join(valid)}")
         perm = perm_lower

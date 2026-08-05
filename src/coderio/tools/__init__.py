@@ -23,7 +23,6 @@ from coderio.tools.read_file import ReadFileArgs, ReadFileTool
 from coderio.tools.todo import TodoArgs, TodoStore, TodoTool
 from coderio.tools.web_fetch import WebFetchArgs, WebFetchTool
 from coderio.tools.web_search import WebSearchArgs, WebSearchTool
-from coderio.tools.workspace import WorkspacePolicy
 from coderio.tools.write_file import WriteFileArgs, WriteFileTool
 
 __all__ = [
@@ -35,7 +34,6 @@ __all__ = [
     "PermissionMode",
     "RichPromptPermissionGate",
     "AutoPermissionGate",
-    "WorkspacePolicy",
     "TodoStore",
     "build_default_tools",
     "to_langchain_tools",

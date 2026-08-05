@@ -39,7 +39,7 @@ def test_default_mode_uses_concrete_gate_not_abstract(tmp_path, monkeypatch):
 
     old, sys.stdin = sys.stdin, StringIO("\n")
     try:
-        result = gate.check("bash", {"command": "ls"})
+        result = gate.check("execute", {"command": "ls"})
     finally:
         sys.stdin = old
     # No answer -> not allowed (default N), but no crash.
