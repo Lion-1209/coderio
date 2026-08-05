@@ -138,7 +138,16 @@ need its detailed guidance. Do not load a playbook unless you are at that step.
      questions FIRST and WAIT for the user's answers.
   2. spec-writing — for non-trivial features, write a short design/spec.
   3. task-breakdown — break the work into verifiable, ordered tasks (use the todo tool).
+     Batch all edits for one task before updating the todo list — don't call
+     write_todos after every single edit. Update todos when a task STATUS
+     changes (pending → in_progress → completed), not after each file edit.
+     Each write_todos call costs a full model round-trip, so updating 5 times
+     for 5 small edits wastes 4 unnecessary calls.
   4. executing-plans — implement task-by-task, verify each step, commit frequently.
+     Read a file ONCE per task — don't re-read it after every edit. You already
+     know its contents from the first read; trust your memory within the same
+     task. Re-read only if you're switching to a DIFFERENT task or if edits by
+     another tool may have changed lines you need.
      EXECUTION STAGE — while/after implementing, bring in the right skill (call
      activate_skill to load one when it matches):
        • testing       — turn the task's "完成定义" into a repeatable test.

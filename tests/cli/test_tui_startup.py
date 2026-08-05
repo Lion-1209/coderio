@@ -65,8 +65,12 @@ async def test_interrupt_btn_hidden_on_idle():
 
 
 @pytest.mark.asyncio
-async def test_todos_render_as_checklist_in_history():
-    """Todos render as a Markdown checklist in the output area (Claude Code style)."""
+async def test_todos_render_as_dynamic_checklist():
+    """Todos render as a dynamic checklist that updates in-place (Claude Code style).
+
+    First write_todos mounts the checklist. Second write_todos updates the SAME
+    widget (no duplicate). on_finish resets the widget reference.
+    """
     from textual.containers import VerticalScroll
 
     from coderio.cli.tui import CoderioTUI
@@ -74,7 +78,8 @@ async def test_todos_render_as_checklist_in_history():
     app = CoderioTUI()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause(0.3)
-        # Simulate write_todos firing.
+
+        # First write_todos: 1/3 done.
         app.on_todos_update(
             [
                 {"content": "fix typo", "status": "completed"},
@@ -83,9 +88,26 @@ async def test_todos_render_as_checklist_in_history():
             ]
         )
         await pilot.pause(0.5)
-        # The checklist should appear in history as a Panel.
         history = app.query_one("#history", VerticalScroll)
-        assert len(list(history.children)) >= 1, "history should have the todo checklist panel"
+        count_after_first = len(list(history.children))
+        assert count_after_first >= 1, "history should have the todo checklist"
+        assert app._todo_widget is not None, "todo widget should be tracked"
+
+        # Second write_todos: 2/3 done — should UPDATE, not add new widget.
+        app.on_todos_update(
+            [
+                {"content": "fix typo", "status": "completed"},
+                {"content": "add tests", "status": "completed"},
+                {"content": "update docs", "status": "in_progress"},
+            ]
+        )
+        await pilot.pause(0.5)
+        count_after_second = len(list(history.children))
+        assert count_after_second == count_after_first, "second update should not add a new widget"
+
+        # on_finish resets the widget reference.
+        app.on_finish()
+        assert app._todo_widget is None, "todo widget should be reset on finish"
 
 
 @pytest.mark.asyncio

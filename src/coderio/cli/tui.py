@@ -1297,6 +1297,10 @@ class CoderioTUI(App):
         self._render_q: collections.deque = collections.deque()
         self._live_out_widget: RichLog | None = None  # streaming output RichLog (main thread)
         self._live_rendered_len: int = 0  # chars already written to the RichLog
+        # Dynamic TODO widget: mounted once on first write_todos, updated
+        # in-place on subsequent calls (Claude Code style). Reset to None on
+        # on_finish so the next turn gets a fresh widget.
+        self._todo_widget: Static | None = None
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -1516,11 +1520,12 @@ class CoderioTUI(App):
 
     @staticmethod
     def _h_todo_update(self, args):
-        """Render todos as a Markdown checklist in the output area (main thread).
+        """Render todos as a dynamic checklist in the output area (main thread).
 
-        Claude Code style: todos appear inline in the conversation history as a
-        Markdown checklist, not in a separate panel. Each write_todos call
-        appends a fresh checklist view to the history stream.
+        Claude Code style: a SINGLE checklist widget is mounted on first
+        write_todos, then updated in-place on subsequent calls. Tool output
+        (edit_file, execute, etc.) appears BELOW it. The widget stays in
+        history as a record of the task's progress.
         """
         todos = args[0] if args else []
         if not todos:
@@ -1538,7 +1543,20 @@ class CoderioTUI(App):
             else:
                 lines.append(f"- [ ] {content}")
         text = "\n".join(lines)
-        self._render_q.append(("panel", Panel(Markdown(text), title="📝 任务清单", border_style="cyan")))
+        panel = Panel(Markdown(text), title="📝 任务清单", border_style="cyan")
+
+        if self._todo_widget is not None:
+            # Update existing widget in-place (no new mount).
+            try:
+                self._todo_widget.update(panel)
+                return "none"
+            except Exception:
+                pass  # widget was removed (scrolled off) → mount a new one
+        # First call or widget lost → mount new.
+        from textual.widgets import Static
+
+        self._todo_widget = Static(panel)
+        self._add_static_main(panel)
         return "final"
 
     # Dispatch table: action name -> handler. Built once at class definition.
@@ -2147,6 +2165,8 @@ class CoderioTUI(App):
         self._round_think_started = False
         self.buffer = ""
         self._live_output_last_flush = 0.0
+        # Reset the todo widget so the next turn mounts a fresh one.
+        self._todo_widget = None
         self._render_q.append(("finalize", buf, think_text, secs, had_live))
         if self._status_bar:
             self._status_bar.set_phase("idle")
