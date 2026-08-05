@@ -2,7 +2,7 @@
 
 This module turns the "write code then claim done without verifying" failure mode
 from a soft prompt rule into a STRUCTURAL constraint. The harness sits inside
-``_execute_turn`` and controls the one thing the model cannot override: whether a
+``run_deep_agent`` and controls the one thing the model cannot override: whether a
 "no tool_calls" response actually TERMINATES the turn, or gets force-continued with
 an injected message. All decisions are based on observed tool calls/results
 (ground truth), never on the model's self-report.
@@ -82,7 +82,7 @@ def _norm_path(p: str) -> str:
 
     This is the single source of truth for path comparison in the harness —
     observe() normalizes on write, _was_read() normalizes on compare, and the
-    cross-turn pre-fill in loop.py normalizes when seeding content_read_files.
+    cross-turn pre-fill normalizes when seeding content_read_files.
     Without it, a model that reads 'Loop.py' then cites 'loop.py:81' gets
     force-re-read by GroundingGate (observed in real sessions: 'Loop.py' was
     read 5x in one turn purely from case drift).
@@ -353,7 +353,7 @@ class Harness:
                         # (regex false positives on prose path-like strings).
                         # Match "not found" (not just "file not found") because
                         # deepagents' ReadResult uses "File '...' not found"
-                        # and the ReAct engine uses "file not found" — both
+                        # and the backend uses "file not found" — both
                         # contain "not found".
                         if result and "not found" in result.lower():
                             self.state.not_found_files.add(_norm_path(v))

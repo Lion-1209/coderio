@@ -17,7 +17,7 @@ CRITICAL: after_model MUST be decorated with @hook_config(can_jump_to=["model"])
 Without it, langchain's factory sees can_jump_to=[] and does NOT build the
 conditional edge for this middleware, so jump_to='model' silently does nothing —
 the agent ends despite the harness wanting to force-continue. This was a latent
-bug in the original experimental version (verified against langchain factory.py
+bug in the original version (verified against langchain factory.py
 _get_can_jump_to, which reads method.__can_jump_to__).
 """
 

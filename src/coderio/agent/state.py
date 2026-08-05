@@ -40,7 +40,7 @@ class StateSnapshot:
 
     state: AgentState
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
-    step: int = 0  # ReAct round number when the transition fired
+    step: int = 0  # model round number when the transition fired
     hint: str = ""  # optional context (e.g. "wrote loader.py", "ran pytest")
 
     def to_dict(self) -> dict:

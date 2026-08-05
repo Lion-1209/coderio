@@ -1049,7 +1049,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
         Binding("delete", "delete_selected", "删除", show=True),
     ]
 
-    def __init__(self, summaries: list[dict], save_dir: str = "") -> None:
+    def __init__(self, summaries: list[dict], save_dir: str = "", active_session_id: str = "") -> None:
         super().__init__()
         self._all = summaries  # full list; filtered view derived on typing
         self._filter = ""
@@ -1058,6 +1058,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
         # source that populated `summaries` — hardcoding ~/.coderio/sessions
         # would delete the wrong files when a custom save_dir is configured.
         self._save_dir = save_dir
+        self._active_session_id = active_session_id  # cannot be deleted
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
@@ -1140,6 +1141,13 @@ class SessionPickerScreen(ModalScreen[str | None]):
         item = lv.children[lv.index]
         sid = item.name or ""
         if not sid:
+            return
+        # Protect the currently active session — deleting it would corrupt
+        # the running conversation (the Session object still holds a file
+        # handle, and the next append would recreate a file without history).
+        if sid == self._active_session_id:
+            self.app.bell()
+            return
             return
 
         # Two-step confirmation: if there's a pending delete for THIS sid,
@@ -1802,7 +1810,7 @@ class CoderioTUI(App):
         # the widget tree by default, so a submission in OnboardingScreen's
         # `#onboard-input` (API key / model / base_url fields) or any other
         # modal's Input would also land here and be dispatched to _on_input →
-        # run_agent → session.append, leaking sensitive fields like API keys
+        # run_deep_agent → session.append, leaking sensitive fields like API keys
         # into the session jsonl. Observed in real sessions: a 64-char API
         # key was persisted as a user message. Guard by widget id — only `#msg`
         # is the chat input. (on_input_changed above already has this guard.)
@@ -1852,7 +1860,7 @@ class CoderioTUI(App):
                     # Reset the streaming state + status bar so the TUI doesn't
                     # get stuck in 'thinking' phase when the agent errors out
                     # (e.g. API auth failure, network error). on_finish is never
-                    # called when run_agent raises, so we must clean up here.
+                    # called when run_deep_agent raises, so we must clean up here.
                     self._round_thinking = ""
                     self._round_think_start = 0.0
                     self._live_think_body = None
@@ -2497,7 +2505,11 @@ def run_tui(
 
                 tui.call_from_thread(
                     tui.push_screen,
-                    SessionPickerScreen(summaries, save_dir=str(_P(rt["cfg"].session.save_dir).expanduser())),
+                    SessionPickerScreen(
+                        summaries,
+                        save_dir=str(_P(rt["cfg"].session.save_dir).expanduser()),
+                        active_session_id=getattr(rt["session"], "id", ""),
+                    ),
                     _on_picked,
                 )
                 return

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coderio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A skill-driven coding agent — structural harness, foldable thinking TUI, deepagents engine."
 readme = "README.md"
 license = "MIT"
@@ -52,7 +52,6 @@ dev = [
     "ruff>=0.16",
     "build>=1.2",
 ]
-deepagent = ["deepagents>=0.6"]
 
 [project.scripts]
 coderio = "coderio.cli.app:main_entry"
@@ -113,3 +112,12 @@ select = ["E", "F", "W", "I", "S"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["coderio"]
+
+[tool.coverage.report]
+# Baseline floor: total coverage must not drop below 60%.
+# Key modules (deep_loop, permission) have lower coverage today — this floor
+# prevents overall regression while we build up integration tests.
+fail_under = 60

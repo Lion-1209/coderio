@@ -1,26 +1,20 @@
 """deepagents-backed production agent engine for coderio.
 
-Replaces the hand-rolled ReAct loop (agent/loop.py run_agent) as the default
-engine. deepagents provides context management (offload + summarization), a
-filesystem/shell backend, subagents, and task planning — capabilities coderio
-previously reimplemented (compact.py) or lacked (subagents) entirely.
+deepagents provides context management (offload + summarization), a
+filesystem/shell backend, subagents, and task planning.
 
 What coderio ADDS on top via middleware:
   - HarnessMiddleware: the "wrote code but never verified → block done" hard
     constraint (4 gates). deepagents trusts the agent; coderio does not.
-  - PermissionMiddleware: 4-tier access system (plan/confirm/auto_edit/full) +
-    workspace boundary. deepagents' FilesystemPermission is coarser.
+  - PermissionMiddleware: 4-tier access system (plan/confirm/auto_edit/full).
 
-The old ReAct engine (loop.py) is retained for crew (which uses _execute_turn)
-and its test suite, but is NOT used as a production fallback — there is no
-automatic fallback path from deepagents to ReAct.
-_execute_turn directly). This module is the production path invoked by the TUI.
+This module is the sole production engine, invoked by the TUI.
 
 Streaming: uses THREE stream modes in parallel —
   - 'messages': AIMessageChunk → on_token / on_thinking (token-by-token stream)
   - 'updates':  complete messages → on_tool_start / on_tool_end / usage
   - 'custom':   harness signals → on_harness_continue / on_harness_warn
-Using only 'updates' (as the old experimental version did) degrades on_token to
+Using only 'updates' degrades on_token to
 whole-text dumps and misses token streaming entirely.
 """
 
