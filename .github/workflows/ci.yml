@@ -59,6 +59,15 @@ jobs:
         shell: bash
         run: pip check
 
+      - name: Audit dependencies for known vulnerabilities
+        # Scans installed packages against the PyPI advisory database.
+        # Non-blocking (continue-on-error) — reports issues without failing CI.
+        shell: bash
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit --skip-editable
+
       - name: Run tests with coverage
         # Report coverage per-module. No hard threshold yet — this establishes
         # a baseline so coverage trends are visible in CI output. Failures are
