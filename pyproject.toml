@@ -82,6 +82,9 @@ select = ["E", "F", "W", "I", "S"]
 # the agent's main loop. Logging would spam the terminal during streaming.
 # Also S603 for the OnboardingScreen verification subprocess.
 "src/coderio/cli/tui.py" = ["S110"]
+"src/coderio/cli/tui_onboarding.py" = ["S110"]
+"src/coderio/cli/tui_screens.py" = ["S110"]
+"src/coderio/cli/tui_widgets.py" = ["S110"]
 # Bash tool: S603 (subprocess with untrusted input) is the TOOL'S ENTIRE PURPOSE.
 # The agent runs user/model-authored shell commands by design. The workspace
 # policy + permission gate are the security boundary, not subprocess filtering.
