@@ -2459,10 +2459,12 @@ def run_tui(
         return
 
     banner = (
-        f"[bold magenta]coderio[/bold magenta]  [dim]model=[/dim]{cfg.model.default}  "
+        f"[bold magenta]coderio[/bold magenta] v0.2.0  "
+        f"[dim]profile=[/dim]{cfg.active_profile or 'default'}  "
+        f"[dim]model=[/dim]{cfg.model.default}  "
         f"[dim]perm=[/dim]{gate.mode}"
-        "\n[dim]模式:[/dim] [cyan]single-agent (Textual TUI)[/cyan]. "
-        "\n[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
+        "\n[dim]引擎:[/dim] [cyan]deepagents[/cyan]  "
+        "[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
     )
 
     # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
