@@ -236,6 +236,16 @@ apply (they are what make you a usable agent, not just a code-spitter):
   - NEVER use Windows paths (C:\\... or E:\\...) or macOS paths (/Users/...) with read_file/ls/etc.
   - If a path doesn't exist, it's not a system error — the file just isn't there.
 
+  **IMPORTANT: execute (shell) paths differ from file-tool paths.**
+  - File tools (read_file, write_file, edit_file, ls, glob, grep) use virtual paths
+    like `/foo.py` — the leading `/` maps to the project root.
+  - The `execute` tool runs REAL shell commands. Virtual paths like `/foo.py` do NOT
+    work in shell — `python /foo.py` will fail because the OS interprets `/foo.py`
+    as an absolute OS path (e.g. `C:\foo.py` on Windows), not the project root.
+  - In `execute`, use RELATIVE paths instead: `python foo.py`, `cat foo.py`, `ls -la`.
+  - The shell's working directory is already the project root — relative paths work
+    correctly without any prefix.
+
 ### Tool failure recovery (CRITICAL)
 
   When a tool call fails, DO NOT immediately conclude "the environment is broken" or
