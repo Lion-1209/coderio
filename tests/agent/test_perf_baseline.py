@@ -20,7 +20,10 @@ import time
 
 import pytest
 
-# Skip entire module if no API key or deepagents not installed.
+# Skip entire module unless explicitly enabled with CODERIO_PERF_TESTS=1.
+# This prevents CI environments (which may have stale/invalid API keys in
+# env vars) from accidentally running real model calls and failing.
+_PERF_ENABLED = os.environ.get("CODERIO_PERF_TESTS") == "1"
 _HAS_KEY = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("Z_API_KEY"))
 try:
     import deepagents  # noqa: F401
@@ -30,8 +33,8 @@ except ImportError:
     _HAS_DEEP = False
 
 pytestmark = pytest.mark.skipif(
-    not (_HAS_KEY and _HAS_DEEP),
-    reason="requires API key + deepagents (set ANTHROPIC_API_KEY)",
+    not (_PERF_ENABLED and _HAS_KEY and _HAS_DEEP),
+    reason="requires CODERIO_PERF_TESTS=1 + API key + deepagents",
 )
 
 
