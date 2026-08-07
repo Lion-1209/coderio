@@ -31,8 +31,8 @@
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器 + **turn token 计数**）、slash 命令自动补全、**可折叠 TODO 面板**（实时进度 ✓/→/○）、**纵向权限确认菜单**（↑↓ + Enter，zcode/codex 风格）、**会话管理**（`/resume` 恢复 + Del 删除）、**权限/配置可视化选择器**（`/mode` `/profile`）、**文件修改可视化**、**任务中断**（Esc / ⏹ 按钮）、**错误恢复**
 - **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端；coderio 的 harness 四道门 + 四级权限作为 middleware 保留
-- **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）、**自动激活项目 .venv**（bash 里的 python 自动指向虚拟环境）
-- **工作区路径策略（读写分离）**：写工具（write_file/edit_file/multi_edit/bash cwd）路径必须 resolve 在工作区根目录内，超出即硬拒绝；读工具（read_file/grep/glob/list_dir）不受限，agent 可读工作区外的依赖/配置。`--auto` 模式也执行路径策略——跳过交互确认，不跳过安全边界
+- **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）
+- **文件路径隔离**：deepagents 后端 `virtual_mode` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内，agent 看到的 `/foo.py` 实际映射到 `{workdir}/foo.py`。**注意：shell（execute）命令不受 virtual_mode 约束**——`rm -rf`、`cat /etc/passwd`、网络请求都能执行。真正的 OS 级沙箱是未来工作，当前靠权限门（plan/confirm/auto_edit/full）控制哪些工具可执行
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 
 ---
@@ -86,7 +86,7 @@ context_limit = 128000                  # （可选）onboarding 自动探测写
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto
-workspace_root = ""                     # 受信工作区根目录（空=用启动目录）；写工具路径必须在此目录内
+workspace_root = ""                     # shell 后端的 CWD（空=用启动目录）；文件路径隔离由 deepagents virtual_mode 处理
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）
@@ -179,7 +179,7 @@ coderio 用 deepagents 作为主引擎（上下文管理、子 agent、文件系
 | middleware | 作用 |
 |---|---|
 | **HarnessMiddleware** | coderio 的四道门硬约束（验证/完成/grounding/plan），deepagents 本身不强制验证 |
-| **PermissionMiddleware** | 四级权限（plan/confirm/auto_edit/full）+ 工作区路径边界 |
+| **PermissionMiddleware** | 四级权限（plan/confirm/auto_edit/full）—— 控制哪些工具可执行 |
 
 deepagents 的默认 BASE_AGENT_PROMPT 被清空——coderio 的 system prompt 独占，避免两套指令冲突。
 
@@ -235,8 +235,11 @@ agent 执行阶段实时推导并显示在状态栏（`步骤3 · [实现] 思�
 .venv/bin/python -m pytest tests/agent/ -v            # Linux / macOS
 
 # Live 验证（连真实模型端点，需设置 ANTHROPIC_API_KEY）
+# harness 四道门真实模型验证：
 ANTHROPIC_API_KEY=<key> .venv/Scripts/python.exe scripts/verify_harness_live.py   # Windows
 ANTHROPIC_API_KEY=<key> .venv/bin/python scripts/verify_harness_live.py           # Linux / macOS
+# deepagents 引擎集成验证：
+ANTHROPIC_API_KEY=<key> .venv/Scripts/python.exe scripts/verify_deepagent_live.py # Windows
 ```
 
 三层测试设计：单元测试（逻辑）+ Live 验证（真实集成）+ 手动体验测试。

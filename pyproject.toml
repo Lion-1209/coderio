@@ -51,6 +51,7 @@ dev = [
     "pytest-cov>=4",
     "ruff>=0.16",
     "build>=1.2",
+    "mypy>=1.10",
 ]
 
 [project.scripts]
@@ -120,7 +121,23 @@ asyncio_mode = "auto"
 source = ["coderio"]
 
 [tool.coverage.report]
-# Baseline floor: total coverage must not drop below 60%.
-# Key modules (deep_loop, permission) have lower coverage today — this floor
-# prevents overall regression while we build up integration tests.
+# Local-dev coverage floor. CI enforces a stricter 70% via --cov-fail-under
+# (see .github/workflows/ci.yml). This 60% is the "running tests in your
+# editor" safety net — lower than CI so local runs don't fail on partial
+# test selection. Current baseline: ~75% total, deep_loop 75%, middleware 80%+.
 fail_under = 60
+
+[tool.mypy]
+# Gradual typing: start lenient, tighten over time. The goal is to catch
+# real type errors (wrong arg counts, None where a value is expected) without
+# blocking on the many untyped third-party deps (langchain, deepagents, textual).
+# CI runs mypy as non-blocking (continue-on-error) until the codebase is clean.
+python_version = "3.11"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Don't require complete annotations yet — most modules have them, but
+# flagging every untyped function would generate hundreds of warnings.
+check_untyped_defs = false
+# Exclude test files (they use dynamic fixtures, pytest monkeypatch, etc.)
+exclude = ["tests/", "build/", "dist/", "\\.venv/"]

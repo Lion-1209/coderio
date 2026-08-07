@@ -69,12 +69,24 @@ jobs:
           pip-audit --skip-editable
 
       - name: Run tests with coverage
-        # Report coverage per-module. No hard threshold yet — this establishes
-        # a baseline so coverage trends are visible in CI output. Failures are
-        # still caught by pytest itself; coverage is informational only.
+        # Enforces a coverage floor so coverage can't silently regress.
+        # The 70% floor is conservative (current baseline is ~75%) — it catches
+        # gross regressions (a module losing its tests) without failing on
+        # minor fluctuations. pyproject.toml's [tool.coverage.report]
+        # fail_under=60 is the local-dev default; CI enforces the stricter 70%.
         shell: bash
         run: |
-          python -m pytest -q --cov=coderio --cov-report=term-missing
+          python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=70
+
+      - name: Type check (mypy)
+        # Non-blocking (continue-on-error): gradual typing. The config in
+        # pyproject.toml [tool.mypy] is lenient (ignore_missing_imports, no
+        # check_untyped_defs) so this catches gross type errors without
+        # blocking on every untyped third-party dep. Tighten over time.
+        continue-on-error: true
+        shell: bash
+        run: |
+          python -m mypy src/coderio || true
 
       - name: Build wheel (smoke)
         shell: bash

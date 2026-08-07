@@ -41,7 +41,7 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 |------|------|------|----------|
 | `agent/` | ~2500 | deepagents 引擎、harness/permission middleware、提示词构建、流式协议 | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, prompts.py |
 | `cli/` | ~3800 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
-| `tools/` | ~1100 | 工具集 + 权限门 + 工作区路径策略 + langchain 适配 | bash.py, permission.py, workspace.py, base.py |
+| `tools/` | ~1100 | 工具集 + 权限门 + langchain 适配（路径隔离由 deepagents virtual_mode 处理） | bash.py, permission.py, base.py |
 | `config/` | ~400 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
 | `skills/` | ~220 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
 | `session/` | 260 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
@@ -74,7 +74,7 @@ deepagents 是"信任 agent"的——它不强制验证、不检查引用、不�
 | middleware | coderio 独有 | deepagents 没有 |
 |---|---|---|
 | HarnessMiddleware | 四道门硬约束（验证/完成/grounding/plan） | 不强制验证 |
-| PermissionMiddleware | 四级权限 + 工作区读写分离 | 仅粗粒度 FilesystemPermission |
+| PermissionMiddleware | 四级权限（plan/confirm/auto_edit/full）控制工具执行 | 仅粗粒度 FilesystemPermission |
 
 ---
 
@@ -84,7 +84,7 @@ deepagents 是"信任 agent"的——它不强制验证、不检查引用、不�
 
 ### 3.1 为什么需要 harness（设计动机）
 
-裸 ReAct 循环（模型调工具→看结果→再调→…→说"完成"）有一个致命弱点：**模型说"完成"就结束**。如果模型写了 500 行代码但从未运行就声称"我做完了"，循环立即返回——产出未经验证。
+裸 agent 循环（模型调工具→看结果→再调→…→说"完成"）有一个致命弱点：**模型说"完成"就结束**。如果模型写了 500 行代码但从未运行就声称"我做完了"，循环立即返回——产出未经验证。
 
 提示词无论写多强（"MANDATORY"、"MUST verify"）都是**软规则**：模型决定停就停，循环无权干预。实测中贪吃蛇游戏两次翻车，根因都是这个。
 
@@ -274,7 +274,7 @@ Textual 8.x App，核心设计：
 
 - **线程模型**：agent 在 Textual Worker 后台线程跑，UI 更新通过 `_render_q`（thread-safe deque）+ 60ms 定时器排空
 - **流式渲染**：dict 分派表（`_RENDER_DISPATCH`）映射 action → handler，每个 handler返回 streaming/final/none 决定滚动策略
-- **中断**：`Esc` / `⏹ 中断` 按钮 → `_interrupted` 标志位，agent 在每轮 ReAct 循环开头检查 `is_interrupted()` → `InterruptedError` → 黄色"已中断"面板
+- **中断**：`Esc` / `⏹ 中断` 按钮 → `_interrupted` 标志位，agent 流循环检查 `is_interrupted()` → `InterruptedError` → 黄色"已中断"面板
 - **confirm 模式**：`TuiPermissionGate` 用 `ConfirmMenu`（纵向选择菜单）+ `threading.Event` 跨线程同步，↑↓ 选择 + Enter 确认
 - **可视化选择器**：`/mode`（ModePickerScreen）、`/profile`（ProfilePickerScreen）、`/resume`（SessionPickerScreen）
 - **文件修改可视化**：写工具结果用黄色 `📝` 行（即时）+ 轮末汇总面板（`on_turn_end`）
@@ -296,14 +296,14 @@ Textual 8.x App，核心设计：
 | 外部 | web_search, web_fetch |
 | 记忆 | note（跨会话长期记忆）|
 
-**权限门**（`permission.py`）：confirm / plan / auto 三模式。`DESTRUCTIVE_TOOLS`（write/edit/multi_edit/bash/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto 全放。所有模式都执行 `WorkspacePolicy`（路径边界）。
+**权限门**（`permission.py`）：plan / confirm / auto_edit / full 四模式。`DESTRUCTIVE_TOOLS`（write_file/edit_file/multi_edit/execute/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto_edit 自动放行文件编辑但仍问高危工具、full 全放。
 
-**工作区路径策略**（`workspace.py`）：读写分离。写工具（write/edit/multi_edit/bash cwd）路径必须 `resolve()` 在工作区根目录内，超出即硬拒绝。读工具（read_file/grep/glob/list_dir）不受限。`--auto` 模式也执行路径策略。
+**文件路径隔离**：deepagents 后端的 `virtual_mode=True` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内——agent 看到的 `/foo.py` 映射到 `{workdir}/foo.py`。**注意：shell（execute）不受 virtual_mode 约束**，shell 命令可任意读写工作区外的文件、访问网络。真正的 OS 级沙箱是未来工作。旧的 coderio 自研 `WorkspacePolicy`（路径 resolve + relative_to 边界检查）已删除——它无法处理 deepagents 的虚拟路径（`/foo.py` 被 resolve 成 `C:\foo.py`，总是落在工作区外被误拒）。
 
-**bash 工具特性**：
-- **.venv 自动激活**：执行命令前检查 `.venv/Scripts/activate`（Windows）或 `.venv/bin/activate`（Linux/macOS），存在则 `source activate; command`
-- **进程树超时杀**：`Popen` + 手动 timeout + `_kill_process_tree`（Windows Job Object / Linux killpg），解决 `subprocess.run(timeout=...)` 在 Windows 上不杀孙子进程导致永久挂起的问题
-- **exit_code marker**：结果末尾追加 `[exit_code: N]`，harness VerifyGate 解析它判断验证是否通过
+**shell（execute）工具特性**：
+- **进程树超时杀**：deepagents 后端用 `Popen` + timeout + 进程树 kill（Windows Job Object / POSIX killpg），解决 `subprocess.run(timeout=...)` 在 Windows 上不杀孙子进程导致永久挂起的问题
+- **exit_code marker**：`HarnessMiddleware._result_to_text` 从 deepagents 的结构化 ExecuteResponse 提取 exit_code，追加 `[exit_code: N]` 到结果文本，harness VerifyGate 解析它判断验证是否通过
+- **注意**：旧的 coderio 自研 bash 工具的 `.venv` 自动激活逻辑在生产路径不生效（deepagents 后端不经过它）。如需 venv，在 shell 命令里显式激活
 
 **统一接口**（`base.py`）：每个工具声明 pydantic `args_schema` + `run()`，经 `to_langchain_tool` 适配成 `StructuredTool` 绑定给模型。
 
@@ -336,7 +336,7 @@ CODE 执行段（写完代码后按需）:
 
 关键字段：
 - `model`: default, provider, base_url, provider_id, max_output_tokens=16384, context_limit=0（onboarding 自动探测）
-- `tools`: bash_shell, permission_mode, max_tool_rounds=25, workspace_root=""（空=用 cwd）
+- `tools`: bash_shell, permission_mode, workspace_root=""（空=用 cwd）
 - `context`: enabled, trigger_ratio=0.6, keep_recent=8, model_context_limit=200000
 - `skills`: auto_load, stage_auto_inject, **harness=True**, repo_url
 - `cli`: theme, show_tool_output
@@ -409,9 +409,9 @@ _execute_turn(harness=h)  循环：
 
 2. **harness 作为 deepagents middleware**：`HarnessMiddleware` 通过 `after_model` 的 `jump_to="model"` 实现 force-continue（需 `@hook_config(can_jump_to=["model"])` 装饰器，否则 langchain factory 不建条件边导致静默失效）。
 
-3. **deepagents 是主依赖**：`deepagents >=0.6` 已从 optional 移到主 dependencies。旧 ReAct 引擎（`loop.py`）保留为 fallback。
+3. **deepagents 是唯一引擎**：`deepagents >=0.6` 在主 dependencies。旧 ReAct 引擎（`loop.py`）已完全删除——deepagents 是唯一生产引擎，没有 fallback。测试用 fake model + 真实 graph 覆盖，Live 脚本（`scripts/verify_deepagent_live.py`）用真实 provider 验证。
 
-4. **WorkspacePolicy 是路径策略，不是 OS 级沙箱**：文件工具（write/edit/multi_edit）的路径被 resolve + relative_to 边界检查拦截，但 bash 命令内容不受控——`printf x > /tmp/out.txt` 等通过重定向/绝对路径的写入可以绕过。真正的隔离需要 OS 级容器/seccomp，当前是"路径策略 + 权限门"的最佳折中。
+4. **文件隔离靠 virtual_mode，shell 无沙箱**：deepagents 后端 `virtual_mode=True` 限制文件工具路径，但 shell（execute）命令内容完全不受控——`rm -rf`、`cat /etc/passwd`、网络请求都能执行。旧的 coderio 自研 `WorkspacePolicy`（路径 resolve + relative_to）已删除（无法处理虚拟路径）。真正的隔离需要 OS 级容器/seccomp（见路线图），当前是"virtual_mode 文件隔离 + 权限门控制工具执行"的折中，**不是安全边界**。
 
 5. **ToolResult 非结构化**：bash exit_code 靠正则从 result 字符串提取 `[exit_code: N]`。如果 provider 或工具版本变化导致 marker 格式漂移，解析会断。长期应改为结构化 ToolResult（含 exit_code 字段）。
 

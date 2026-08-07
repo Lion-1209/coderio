@@ -1,0 +1,29 @@
+# Pre-commit hooks for coderio.
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# These hooks mirror the CI checks so issues are caught locally before push.
+# The AGENTS.md rule "提交和推送必须经过用户明确同意" means these hooks run
+# on `git commit` (not push) — they're a safety net, not a gate.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff for lint (E/F/W/I/S) + format. Mirrors [tool.ruff] in pyproject.toml.
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # Skip .github/workflows/*.yml — those use GitHub-specific syntax that
+        # check-yaml's safe_load sometimes misparses on older PyYAML.
+        exclude: ^\.github/workflows/
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
