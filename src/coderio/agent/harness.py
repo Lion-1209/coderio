@@ -372,10 +372,15 @@ class Harness:
                 exit_code = _parse_exit_code(result)
                 if exit_code is not None and exit_code != 0:
                     # Verification FAILED. Do NOT clear writes_since_verify — the
-                    # agent must fix the code and re-run. Increment the verify
-                    # attempt counter so the gate can escalate if the model keeps
-                    # failing to fix it (instead of looping forever).
-                    self.state.verify_attempts += 1
+                    # agent must fix the code and re-run. Do NOT increment
+                    # verify_attempts here: that counter is the _verify_gate's
+                    # interception budget (how many times completion was refused).
+                    # A failed bash run is a genuine verify attempt, not a
+                    # completion attempt — it should NOT consume the gate budget.
+                    # The gate still escalates after _MAX_GATE_ATTEMPTS
+                    # interceptions regardless of whether the intervening bash
+                    # calls passed or failed.
+                    pass
                 else:
                     # Either exit 0 (passed) or no exit_code marker at all (old
                     # providers/tools that don't report it — preserve back-compat

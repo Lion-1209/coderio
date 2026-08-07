@@ -26,25 +26,74 @@ def _kill_process_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
         # Use a Job Object to kill the whole tree. ctypes lets us call the
         # Win32 API without adding a dependency on pywin32.
+        #
+        # REGRESSION (2026-08-07 report P2-5): the old code passed a 4-byte
+        # c_ulong buffer to SetInformationJobObject for
+        # JobObjectExtendedLimitInformation (info class 9), which actually
+        # expects a ~144-byte JOBOBJECT_EXTENDED_LIMIT_INFORMATION struct.
+        # The malformed call silently failed (returned FALSE), so the
+        # KILL_ON_JOB_CLOSE limit was never set — only TerminateJobObject
+        # (which needs no limit info) actually did the killing. Now we build
+        # the correct struct so BOTH mechanisms work: the limit kills the tree
+        # when the handle closes, and TerminateJobObject kills it immediately.
         import ctypes
 
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", ctypes.c_ulong),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", ctypes.c_ulong),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", ctypes.c_ulong),
+                ("SchedulingClass", ctypes.c_ulong),
+            ]
+
+        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
         kernel32 = ctypes.windll.kernel32
+        # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000 — when the last handle to
+        # the job closes, all processes in the job are terminated.
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
         PROCESS_ALL_ACCESS = 0x1F0FFF
 
         h_job = kernel32.CreateJobObjectW(None, None)
         if h_job:
+            info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             kernel32.SetInformationJobObject(
                 h_job,
-                9,  # JobObjectExtendedLimitInformation = 9
-                ctypes.byref(ctypes.c_ulong(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)),
-                ctypes.sizeof(ctypes.c_ulong),
+                9,  # JobObjectExtendedLimitInformation
+                ctypes.byref(info),
+                ctypes.sizeof(info),
             )
             h_proc = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
             if h_proc:
                 kernel32.AssignProcessToJobObject(h_job, h_proc)
                 kernel32.CloseHandle(h_proc)
-            # TerminateJobObject kills ALL processes in the job (the whole tree).
+            # TerminateJobObject kills ALL processes in the job (the whole tree)
+            # immediately — the KILL_ON_JOB_CLOSE limit above is a safety net for
+            # any process that might have escaped assignment.
             kernel32.TerminateJobObject(h_job, 1)
             kernel32.CloseHandle(h_job)
     else:

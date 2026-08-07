@@ -37,6 +37,11 @@ class EditFileTool:
         text = p.read_text(encoding="utf-8", errors="replace")
         old_string = _strip_line_prefix(old_string)
         new_string = _strip_line_prefix(new_string)
+        # Empty old_string is a footgun: str.replace("", x) inserts x between
+        # every character (len(text)+1 insertions), producing catastrophic
+        # bloat. Reject explicitly — the caller has a bug.
+        if not old_string:
+            return "Error: old_string is empty; provide the exact text to replace"
         count = text.count(old_string)
         if count == 0:
             return f"Error: old_string not found in {path}"

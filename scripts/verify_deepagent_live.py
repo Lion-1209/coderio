@@ -1,14 +1,15 @@
-"""Live verification of the experimental deepagents engine + harness middleware.
+"""Live verification of the deepagents production engine + harness middleware.
 
 Run:
     ANTHROPIC_API_KEY=<key> .venv/Scripts/python.exe scripts/verify_deepagent_live.py
     STEP_KEY=<key> CODERIO_PROVIDER=stepfun .venv/Scripts/python.exe scripts/verify_deepagent_live.py
 
 Verifies run_deep_agent (create_deep_agent + HarnessMiddleware + WinLocalShellBackend)
-against a real endpoint. This engine is EXPERIMENTAL — the harness middleware
-intercepts termination correctly (unit-tested), but the model's willingness to
-verify under deepagents' heavy middleware stack is not yet reliable. This script
-documents the current real behavior.
+against a real endpoint. deepagents is coderio's sole production engine — the
+legacy ReAct engine was removed in the migration. This script exercises the
+real integration path the TUI uses: virtual_mode file writes, harness middleware
+write observation, and the model's verification behavior under the deepagents
+middleware stack.
 """
 from __future__ import annotations
 
@@ -75,8 +76,6 @@ def main():
     section("RESULT")
     if disk_ok:
         print("PASS: deepagent engine writes to real disk + harness middleware runs")
-        print("(NOTE: model self-verification under deepagents is still unreliable —")
-        print("       the ReAct engine remains the production default.)")
         return 0
     print("FAIL: deepagent did not write to real disk")
     return 1

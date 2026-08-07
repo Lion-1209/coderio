@@ -46,11 +46,10 @@ class Profile:
 class ToolsConfig:
     bash_shell: str = ""
     permission_mode: str = "confirm"
-    max_tool_rounds: int = 25
-    # Trusted workspace root for path-boundary enforcement. Empty = use the
-    # process CWD (the directory coderio was launched from). Write tools
-    # (write_file/edit_file/multi_edit/bash cwd) must resolve inside this root;
-    # read tools (read_file/grep/glob/list_dir) are unconstrained.
+    # Workspace root for the shell backend's CWD. Empty = use the process CWD
+    # (the directory coderio was launched from). File-path isolation is handled
+    # by deepagents' backend virtual_mode (not by a coderio-side policy) — this
+    # value only affects where shell commands run.
     workspace_root: str = ""
 
 

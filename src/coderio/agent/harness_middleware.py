@@ -23,6 +23,7 @@ _get_can_jump_to, which reads method.__can_jump_to__).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
@@ -39,6 +40,22 @@ _DEEP_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 # deepagents' planning tool is 'write_todos' (coderio used 'todo'). The
 # CompletionGate checks for pending todos — map deepagents' todo tool too.
 _DEEP_TODO_TOOL = "write_todos"
+
+# Translate "bash" → "execute" in harness injection prose. Word-boundary regex
+# (robust to prose changes) instead of a chain of literal .replace() calls that
+# silently no-op when harness.py rewords a phrase.
+_BASH_TO_EXECUTE = re.compile(r"\bbash\b", re.IGNORECASE)
+
+
+def _stream_supports_phase(stream: Any) -> bool:
+    """Does this stream consumer actually display phase changes?
+
+    Avoids paying AgentStateTracker overhead (and polluting the session jsonl
+    timeline) when no one is watching: NullStream (headless tests) and ad-hoc
+    stubs without on_phase_change return False. The real TUI StreamHandler and
+    the live-verify PrintStream opt in by defining on_phase_change.
+    """
+    return stream is not None and hasattr(stream, "on_phase_change")
 
 
 def _to_coderio_name(name: str) -> str:
@@ -103,7 +120,22 @@ class HarnessMiddleware(AgentMiddleware):
     """
 
     def __init__(self, stream=None, enabled: bool = True) -> None:
-        self.harness = Harness(state=HarnessState(), todos=TodoStore(), enabled=enabled)
+        # Wire the phase-observation tracker when a stream consumer is present.
+        # The display pipeline (TUI StatusBar / stream.on_phase_change) already
+        # exists; without a tracker, Harness._track_phase is a no-op and the
+        # status bar's phase slot stays empty. We instantiate the tracker
+        # whenever the stream declares on_phase_change support — that's the
+        # signal a real UI is listening (NullStream and test stubs don't).
+        from coderio.agent.state import AgentStateTracker
+
+        tracker = AgentStateTracker() if _stream_supports_phase(stream) else None
+        self.harness = Harness(
+            state=HarnessState(),
+            todos=TodoStore(),
+            enabled=enabled,
+            state_tracker=tracker,
+            stream=stream,
+        )
         self.stream = stream
         self._runtime = None  # captured in wrap_tool_call / after_model
 
@@ -236,18 +268,25 @@ class HarnessMiddleware(AgentMiddleware):
 
         cont, inject, warn = self.harness.check_termination(text)
         if cont and inject:
-            # The shared harness.py says "use bash" / "call bash"; deepagents' shell
-            # tool is named 'execute'. Rewrite so the model calls the right tool.
-            inject = (
-                inject.replace("call bash", "call execute")
-                .replace("use bash", "use execute")
-                .replace("with bash", "with execute")
-                .replace("Run them with bash", "Run them with execute")
-            )
+            # The shared harness.py writes tool-name-agnostic prose that happens
+            # to say "bash" (its original engine's name for the shell tool).
+            # deepagents' shell tool is named 'execute'. Translate the standalone
+            # word "bash" → "execute" so the model calls the right tool.
+            # Word-boundary regex (not literal phrase replace) is robust to
+            # harness.py prose changes: "use bash", "call bash now", "run with
+            # bash" all map correctly without a per-phrase .replace() chain.
+            inject = _BASH_TO_EXECUTE.sub("execute", inject)
             # Emit a visible signal so the TUI explains why the agent keeps running.
             self._emit(runtime, {"type": "harness_continue", "reason": inject})
             # Force-continue: inject the harness demand as a user message.
             return {"jump_to": "model", "messages": [HumanMessage(content=inject)]}
         if warn:
             self._emit(runtime, {"type": "harness_warn", "message": warn})
+        # Fire the final phase transition (COMPLETE) when the turn is truly
+        # ending — either a clean finish or an escalation release. The TUI's
+        # on_phase_change clears the status bar's phase slot on 'complete'.
+        if self.harness.state_tracker is not None:
+            self.harness.state_tracker.finish(hint="turn end")
+            if self.stream is not None and hasattr(self.stream, "on_phase_change"):
+                self.stream.on_phase_change("complete", 0, "turn end")
         return None

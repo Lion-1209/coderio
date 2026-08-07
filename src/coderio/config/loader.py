@@ -152,7 +152,6 @@ def _from_dict(data: dict) -> Config:
         tools=ToolsConfig(
             bash_shell=t.get("bash_shell", cfg.tools.bash_shell),
             permission_mode=perm,
-            max_tool_rounds=_int(t, "max_tool_rounds", cfg.tools.max_tool_rounds, "tools"),
             workspace_root=t.get("workspace_root", cfg.tools.workspace_root),
         ),
         skills=SkillsConfig(

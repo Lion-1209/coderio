@@ -39,13 +39,13 @@ def to_langchain_tool(tool: "Tool", args_schema: type[BaseModel]) -> StructuredT
 # The old ReAct engine names (bash/todo/list_dir) are no longer in use.
 
 # Destructive tools: require permission in CONFIRM/AUTO_EDIT/PLAN modes.
-DESTRUCTIVE_TOOLS = {"write_file", "edit_file", "execute", "web_fetch", "note"}
-# Read-only tools: always allowed in all modes (backend virtual_mode handles
-# path isolation — these tools cannot access files outside the workspace root).
-READONLY_TOOLS = {"ls", "read_file", "glob", "grep", "write_todos", "web_search"}
+# multi_edit is destructive (atomic multi-edit of one file) and must NOT be
+# omitted — without it, CONFIRM/AUTO_EDIT modes treat multi_edit as read-only
+# and let it through without asking (permission.py: check() returns True for
+# any tool not in DESTRUCTIVE_TOOLS). The deepagents backend doesn't expose
+# multi_edit, but this list is also the permission model's source of truth.
+DESTRUCTIVE_TOOLS = {"write_file", "edit_file", "multi_edit", "execute", "web_fetch", "note"}
 
-# Auto Edit mode: file edits auto-allowed, high-risk tools still prompt.
-# File edits are fast and reversible (git), but shell/network/note-writes
-# have side effects that are harder to undo.
+# Auto Edit mode: file edits auto-allowed (fast + reversible via git), but
+# shell/network/note-writes still need confirmation (harder to undo side effects).
 FILE_EDIT_TOOLS = {"write_file", "edit_file"}
-HIGH_RISK_TOOLS = {"execute", "web_fetch", "note"}

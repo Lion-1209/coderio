@@ -5,8 +5,6 @@ from pathlib import Path
 from coderio.skills.models import Skill
 from coderio.skills.parser import parse_skill_file
 
-_PRIORITY = ("bundled", "user", "project")
-
 
 class SkillStore:
     """Holds merged skills across three layers. Metadata cached, body lazy."""

@@ -63,10 +63,6 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match="必须是整数"):
             _from_dict({"model": {"max_output_tokens": "16384"}})
 
-    def test_bool_max_tool_rounds_raises(self):
-        with pytest.raises(ValueError, match="必须是整数"):
-            _from_dict({"tools": {"max_tool_rounds": True}})
-
     def test_invalid_permission_mode_raises(self):
         with pytest.raises(ValueError, match="permission_mode.*无效"):
             _from_dict({"tools": {"permission_mode": "confim"}})  # typo

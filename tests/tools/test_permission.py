@@ -35,6 +35,19 @@ def test_plan_mode_blocks_write_tools():
         assert gate.check(t, {}) is False
 
 
+def test_plan_mode_blocks_multi_edit():
+    """REGRESSION (2026-08-07 report P1-1): multi_edit was missing from
+    DESTRUCTIVE_TOOLS, so plan/confirm/auto_edit modes treated it as read-only
+    and let it through without asking — a permission-model hole. multi_edit is
+    an atomic multi-edit of one file; it must be gated like edit_file."""
+    gate = _AlwaysAllow("plan")
+    assert gate.check("multi_edit", {}) is False, "multi_edit must be destructive"
+    # And confirm mode must ASK (trigger _ask), not auto-allow.
+    confirm_gate = _AlwaysAllow_AskTracker("confirm")
+    confirm_gate.check("multi_edit", {})
+    assert "multi_edit" in confirm_gate.asked, "confirm mode must prompt for multi_edit"
+
+
 def test_auto_mode_allows_all():
     """Full access mode (legacy 'auto' maps to 'full') allows everything."""
     gate = _AlwaysAllow("full")

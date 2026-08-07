@@ -118,3 +118,27 @@ def test_args_schema_present():
     assert hasattr(MultiEditTool, "args_schema")
     schema = MultiEditTool.args_schema.model_json_schema()
     assert "edits" in schema["properties"]
+
+
+def test_rejects_empty_old_string_atomically(tmp_path):
+    """REGRESSION (2026-08-07 report P1-7): an empty old_string edit must be
+    rejected and NO edits applied (multi_edit is atomic). Without the guard,
+    str.replace("", x) would insert x between every character, corrupting the
+    file catastrophically."""
+    f = tmp_path / "e.txt"
+    original = "alpha\nbeta\n"
+    f.write_text(original, encoding="utf-8")
+    tool = MultiEditTool()
+    # First edit is valid, second has empty old_string — whole op must abort.
+    out = tool.run(
+        path=str(f),
+        edits=[
+            {"old_string": "alpha", "new_string": "ALPHA"},
+            {"old_string": "", "new_string": "X", "replace_all": True},
+        ],
+    )
+    assert out.startswith("Error"), "empty old_string must be rejected"
+    assert "empty" in out.lower()
+    assert "no changes written" in out.lower(), "must be atomic (no partial writes)"
+    # File must be unchanged — the valid first edit must NOT have been applied.
+    assert f.read_text(encoding="utf-8") == original

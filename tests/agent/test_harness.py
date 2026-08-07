@@ -193,6 +193,42 @@ def test_verify_gate_escalates_to_warn_after_max_attempts():
     assert warn2 is not None and "UNVERIFIED" in warn2
 
 
+def test_verify_gate_failed_bash_does_not_consume_gate_budget():
+    """REGRESSION (2026-08-07 report P0-2): verify_attempts was double-incremented
+    — once in observe() when a verifying bash failed (exit != 0), and once in
+    _verify_gate() at each interception. With the bug, a single failed verify
+    cycle consumed BOTH interception slots: write -> declare done (attempt 0,
+    intercepted) -> pytest FAIL (observe bumped to 1) -> declare done (attempt
+    1, intercepted) -> pytest FAIL (observe bumped to 2) -> declare done
+    (attempt 2 >= MAX -> RELEASED). The agent got only ONE real interception's
+    worth of retry pressure per failure cycle before being released unverified.
+
+    A failed bash run is a genuine verify attempt — it must NOT consume the
+    gate's interception budget. Only completion attempts count. With the fix,
+    interleaving failed bash runs between completion attempts does NOT change
+    the gate's release timing — it still takes _MAX_GATE_ATTEMPTS+1 completion
+    attempts to escalate, same as if no bash had run."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    # Sanity baseline: with no failed bash, the gate releases on the 3rd
+    # completion attempt (0 -> continue, 1 -> continue, 2 -> release).
+    # (See test_verify_gate_escalates_to_warn_after_max_attempts.)
+
+    # Now the SAME sequence but with failed pytest runs interleaved. With the
+    # double-increment bug the counter would reach MAX one completion earlier
+    # per failed verify; with the fix the timing is unchanged.
+    cont0, _, warn0 = h.check_termination("done")  # attempt 0 -> continue
+    assert cont0 is True and warn0 is None
+    h.observe("bash", {"command": "pytest a.py"}, "FAIL [exit_code: 1]")
+    cont1, _, warn1 = h.check_termination("done")  # attempt 1 -> continue
+    assert cont1 is True, "failed bash must not consume gate budget (still intercepted)"
+    assert warn1 is None, "no early release after one failed verify"
+    h.observe("bash", {"command": "pytest a.py"}, "FAIL [exit_code: 1]")
+    cont2, _, warn2 = h.check_termination("done")  # attempt 2 -> release
+    assert cont2 is False, "third completion is where release happens (MAX=2)"
+    assert warn2 is not None and "UNVERIFIED" in warn2
+
+
 def test_verify_gate_attempt1_names_files():
     h = _harness()
     h.observe("write_file", {"path": "game.html"}, "Wrote 5000 chars to game.html")

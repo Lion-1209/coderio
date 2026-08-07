@@ -2,7 +2,6 @@
 
 from coderio.tools.base import (
     DESTRUCTIVE_TOOLS,
-    READONLY_TOOLS,
     Tool,
     to_langchain_tool,
 )
@@ -29,7 +28,6 @@ __all__ = [
     "Tool",
     "to_langchain_tool",
     "DESTRUCTIVE_TOOLS",
-    "READONLY_TOOLS",
     "PermissionGate",
     "PermissionMode",
     "RichPromptPermissionGate",

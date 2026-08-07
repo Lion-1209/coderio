@@ -10,8 +10,7 @@ _SAMPLE_CONFIG = """# coderio configuration.
 
 [tools]
 bash_shell = ""                       # empty = auto-detect (Git Bash on Windows, bash on Linux/macOS)
-permission_mode = "confirm"           # confirm | plan | auto
-max_tool_rounds = 25
+permission_mode = "confirm"           # confirm | plan | auto_edit | full
 
 [skills]
 auto_load = true

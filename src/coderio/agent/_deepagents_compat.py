@@ -9,17 +9,23 @@ Centralizes all usage of deepagents internals (non-public APIs) so that:
 Current internal dependencies:
 - BASE_AGENT_PROMPT (deepagents.graph): module-level string, monkey-patched
   to empty to prevent prompt conflicts. Public alternative not yet available.
-- _ToolExclusionMiddleware (deepagents.middleware._tool_exclusion): private
-  class used to strip write/execute tools from the research subagent. Public
-  alternative not yet available.
 
-If either import fails, we degrade gracefully (BASE_AGENT_PROMPT patching
-is skipped; research subagent gets no tool exclusion) rather than crashing.
+The research subagent's tool isolation (_ToolWhitelistMiddleware below) is
+NOT a deepagents internal dependency — it subclasses the public AgentMiddleware
+base and uses the documented ModelRequest.override mechanism. The old
+_ToolExclusionMiddleware (blacklist) was removed in favor of this whitelist
+approach (2026-08-07 report P2-9).
+
+If BASE_AGENT_PROMPT patching fails, we degrade gracefully (the duplicate
+prompt will appear but won't crash).
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
+
+from langchain.agents.middleware.types import AgentMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -46,34 +52,62 @@ def neutralize_base_prompt() -> bool:
     return False
 
 
-def get_tool_exclusion_middleware():
-    """Return the _ToolExclusionMiddleware class, or None if unavailable.
+def _tool_name(tool: Any) -> str | None:
+    """Extract the name from a BaseTool or dict tool (mirrors deepagents' helper)."""
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        return name if isinstance(name, str) else None
+    name = getattr(tool, "name", None)
+    return name if isinstance(name, str) else None
 
-    Used by the research subagent to physically strip write/execute tools.
-    If this private API is removed in a future deepagents version, the
-    research subagent will still work but its 'read-only' claim will only
-    be prompt-level (not enforced at the tool layer).
+
+class _ToolWhitelistMiddleware(AgentMiddleware):
+    """Whitelist-first tool filter — the model only sees tools in ``allowed``.
+
+    Safer than the blacklist approach (``_ToolExclusionMiddleware``) because a
+    new destructive tool added by deepagents in a future version is
+    automatically blocked (it's not in the whitelist). The blacklist would
+    leak it until coderio is updated to exclude the new name.
+
+    Wraps the same ModelRequest.override + filter mechanism as
+    ``_ToolExclusionMiddleware`` but inverts the predicate.
     """
-    try:
-        from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware
 
-        return _ToolExclusionMiddleware
-    except ImportError:
-        _log.warning(
-            "_ToolExclusionMiddleware not found (deepagents API may have changed). "
-            "Research subagent tool isolation disabled."
-        )
-        return None
+    def __init__(self, *, allowed: frozenset[str]) -> None:
+        self._allowed = allowed
+
+    def wrap_model_call(self, request, handler):
+        if self._allowed:
+            filtered = [t for t in request.tools if _tool_name(t) in self._allowed]
+            request = request.override(tools=filtered)
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        if self._allowed:
+            filtered = [t for t in request.tools if _tool_name(t) in self._allowed]
+            request = request.override(tools=filtered)
+        return await handler(request)
 
 
 def make_research_subagent_middleware():
     """Build the middleware list for the research subagent.
 
-    Returns a list with a _ToolExclusionMiddleware if available, or an empty
-    list if the private API is unavailable (subagent inherits all tools —
-    less safe but won't crash).
+    WHITELIST approach (2026-08-07 report P2-9): the research subagent can
+    ONLY use tools in the explicit read-only set below. This is safer than the
+    old blacklist (exclude write_file/edit_file/execute/write_todos) because
+    any new tool deepagents adds is blocked by default until explicitly
+    allowlisted here.
+
+    Returns a list with a _ToolWhitelistMiddleware. If the deepagents
+    AgentMiddleware base class API is unavailable (very old or very new
+    version), returns an empty list — the subagent will inherit all tools
+    (less safe, but won't crash).
     """
-    cls = get_tool_exclusion_middleware()
-    if cls is not None:
-        return [cls(excluded=frozenset({"write_file", "edit_file", "execute", "write_todos"}))]
-    return []
+    # Read-only tools the research subagent is allowed to use. Add new tools
+    # here ONLY after confirming they're safe for a read-only agent.
+    allowed = frozenset({"read_file", "ls", "glob", "grep", "web_search"})
+    try:
+        return [_ToolWhitelistMiddleware(allowed=allowed)]
+    except Exception as e:  # noqa: BLE001 — AgentMiddleware API may differ
+        _log.warning("Could not build _ToolWhitelistMiddleware: %s", e)
+        return []

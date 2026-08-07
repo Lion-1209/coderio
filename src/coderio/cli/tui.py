@@ -23,6 +23,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Collapsible, Input, RichLog, Static
 
+# Single-source version (read from pyproject.toml via importlib.metadata).
+from coderio import __version__  # noqa: E402
+
 # OnboardingScreen, _OnboardingApp, and _run_onboarding_tui have been extracted
 # to tui_onboarding.py for modularity.
 from coderio.cli.tui_onboarding import OnboardingScreen, _run_onboarding_tui  # noqa: E402
@@ -1277,7 +1280,7 @@ def run_tui(
         return
 
     banner = (
-        f"[bold magenta]coderio[/bold magenta] v0.2.0  "
+        f"[bold magenta]coderio[/bold magenta] v{__version__}  "
         f"[dim]profile=[/dim]{cfg.active_profile or 'default'}  "
         f"[dim]model=[/dim]{cfg.model.default}  "
         f"[dim]perm=[/dim]{gate.mode}"

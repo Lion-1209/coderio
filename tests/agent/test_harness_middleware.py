@@ -114,6 +114,12 @@ def test_after_model_intercepts_unverified_done():
     assert update is not None
     assert update.get("jump_to") == "model"
     assert update["messages"], "must inject a continuation message"
+    # The injected message must reference deepagents' shell tool name ('execute'),
+    # NOT 'bash' — the harness.py prose says "use bash" but the model must call
+    # the tool that actually exists in the deepagents backend.
+    inject_text = update["messages"][0].content
+    assert "execute" in inject_text.lower(), f"inject must say 'execute', got: {inject_text!r}"
+    assert "bash" not in inject_text.lower(), f"inject must NOT say 'bash', got: {inject_text!r}"
     assert (
         "bash" in update["messages"][0].content
         or "execute" in update["messages"][0].content
@@ -175,3 +181,43 @@ def test_disabled_middleware_passthrough():
     mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")  # no-op when disabled
     state = _state_with_messages([AIMessage(content="done", tool_calls=[])])
     assert mw.after_model(state, None) is None
+
+
+def test_phase_tracker_wired_when_stream_supports_it():
+    """REGRESSION (2026-08-07 report P1-2): the AgentStateTracker was never
+    instantiated in production — Harness.state_tracker stayed None, so the TUI
+    status bar's phase slot was always empty despite README advertising an
+    'explicit state machine'. When the stream declares on_phase_change, the
+    middleware must wire a tracker so observe()/check_termination drive phase
+    transitions."""
+    phases: list[str] = []
+
+    class _PhaseStream:
+        def on_phase_change(self, state: str, step: int, hint: str) -> None:
+            phases.append(state)
+
+    mw = HarnessMiddleware(stream=_PhaseStream())
+    assert mw.harness.state_tracker is not None, "tracker must be wired"
+    # A write should fire a PLAN transition (writes exist, no todos).
+    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 10 chars")
+    assert "plan" in phases, f"write should fire plan phase, got {phases}"
+    # Turn end should fire COMPLETE.
+    state = _state_with_messages([AIMessage(content="done", tool_calls=[])])
+    # Drive it to release (3 after_model calls — escalates after MAX=2).
+    mw.after_model(state, None)
+    mw.after_model(state, None)
+    mw.after_model(state, None)
+    assert "complete" in phases, f"turn end should fire complete, got {phases}"
+
+
+def test_phase_tracker_not_wired_without_stream():
+    """No stream (or a stream without on_phase_change) → no tracker overhead,
+    no session-jsonl timeline pollution. Headless tests / NullStream stay quiet."""
+    mw = HarnessMiddleware()  # no stream
+    assert mw.harness.state_tracker is None
+
+    class _BareStream:
+        pass
+
+    mw2 = HarnessMiddleware(stream=_BareStream())
+    assert mw2.harness.state_tracker is None, "stream without on_phase_change = no tracker"

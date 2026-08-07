@@ -40,6 +40,14 @@ class MultiEditTool:
             old = _strip_line_prefix(edit.get("old_string", ""))
             new = _strip_line_prefix(edit.get("new_string", ""))
             replace_all = edit.get("replace_all", False)
+            # Empty old_string is a footgun (see edit_file.py): str.replace("",
+            # x) inserts x between every character. Reject before it corrupts
+            # the file — multi_edit is atomic, so nothing is written yet.
+            if not old:
+                return (
+                    f"Error: edit #{i + 1} old_string is empty; provide the exact "
+                    "text to replace. Aborted (no changes written)."
+                )
             count = text.count(old)
             if count == 0:
                 return f"Error: edit #{i + 1} old_string not found in {path}; aborted (no changes written)."
