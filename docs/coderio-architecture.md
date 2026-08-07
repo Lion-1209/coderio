@@ -43,7 +43,7 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 | `cli/` | ~3800 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
 | `tools/` | ~1100 | 工具集 + 权限门 + langchain 适配（路径隔离由 deepagents virtual_mode 处理） | bash.py, permission.py, base.py |
 | `config/` | ~400 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
-| `skills/` | ~220 | SkillStore 三层加载 + 阶段触发映射 | store.py, triggers.py |
+| `skills/` | ~220 | SkillStore 三层加载（bundled < user < project） | store.py, parser.py, models.py |
 | `session/` | 260 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
 | `llm/` | 320 | 模型工厂 + provider context window 探测 | factory.py, probe.py |
 
@@ -317,9 +317,9 @@ Textual 8.x App，核心设计：
 
 - `SkillStore._load_layer` 递归 glob `**/SKILL.md`，兼容 Lion-Skills 嵌套布局
 - body 懒加载（只在用到时读文件），元数据缓存
-- 12 个 Lion-Skills skill + 1 个 bundled `executing-plans` = 13 个
+- 12 个 Lion-Skills skill（clarifying-questions / spec-writing / task-breakdown / commit-message / code-review / debugging / error-handling / naming / testing / verify-and-fix / onboarding-unknown-codebase / lion-writing-skills）
 
-**阶段触发**（`triggers.py`）：`detect_stage(user_input)` 按关键词（"开始实现"/"commit"）预激活对应 skill。
+**skill 激活**：模型通过 `activate_skill(name)` 工具按需加载 skill body（系统提示词里只列名称+描述，~2K tokens）。旧的 `triggers.py` 关键词阶段触发已删除——召回低（"帮我改 bug"不触发）、易误触发（`\bcommit\b` 匹配 "I commit to..."），且引用了不存在的 skill（`executing-plans`）。改为完全依赖模型自主判断 + `activate_skill`。
 
 ### 7.3 skill 在提示词里的呈现（分组）
 
@@ -342,7 +342,7 @@ CODE 执行段（写完代码后按需）:
 - `model`: default, provider, base_url, provider_id, max_output_tokens=16384, context_limit=0（onboarding 自动探测）
 - `tools`: bash_shell, permission_mode, workspace_root=""（空=用 cwd）
 - `context`: enabled, trigger_ratio=0.6, keep_recent=8, model_context_limit=200000
-- `skills`: auto_load, stage_auto_inject, **harness=True**, repo_url
+- `skills`: auto_load, **harness=True**, repo_url
 - `cli`: theme, show_tool_output
 
 ### 7.5 Provider 注册表（`cli/providers.py`）+ Context Window 探测（`llm/probe.py`）
@@ -368,10 +368,9 @@ jsonl 追加式存储（`~/.coderio/sessions/`）。支持 `Session.create / loa
   │
   ▼
 repl._loop → run_agent(harness_enabled=True)
-  │  1. detect_stage（无阶段信号）
-  │  2. build_system_prompt（注入意图分类 + core chain + skill 列表）
-  │  3. 构造 Harness（找到 TodoStore）
-  │  4. session.append(user msg)
+  │  1. build_system_prompt（注入意图分类 + core chain + skill 列表）
+  │  2. 构造 Harness（找到 TodoStore）
+  │  3. session.append(user msg)
   │
   ▼
 _execute_turn(harness=h)  循环：

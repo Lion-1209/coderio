@@ -10,7 +10,6 @@ def test_config_defaults():
     assert cfg.model.provider == "openai_compatible"
     assert cfg.tools.permission_mode == "confirm"
     assert cfg.skills.auto_load is True
-    assert cfg.skills.stage_auto_inject is True
     assert cfg.tools.bash_shell == ""
 
 

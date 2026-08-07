@@ -65,7 +65,6 @@ class ToolsConfig:
 @dataclass
 class SkillsConfig:
     auto_load: bool = True
-    stage_auto_inject: bool = True
     harness: bool = True
     repo_url: str = "https://github.com/Lion-1209/Lion-Skills"
 

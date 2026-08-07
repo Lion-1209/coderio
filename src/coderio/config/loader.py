@@ -175,7 +175,6 @@ def _from_dict(data: dict) -> Config:
         ),
         skills=SkillsConfig(
             auto_load=s.get("auto_load", cfg.skills.auto_load),
-            stage_auto_inject=s.get("stage_auto_inject", cfg.skills.stage_auto_inject),
             harness=s.get("harness", cfg.skills.harness),
             repo_url=s.get("repo_url", cfg.skills.repo_url),
         ),

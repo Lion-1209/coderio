@@ -14,7 +14,6 @@ permission_mode = "confirm"           # confirm | plan | auto_edit | full
 
 [skills]
 auto_load = true
-stage_auto_inject = true
 
 [session]
 save_dir = "~/.coderio/sessions"
