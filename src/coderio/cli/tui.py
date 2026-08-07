@@ -1446,6 +1446,7 @@ def run_tui(
             return
         from coderio.agent.deep_loop import run_deep_agent
         from coderio.cli.multimodal import build_user_content, extract_images
+        from coderio.tools.command_policy import CommandPolicy
 
         imgs = extract_images(line)
         if imgs:
@@ -1455,8 +1456,11 @@ def run_tui(
             )
         user_content = build_user_content(line)
         # deepagents engine: provides context management, subagents, filesystem.
-        # coderio's harness + permission run as middleware. The old ReAct engine
-        # (loop.run_agent) is retained for crew + tests but not used here.
+        # coderio's harness + permission + command review run as middleware.
+        cmd_policy = CommandPolicy(
+            extra_blocked=rt["cfg"].tools.blocked_commands,
+            network_allowed=rt["cfg"].tools.network_allowed,
+        )
         run_deep_agent(
             user_input=user_content,
             model=rt["model"],
@@ -1468,6 +1472,7 @@ def run_tui(
             tools=tools,
             workdir=rt["cfg"].tools.workspace_root or None,
             harness_enabled=rt["cfg"].skills.harness,
+            command_policy=cmd_policy,
         )
 
     def _load_session(sid: str) -> None:

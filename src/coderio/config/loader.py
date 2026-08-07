@@ -126,6 +126,23 @@ def _from_dict(data: dict) -> Config:
             raise ValueError(f"config.toml [{section_name}] {key} 必须是整数，但得到 {type(v).__name__}: {v!r}")
         return v
 
+    def _bool(section: dict, key: str, default: bool) -> bool:
+        v = section.get(key, default)
+        if not isinstance(v, bool):
+            # TOML's true/false parse to Python bool; anything else is a typo.
+            # Don't raise — fall back to default so a bad value doesn't block startup.
+            return default
+        return v
+
+    def _str_list(section: dict, key: str, default: list[str]) -> list[str]:
+        v = section.get(key, default)
+        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            return v
+        # Not a list of strings — fall back to default rather than crashing.
+        # A bad config value shouldn't block startup; the user will notice when
+        # their extra blocklist doesn't take effect.
+        return default
+
     # Validate permission_mode against the known enum values.
     perm = t.get("permission_mode", cfg.tools.permission_mode)
     if isinstance(perm, str):
@@ -153,6 +170,8 @@ def _from_dict(data: dict) -> Config:
             bash_shell=t.get("bash_shell", cfg.tools.bash_shell),
             permission_mode=perm,
             workspace_root=t.get("workspace_root", cfg.tools.workspace_root),
+            blocked_commands=_str_list(t, "blocked_commands", cfg.tools.blocked_commands),
+            network_allowed=_bool(t, "network_allowed", cfg.tools.network_allowed),
         ),
         skills=SkillsConfig(
             auto_load=s.get("auto_load", cfg.skills.auto_load),

@@ -32,7 +32,8 @@
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器 + **turn token 计数**）、slash 命令自动补全、**可折叠 TODO 面板**（实时进度 ✓/→/○）、**纵向权限确认菜单**（↑↓ + Enter，zcode/codex 风格）、**会话管理**（`/resume` 恢复 + Del 删除）、**权限/配置可视化选择器**（`/mode` `/profile`）、**文件修改可视化**、**任务中断**（Esc / ⏹ 按钮）、**错误恢复**
 - **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端；coderio 的 harness 四道门 + 四级权限作为 middleware 保留
 - **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）
-- **文件路径隔离**：deepagents 后端 `virtual_mode` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内，agent 看到的 `/foo.py` 实际映射到 `{workdir}/foo.py`。**注意：shell（execute）命令不受 virtual_mode 约束**——`rm -rf`、`cat /etc/passwd`、网络请求都能执行。真正的 OS 级沙箱是未来工作，当前靠权限门（plan/confirm/auto_edit/full）控制哪些工具可执行
+- **文件路径隔离**：deepagents 后端 `virtual_mode` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内，agent 看到的 `/foo.py` 实际映射到 `{workdir}/foo.py`
+- **命令审查层**：shell（execute）命令不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、shutdown 等破坏性命令（即使 FULL 模式也挡），用户可在 config.toml 追加 `blocked_commands`。这不是真 OS 沙箱（混淆命令可绕过正则），但能挡住绝大多数意外破坏。`network_allowed = false` 可完全禁用 web 工具（离线模式）
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 
 ---
@@ -85,8 +86,10 @@ default = "glm-5.2"
 context_limit = 128000                  # （可选）onboarding 自动探测写入，0 = 用下面的默认值
 
 [tools]
-permission_mode = "auto"                # confirm | plan | auto
+permission_mode = "auto"                # confirm | plan | auto_edit | full
 workspace_root = ""                     # shell 后端的 CWD（空=用启动目录）；文件路径隔离由 deepagents virtual_mode 处理
+blocked_commands = []                   # 追加到内置黑名单（正则），如 ["git push --force", "npm publish"]
+network_allowed = true                  # false = 禁用 web_fetch/web_search（离线模式）
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）

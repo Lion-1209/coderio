@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -51,6 +51,15 @@ class ToolsConfig:
     # by deepagents' backend virtual_mode (not by a coderio-side policy) — this
     # value only affects where shell commands run.
     workspace_root: str = ""
+    # Extra regex patterns appended to the built-in command blacklist. The
+    # built-in defaults (rm -rf /, mkfs, fork bomb, etc.) are always active;
+    # these are ADDITIONAL blocks for project-specific commands you never want
+    # run (e.g. ["git push --force", "npm publish"]). See command_policy.py.
+    blocked_commands: list[str] = field(default_factory=list)
+    # Master switch for web_fetch / web_search. False = offline mode (both web
+    # tools blocked). True (default) = web tools available subject to the
+    # normal permission gate.
+    network_allowed: bool = True
 
 
 @dataclass

@@ -41,6 +41,16 @@ All notable changes to coderio are documented here. The format follows
   calls that silently no-op when harness prose changes.
 
 ### Added
+- **P0-1 (partial)**: Command-content review layer (`CommandReviewMiddleware` +
+  `CommandPolicy`). The shell (`execute`) tool is not constrained by
+  deepagents' `virtual_mode`, so a new middleware inspects command content
+  before execution: a built-in blacklist blocks `rm -rf /`, `mkfs`, fork
+  bombs, `dd of=/dev/`, `shutdown`, etc. — even in FULL mode. Users can
+  append patterns via config.toml `[tools].blocked_commands`, and
+  `network_allowed = false` disables web_fetch/web_search entirely (offline
+  mode). This is NOT a real OS sandbox (obfuscated commands bypass regex),
+  but catches the accidental/careless destruction that causes real-world
+  incidents. 53 new tests cover the policy patterns and middleware behavior.
 - **P1-2**: The phase observation system (`AgentStateTracker`) is now wired in
   production. `HarnessMiddleware` instantiates a tracker when the stream
   declares `on_phase_change` support, so the TUI status bar's task-phase slot

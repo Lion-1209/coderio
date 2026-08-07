@@ -232,6 +232,7 @@ def run_deep_agent(
     workdir: str | Path | None = None,
     harness_enabled: bool = True,
     recursion_limit: int = 200,
+    command_policy=None,
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -255,6 +256,11 @@ def run_deep_agent(
         recursion_limit: langgraph recursion limit. Harness force-continues and
             middleware hooks each consume recursion budget; 200 is a safe default
             (harness escalates after 2 force-continues, each round uses ~5-10 recursions).
+        command_policy: a CommandPolicy for the command-review middleware (blocks
+            destructive shell commands like rm -rf /, mkfs, fork bombs, and
+            optionally disables web tools). None = use CommandPolicy.default()
+            (built-in blacklist active, network allowed). Pass an explicit policy
+            to customize via config.toml [tools].blocked_commands / network_allowed.
     """
     stream = stream or NullStream()
     from deepagents import create_deep_agent
@@ -271,6 +277,14 @@ def run_deep_agent(
     middleware = [HarnessMiddleware(stream=stream, enabled=harness_enabled)]
     if gate is not None:
         middleware.append(PermissionMiddleware(gate))
+    # Command-content review: always active (even in FULL mode). Blocks rm -rf /,
+    # mkfs, fork bombs, etc. before they reach subprocess.run(shell=True).
+    # This is NOT a real OS sandbox — see command_policy.py for limitations.
+    from coderio.agent.command_review import CommandReviewMiddleware
+    from coderio.tools.command_policy import CommandPolicy
+
+    policy = command_policy or CommandPolicy.default()
+    middleware.append(CommandReviewMiddleware(policy))
 
     backend = _WinLocalShellBackend(
         root_dir=str(workdir or Path.cwd()),

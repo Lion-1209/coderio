@@ -298,6 +298,10 @@ Textual 8.x App，核心设计：
 
 **权限门**（`permission.py`）：plan / confirm / auto_edit / full 四模式。`DESTRUCTIVE_TOOLS`（write_file/edit_file/multi_edit/execute/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto_edit 自动放行文件编辑但仍问高危工具、full 全放。
 
+**命令审查层**（`command_review.py` + `command_policy.py`）：权限门只管"哪个工具能执行"，不管"命令内容是什么"。shell（execute）不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、`shutdown` 等破坏性命令。即使 FULL 模式也挡（安全优先于"full=全放行"字面语义）。用户可在 config.toml `[tools].blocked_commands` 追加正则黑名单。`network_allowed=false` 可禁用 web_fetch/web_search（离线模式）。
+
+  **这不是真 OS 沙箱**：混淆命令（base64 解码、变量展开）可绕过正则。目标是挡住意外/粗心的破坏（占真实事故绝大多数），不是对抗性模型。真隔离需要容器/seccomp（未来工作）。
+
 **文件路径隔离**：deepagents 后端的 `virtual_mode=True` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内——agent 看到的 `/foo.py` 映射到 `{workdir}/foo.py`。**注意：shell（execute）不受 virtual_mode 约束**，shell 命令可任意读写工作区外的文件、访问网络。真正的 OS 级沙箱是未来工作。旧的 coderio 自研 `WorkspacePolicy`（路径 resolve + relative_to 边界检查）已删除——它无法处理 deepagents 的虚拟路径（`/foo.py` 被 resolve 成 `C:\foo.py`，总是落在工作区外被误拒）。
 
 **shell（execute）工具特性**：
