@@ -5,9 +5,75 @@ import os
 import random
 import string
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from coderio.session.message import Message
+
+
+@contextmanager
+def _locked_append(path: str | Path, timeout: float = 2.0) -> Iterator[object]:
+    """Open a file for append with a best-effort cross-platform exclusive lock.
+
+    Prevents interleaved writes when two processes append to the same session
+    jsonl simultaneously (e.g. two coderio instances resuming the same session).
+    On POSIX: fcntl.flock (LOCK_EX). On Windows: msvcrt.locking. If the lock
+    isn't acquired within ``timeout`` seconds (or the platform lock module is
+    unavailable), falls through to an unlocked write — locking is a safety net,
+    not a hard gate, so the agent never blocks indefinitely on session I/O.
+    """
+    p = Path(path)
+    f = open(p, "a", encoding="utf-8")
+    lock_acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        if os.name == "nt":
+            try:
+                import msvcrt
+
+                # Seek to a byte range at the end and lock it. We lock 1 byte
+                # at offset 0 as a mutex — the actual append position doesn't
+                # matter, the lock itself serializes concurrent appenders.
+                while time.monotonic() < deadline:
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                        lock_acquired = True
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            except (ImportError, OSError):
+                pass  # msvcrt unavailable — best-effort unlocked write
+        else:
+            try:
+                import fcntl
+
+                while time.monotonic() < deadline:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        lock_acquired = True
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            except (ImportError, OSError):
+                pass
+        yield f
+    finally:
+        if lock_acquired:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    # Seek back to 0 before unlocking the byte range we locked.
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        f.close()
 
 
 def new_session_id() -> str:
@@ -70,13 +136,13 @@ class Session:
         sid = new_session_id()
         path = d / f"{sid}.jsonl"
         sess = cls(path=path, id=sid, meta=meta, messages=[])
-        with open(path, "a", encoding="utf-8") as f:
+        with _locked_append(path) as f:
             f.write(json.dumps({"type": "meta", **meta}, ensure_ascii=False) + "\n")
         return sess
 
     def append(self, msg: Message) -> None:
         self.messages.append(msg)
-        with open(self.path, "a", encoding="utf-8") as f:
+        with _locked_append(self.path) as f:
             f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + "\n")
 
     @classmethod

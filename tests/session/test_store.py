@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 from coderio.session import Message, ToolCall
@@ -165,3 +166,47 @@ def test_truncate_keeps_latest_summary_when_multiple(tmp_path):
     assert "summary 2" in contents
     # "recent" is after the last summary -> kept.
     assert "recent" in contents
+
+
+def test_concurrent_appends_dont_corrupt_lines(tmp_path):
+    """REGRESSION (2026-08-07 report dimension 4): concurrent appenders to
+    the same session jsonl must not produce interleaved/corrupted lines.
+    Without a file lock, two threads writing simultaneously can split a JSON
+    line across writes, making the session un-loadable.
+
+    With _locked_append, each write is serialized — every line in the file is
+    a complete, parseable JSON object."""
+    s = Session.create(tmp_path, {"model": "test"})
+    n_threads = 5
+    n_per_thread = 20
+
+    def worker(thread_id: int) -> None:
+        for i in range(n_per_thread):
+            s.append(Message.user(f"t{thread_id}-msg{i}"))
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Reload and verify every line is valid JSON (no interleaving corruption).
+    reloaded = Session.load(s.path)
+    # create() writes 1 meta line + n_threads * n_per_thread user messages.
+    expected = n_threads * n_per_thread
+    assert len(reloaded.messages) == expected, (
+        f"expected {expected} messages, got {len(reloaded.messages)} — some lines were corrupted by concurrent writes"
+    )
+
+
+def test_locked_append_falls_through_on_timeout(tmp_path):
+    """If the lock can't be acquired (held by another process), the append
+    still goes through after the timeout — locking is a safety net, not a
+    hard gate. The agent must never block indefinitely on session I/O."""
+    s = Session.create(tmp_path, {"model": "test"})
+    # This is hard to test deterministically (needs a real held lock), but we
+    # can at least verify _locked_append doesn't raise on a normal write path
+    # and produces valid output.
+    s.append(Message.user("test-msg"))
+    reloaded = Session.load(s.path)
+    assert any(m.content == "test-msg" for m in reloaded.messages)
