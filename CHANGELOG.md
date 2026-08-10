@@ -8,6 +8,16 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **MCP (Model Context Protocol) support**: coderio can now connect to external
+  MCP servers and expose their tools to the agent. Config format is compatible
+  with Claude Code's `.mcp.json` (project-level `.mcp.json` + user-level
+  `~/.coderio/mcp.json`, project overrides user on name collision). Supports
+  stdio (local subprocess) and HTTP (remote endpoint) transports. Tool names
+  are prefixed with the server name to avoid collisions. MCP deps are opt-in:
+  `pip install -e ".[mcp]"`. Without the extra, `.mcp.json` is silently ignored.
+  New modules: `src/coderio/mcp_loader.py` (config + tool loading). 18 tests.
+
 ## [0.3.0] — 2026-08-10
 
 ### Fixed

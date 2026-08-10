@@ -53,6 +53,13 @@ dev = [
     "build>=1.2",
     "mypy>=1.10",
 ]
+# MCP (Model Context Protocol) support — opt-in. Install with:
+#   pip install -e ".[mcp]"
+# Without this extra, load_mcp_tools returns [] silently (no .mcp.json effect).
+mcp = [
+    "mcp>=2.0",
+    "langchain-mcp-adapters>=0.3.2",
+]
 
 [project.scripts]
 coderio = "coderio.cli.app:main_entry"

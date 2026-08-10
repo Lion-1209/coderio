@@ -144,6 +144,13 @@ def _build_extra_tools(tools, skill_store, active_skills):
     extra: list = []
     if tools:
         for t in tools:
+            # MCP tools arrive as langchain BaseTool/StructuredTool (they have
+            # `invoke` but not coderio Tool's plain `run`). Pass through
+            # without re-adapting — their names are prefixed (e.g.
+            # "filesystem_read_file") so they never collide with _SKIP entries.
+            if hasattr(t, "invoke") and not hasattr(t, "args_schema"):
+                extra.append(t)
+                continue
             name = getattr(t, "name", "")
             if name in _SKIP:
                 continue

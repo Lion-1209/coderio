@@ -120,6 +120,15 @@ def build_runtime(
     tools = build_default_tools(cfg.tools.bash_shell)
     gate = build_gate(cfg, console=console)
 
+    # Load MCP tools from .mcp.json (project + user scope). Connection failures
+    # are logged and skipped — they never block startup. This is a one-time
+    # async operation bridged to sync via asyncio.run.
+    from coderio.mcp_loader import load_mcp_tools_sync
+
+    mcp_tools = load_mcp_tools_sync(search_from=search_from)
+    if mcp_tools:
+        tools = tools + mcp_tools
+
     if session is None:
         save = save_dir or Path(cfg.session.save_dir).expanduser()
         session = Session.create(save, {"model": cfg.model.default, "provider": cfg.model.provider})

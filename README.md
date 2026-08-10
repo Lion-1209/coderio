@@ -35,6 +35,7 @@
 - **文件路径隔离**：deepagents 后端 `virtual_mode` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内，agent 看到的 `/foo.py` 实际映射到 `{workdir}/foo.py`
 - **命令审查层**：shell（execute）命令不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、shutdown 等破坏性命令（即使 FULL 模式也挡），用户可在 config.toml 追加 `blocked_commands`。这不是真 OS 沙箱（混淆命令可绕过正则），但能挡住绝大多数意外破坏。`network_allowed = false` 可完全禁用 web 工具（离线模式）
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
+- **MCP 支持**：通过 `.mcp.json`（与 Claude Code 格式兼容）接入外部 MCP 服务器，自动加载它们的工具。支持 stdio（本地进程）和 HTTP（远程）两种传输。项目级 `.mcp.json` 覆盖用户级同名服务器
 
 ---
 
@@ -74,6 +75,12 @@ python -m venv .venv
 
 要求：Python 3.11+，Windows 上需安装 Git Bash（bash 工具依赖）。
 
+**MCP 支持**（可选）：安装 MCP extra 后可接入外部 MCP 服务器工具：
+```bash
+pip install -e ".[mcp]"    # 安装 mcp + langchain-mcp-adapters
+```
+不安装也不影响 coderio 正常使用——`.mcp.json` 配置会被静默忽略。
+
 ### 配置
 
 首次运行会触发 onboarding 向导（选 provider、选模型、填 API key），配置自动写入 `~/.coderio/config.toml` 和 `~/.coderio/credentials`。向导验证 key 时会自动探测模型的上下文窗口大小并持久化，压缩阈值精确匹配实际模型。也可手动配置：
@@ -98,6 +105,32 @@ trigger_ratio = 0.6                     # 达到上下文窗口 60% 时触发
 keep_recent = 8                         # 保留最近 N 条消息不压缩
 model_context_limit = 200000            # fallback：当 profile 未探测到 context_limit 时用
 ```
+
+**MCP 配置**（`.mcp.json`，与 Claude Code 格式兼容）：
+
+在项目根目录放 `.mcp.json`（项目级）或 `~/.coderio/mcp.json`（用户级），coderio 启动时自动加载配置的 MCP 服务器及其工具：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": { "Authorization": "Bearer ghp_xxx" }
+    }
+  }
+}
+```
+
+- **stdio 服务器**：`{command, args, env?}` — 启动本地子进程（如 npx 运行的 server-filesystem）
+- **HTTP 服务器**：`{type: "http", url, headers?}` — 连接远程 MCP 端点（如 GitHub MCP）
+- 工具名自动加服务器名前缀（如 `filesystem_read_file`），不会与内置工具冲突
+- 连接失败的服务器会跳过（log warning），不阻塞启动
+- 需要先安装 MCP extra：`pip install -e ".[mcp]"`
 
 支持的 provider：
 | provider_id | 说明 | 协议 |
