@@ -122,17 +122,24 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills):
     store = skill_store or SkillStore()
     active = active_skills or ActiveSkills()
     sp = build_system_prompt(store, active)
-    return (
-        sp.replace("run bash commands", "run shell commands via the `execute` tool")
-        .replace("use bash to execute", "use `execute` to run")
-        .replace("call bash", "call `execute`")
-    )
+    # deepagents' shell tool is named 'execute', not 'bash'. The system prompt
+    # references 'bash' (coderio's original name); translate the standalone word
+    # so the model calls the right tool. Word-boundary regex is robust to prose
+    # changes (same pattern as _BASH_TO_EXECUTE in harness_middleware.py).
+    import re
+
+    return re.sub(r"\bbash\b", "execute", sp)
 
 
 def _build_extra_tools(tools, skill_store, active_skills):
     """Collect coderio tools not already provided by deepagents."""
     from coderio.tools.base import to_langchain_tool as _adapt
 
+    # These are CODERIO's own tool names (bash, todo, list_dir — the old ReAct
+    # names), NOT deepagents' names (execute, write_todos, ls). We skip them
+    # because deepagents already provides equivalents with its own naming.
+    # The name translation between the two namespaces lives in
+    # harness_middleware._to_coderio_name and _BASH_TO_EXECUTE.
     _SKIP = frozenset({"read_file", "write_file", "edit_file", "glob", "grep", "bash", "todo", "list_dir"})
     extra: list = []
     if tools:

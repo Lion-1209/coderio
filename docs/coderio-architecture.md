@@ -12,7 +12,7 @@
 
 ## 0. 一句话定位
 
-coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills 套件（clarify→spec→task→execute→verify→commit 这条流水线），coderio 给这套骨架配上真正能干活的工具、一个强制遵循工作流的 **harness 状态控制层**、以及两种运行模式（交互式单 agent / 6-agent 流水线）。参照对象是 claude code / codex / zcode。
+coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills 套件（clarify→spec→task→execute→verify→commit 这条流水线），coderio 给这套骨架配上真正能干活的工具、一个强制遵循工作流的 **harness 状态控制层**、以及一个基于 deepagents 的交互式 agent 引擎。参照对象是 claude code / codex / zcode。
 
 核心理念（贯穿整个设计）：**skill 是操作手册，harness 是执行纪律，工具是手**。三者分层，互不替代。
 

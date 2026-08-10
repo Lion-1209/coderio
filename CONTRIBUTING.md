@@ -56,10 +56,9 @@ The codebase is a layered monolith (dependencies flow downward):
 
 ```
 cli/          Typer app + Textual TUI + slash commands
-crew/         6-agent LangGraph orchestration
-agent/        deepagents engine, harness/permission middleware, prompts
+agent/        deepagents engine, harness/permission/command middleware, prompts
 llm/          Model factory (ChatAnthropic / ChatOpenAI)
-tools/        bash, file ops, search, web, todo, edit
+tools/        bash, file ops, search, web, todo, edit, command policy
 skills/       Skill store (3-layer: bundled + user + project)
 session/      Conversation persistence (.jsonl)
 config/       TOML config loader

@@ -26,7 +26,7 @@
 - **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
 - **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具，含只读 research 子 agent）、文件系统后端、持久化检查点（SqliteSaver）；**完全替换 deepagents 默认 prompt**，coderio 的 system prompt 独占，无冲突
 - **持久化检查点**：graph state 跨 turn 持久化到 sqlite，只需传新消息（不重传完整历史）；SummarizationMiddleware 的累积状态正确保持
-- **上下文自动压缩**：deepagents 的 SummarizationMiddleware 在接近上下文窗口 85% 时自动触发——旧消息 offload 到文件 + LLM 摘要，保留近期上下文
+- **上下文自动压缩**：deepagents 的 SummarizationMiddleware 在接近上下文窗口 60% 时自动触发（可通过 `[context].trigger_ratio` 配置）——旧消息 offload 到文件 + LLM 摘要，保留近期上下文
 - **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
 - **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
 - **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器 + **turn token 计数**）、slash 命令自动补全、**可折叠 TODO 面板**（实时进度 ✓/→/○）、**纵向权限确认菜单**（↑↓ + Enter，zcode/codex 风格）、**会话管理**（`/resume` 恢复 + Del 删除）、**权限/配置可视化选择器**（`/mode` `/profile`）、**文件修改可视化**、**任务中断**（Esc / ⏹ 按钮）、**错误恢复**
@@ -55,7 +55,7 @@ pip install "coderio @ git+https://github.com/Lion-1209/coderio.git"
 到 [Releases 页面](https://github.com/Lion-1209/coderio/releases) 下载最新的 `coderio-*.whl`，然后：
 
 ```bash
-pip install coderio-0.1.0-py3-none-any.whl
+pip install coderio-0.3.0-py3-none-any.whl
 ```
 
 **方式三：从源码安装（开发者）**
@@ -206,7 +206,7 @@ deepagents 的 SummarizationMiddleware 自动管理上下文：
 | 机制 | 触发 | 行为 |
 |------|------|------|
 | **offload** | 工具输入/输出 >2万 token | 大块内容自动存盘 + 留指针，不占上下文 |
-| **summarize** | token 数达到窗口的 85% | 旧消息 LLM 摘要 + 原文 offload 到 `/conversation_history/` |
+| **summarize** | token 数达到窗口的 60%（可配置 `trigger_ratio`） | 旧消息 LLM 摘要 + 原文 offload 到 `/conversation_history/` |
 | **checkpoint** | 每次 turn 结束 | graph state 持久化到 sqlite，下次只传新消息 |
 
 ### 显式状态机
