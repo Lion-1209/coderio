@@ -84,6 +84,7 @@ python -m venv .venv
 provider_id = "bigmodel_coding_plan"   # 智谱/阶跃/OpenAI/Anthropic/Ollama/自定义
 default = "glm-5.2"
 context_limit = 128000                  # （可选）onboarding 自动探测写入，0 = 用下面的默认值
+max_output_tokens = 16384               # （可选）单次回复最大 token 数，默认 16384
 
 [tools]
 permission_mode = "auto"                # confirm | plan | auto_edit | full
@@ -124,7 +125,7 @@ coderio
 # 指定 provider/model
 coderio --provider bigmodel_coding_plan --model glm-5.2
 
-# 管理 skill
+# 管理 skill（install 从 GitHub 拉取，需要 git 在 PATH）
 coderio skills list
 coderio skills install
 ```

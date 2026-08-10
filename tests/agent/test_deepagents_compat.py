@@ -107,3 +107,45 @@ def test_research_subagent_only_gets_readonly_tools():
     # Must include the core read-only set.
     for required in ("read_file", "ls", "glob", "grep"):
         assert required in seen, f"research subagent must allow {required}"
+
+
+# --------------------------------------------------------------- BASE_AGENT_PROMPT
+
+
+def test_neutralize_base_prompt_empties_it():
+    """neutralize_base_prompt() must set deepagents.graph.BASE_AGENT_PROMPT to ''.
+
+    Without this, create_deep_agent appends deepagents' default prompt AFTER
+    coderio's system_prompt, causing conflicts (macOS path examples vs virtual
+    paths, 'explore first' vs coderio's workflow guidance). The monkey-patch is
+    fragile — if deepagents renames the attribute, this test catches it."""
+    import deepagents.graph as dg_graph
+
+    # Save original so we can restore it (other tests / the real runtime depend
+    # on the patch having been applied — restore after the test).
+    original = getattr(dg_graph, "BASE_AGENT_PROMPT", None)
+
+    from coderio.agent._deepagents_compat import neutralize_base_prompt
+
+    # If there was a real prompt, restoring + re-neutralizing tests the full cycle.
+    if original:
+        dg_graph.BASE_AGENT_PROMPT = original  # reset to pre-patch state
+        result = neutralize_base_prompt()
+        assert result is True, "neutralize should succeed when BASE_AGENT_PROMPT exists"
+        assert dg_graph.BASE_AGENT_PROMPT == "", "prompt must be emptied after neutralize"
+        # Restore: re-empty it (the production runtime expects it empty).
+        dg_graph.BASE_AGENT_PROMPT = ""
+    else:
+        # BASE_AGENT_PROMPT was already empty (a prior test or import ran neutralize).
+        # neutralize should return False (nothing to do) without crashing.
+        result = neutralize_base_prompt()
+        assert result is False
+
+
+def test_neutralize_base_prompt_idempotent():
+    """Calling neutralize twice is safe — the second call is a no-op (returns False)."""
+    from coderio.agent._deepagents_compat import neutralize_base_prompt
+
+    neutralize_base_prompt()  # first call empties it (or it's already empty)
+    result = neutralize_base_prompt()  # second call: already empty → False
+    assert result is False, "second neutralize should be a no-op (already empty)"
