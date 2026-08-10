@@ -39,6 +39,7 @@ SLASH_COMMANDS: list[SlashCommand] = [
     ),
     SlashCommand("/sessions", "list recent sessions", ["/sessions"]),
     SlashCommand("/resume", "resume a past session (opens an interactive picker)", ["/resume "]),
+    SlashCommand("/export", "export current session to a markdown file", ["/export "]),
     SlashCommand(
         "/mode",
         "change permission mode",
@@ -75,6 +76,8 @@ class ReplContext:
     api_key: str = ""
     base_url: str = ""
     recent_sessions: list[str] = None
+    session_save_dir: str = ""  # expanded path to the sessions dir (for /sessions summaries)
+    session: object = None  # the current Session object (for /export)
     profiles: list = None  # list[Profile] — saved named profiles
     active_profile: str = ""  # name of the currently active profile
     usage: dict = None
@@ -137,9 +140,32 @@ def _cmd_config(ctx) -> CommandResult:
 
 
 def _cmd_sessions(ctx) -> CommandResult:
+    """List recent sessions with a preview (first user message), not bare IDs.
+
+    Uses Session.summaries() — the same machinery the /resume picker uses —
+    so the user recognizes a session by what they asked, not by an opaque
+    timestamp like '20260703-093941-b9f7'.
+    """
     if not ctx.recent_sessions:
         return CommandResult(message="No sessions yet.")
-    lines = [f"  [{i}] {sid}" for i, sid in enumerate(ctx.recent_sessions)]
+    from coderio.session.store import Session
+
+    save_dir = ctx.session_save_dir or "~/.coderio/sessions"
+    summaries = Session.summaries(save_dir, limit=len(ctx.recent_sessions))
+    if not summaries:
+        # Fallback: show bare IDs if summaries failed (corrupt dir, etc.)
+        lines = [f"  [{i}] {sid}" for i, sid in enumerate(ctx.recent_sessions)]
+        return CommandResult(message="Recent sessions:\n" + "\n".join(lines))
+    lines = []
+    for i, s in enumerate(summaries):
+        preview = s.get("first_user", "") or "(no user message)"
+        meta_parts = []
+        if s.get("model"):
+            meta_parts.append(s["model"])
+        meta_parts.append(f"{s.get('message_count', 0)} msgs")
+        meta_parts.append(s.get("mtime", ""))
+        meta = "  [dim]" + " · ".join(meta_parts) + "[/dim]"
+        lines.append(f"  [{i}] {preview[:70]}\n{meta}")
     return CommandResult(message="Recent sessions:\n" + "\n".join(lines))
 
 
@@ -217,6 +243,52 @@ def _cmd_clear(ctx) -> CommandResult:
     return CommandResult(reset_runtime=True, message="Context cleared (new session).")
 
 
+def _cmd_export(ctx, arg: str) -> CommandResult:
+    """Export the current session to a markdown file.
+
+    Renders the conversation (user/assistant/tool messages, skipping system
+    metadata) as markdown. Tool calls are shown as collapsible-ish code blocks.
+    """
+    session = ctx.session
+    if session is None or not getattr(session, "messages", None):
+        return CommandResult(message="No conversation to export yet.")
+
+    # Determine output path: explicit arg, or {session_id}.md in CWD.
+    from pathlib import Path
+
+    if arg.strip():
+        out_path = Path(arg.strip())
+    else:
+        sid = getattr(session, "id", "session")
+        out_path = Path.cwd() / f"{sid}.md"
+
+    lines: list[str] = []
+    model = getattr(session, "meta", {}).get("model", "")
+    if model:
+        lines.append(f"*Model: {model}*\n")
+    for m in session.messages:
+        if m.role == "system":
+            continue  # skip phase_timeline / context_summary metadata
+        if m.role == "user":
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            lines.append(f"## 🧑 User\n\n{content}\n")
+        elif m.role == "assistant":
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            lines.append(f"## 🤖 Assistant\n\n{content}\n")
+            if m.tool_calls:
+                for tc in m.tool_calls:
+                    name = tc.get("name", "?") if isinstance(tc, dict) else getattr(tc, "name", "?")
+                    lines.append(f"  *🔧 {name}*\n")
+        elif m.role == "tool":
+            name = getattr(m, "name", "tool")
+            content = (m.content or "")[:500]  # cap tool output for readability
+            lines.append(f"<details><summary>🔧 {name}</summary>\n\n```\n{content}\n```\n\n</details>\n")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    return CommandResult(message=f"Exported {len(session.messages)} messages → {out_path}")
+
+
 def handle_slash(line: str, ctx) -> CommandResult:
     parts = line.strip().split(maxsplit=1)
     cmd = parts[0]
@@ -241,6 +313,8 @@ def handle_slash(line: str, ctx) -> CommandResult:
         return _cmd_profile(ctx, arg)
     if cmd == "/clear":
         return _cmd_clear(ctx)
+    if cmd == "/export":
+        return _cmd_export(ctx, arg)
     if cmd == "/model":
         name = arg.strip()
         if not name:

@@ -1307,6 +1307,8 @@ def run_tui(
                 api_key="",
                 base_url=rt["cfg"].model.base_url,
                 recent_sessions=Session.list_recent(_P(rt["cfg"].session.save_dir).expanduser()),
+                session_save_dir=str(_P(rt["cfg"].session.save_dir).expanduser()),
+                session=rt["session"],
                 profiles=rt["cfg"].profiles,
                 active_profile=rt["cfg"].active_profile,
                 usage=tui.usage,

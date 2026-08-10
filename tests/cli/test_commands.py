@@ -11,6 +11,8 @@ class _FakeCtx:
         self.api_key = "sk-abcdef1234"
         self.base_url = "https://open.bigmodel.cn/api/anthropic"
         self.recent_sessions = ["20260625-120000-ab12"]
+        self.session_save_dir = ""  # set by tests that need /sessions
+        self.session = None  # set by tests that need /export
         self.profiles = []
         self.active_profile = ""
         self.usage = None
@@ -79,10 +81,18 @@ def test_mode_change_signals_reset():
     assert res.new_permission_mode == "auto"
 
 
-def test_sessions_lists():
-    res = handle_slash("/sessions", _FakeCtx())
+def test_sessions_lists(tmp_path):
+    """/sessions shows session previews (first user message), not bare IDs."""
+    from coderio.session.store import Session
+
+    sess = Session.create(tmp_path, {"model": "glm-5.2"})
+    sess.append(__import__("coderio.session.message", fromlist=["Message"]).Message.user("build a snake game"))
+    ctx = _FakeCtx()
+    ctx.recent_sessions = [sess.id]
+    ctx.session_save_dir = str(tmp_path)
+    res = handle_slash("/sessions", ctx)
     msg = res.message or ""
-    assert "20260625" in msg
+    assert "snake game" in msg.lower(), f"should show first_user preview, got: {msg}"
 
 
 def test_cost_shows_usage_when_available():
@@ -244,3 +254,30 @@ def test_profile_list_prints_inline():
     assert "★" in msg  # active marker
     assert "glm" in msg
     assert "oai" in msg
+
+
+def test_export_writes_markdown(tmp_path):
+    """/export renders the current session to a markdown file."""
+    from coderio.session.message import Message
+    from coderio.session.store import Session
+
+    sess = Session.create(tmp_path, {"model": "glm-5.2"})
+    sess.append(Message.user("hello world"))
+    sess.append(Message.assistant("hi there"))
+    ctx = _FakeCtx()
+    ctx.session = sess
+    out = tmp_path / "exported.md"
+    res = handle_slash(f"/export {out}", ctx)
+    assert out.is_file(), "export file must be created"
+    content = out.read_text(encoding="utf-8")
+    assert "hello world" in content
+    assert "hi there" in content
+    assert "Exported" in (res.message or "")
+
+
+def test_export_no_session():
+    """/export with no active session → friendly error, no crash."""
+    ctx = _FakeCtx()
+    ctx.session = None
+    res = handle_slash("/export", ctx)
+    assert "No conversation" in (res.message or "")
