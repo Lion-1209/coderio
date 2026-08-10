@@ -8,6 +8,8 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-10
+
 ### Fixed
 - **P0-2**: `verify_attempts` double-increment in the harness VerifyGate. The
   counter was bumped both in `observe()` (when a verifying bash run failed) and
@@ -131,6 +133,7 @@ All notable changes to coderio are documented here. The format follows
 - Rich stream UI + Textual TUI with foldable thinking.
 - jsonl session persistence with compression truncation.
 
-[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.1.0
