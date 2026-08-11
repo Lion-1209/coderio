@@ -274,16 +274,13 @@ def _create_process_with_token(
     stdin_handle: int,
     stdout_handle: int,
     stderr_handle: int,
-) -> int | None:
+    suspended: bool = False,
+) -> tuple[int | None, int | None, int]:
     """Launch a process using a restricted token via CreateProcessAsUserW.
 
     This is the core Win32 call that actually APPLIES the restricted token to
     a child process — without it, the token is useless (created and closed
     without affecting anything). See run_sandboxed for the public wrapper.
-
-    Returns the process handle (int) on success, or None on failure.
-    The caller owns the handle and must CloseHandle it (and the thread handle
-    returned via PROCESS_INFORMATION).
 
     Args:
         command_line: full command line (e.g. 'cmd /c "echo hi"').
@@ -292,12 +289,20 @@ def _create_process_with_token(
         cwd: working directory for the child.
         stdin_handle/stdout_handle/stderr_handle: inheritable pipe handles
             for stdio redirection.
+        suspended: if True, create the process in a suspended state so the
+            caller can assign it to a Job Object BEFORE it starts executing.
+            The caller MUST ResumeThread to let it run. This is REQUIRED for
+            reliable process-tree kill: a process assigned to a Job before it
+            spawns children ensures all descendants are in the Job too.
+
+    Returns (proc_handle, thread_handle, pid) on success, (None, None, 0) on
+    failure. The caller owns proc_handle and thread_handle and must CloseHandle
+    both (the thread handle is needed for ResumeThread if suspended=True).
     """
     import ctypes
     import ctypes.wintypes as wt
 
     advapi32 = ctypes.windll.advapi32  # type: ignore[attr-defined]
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
 
     # STARTUPINFO — tells CreateProcess how to set up the child's stdio.
     # STARTF_USESTDHANDLES means the child's stdin/stdout/stderr come from
@@ -334,6 +339,7 @@ def _create_process_with_token(
 
     STARTF_USESTDHANDLES = 0x00000100
     CREATE_NO_WINDOW = 0x08000000
+    CREATE_SUSPENDED = 0x00000004
 
     si = _STARTUPINFOW()
     si.cb = ctypes.sizeof(si)
@@ -343,6 +349,16 @@ def _create_process_with_token(
     si.hStdError = stderr_handle
 
     pi = _PROCESS_INFORMATION()
+
+    # Build the creation flags. CREATE_SUSPENDED is essential for reliable
+    # process-tree kill via Job Object: it lets us assign the process to the
+    # job BEFORE it starts executing, so any children it spawns (e.g.
+    # `cmd /c powershell`) are also in the job. Without this, the first
+    # child spawns grandchildren that escape the job assignment — exactly
+    # the bug where `timeout=2` on a `sleep 5` ran the full 5 seconds.
+    creation_flags = CREATE_NO_WINDOW
+    if suspended:
+        creation_flags |= CREATE_SUSPENDED
 
     # CreateProcessAsUserW signature (simplified — we omit the optional security
     # attributes and environment block, passing NULL/inheritable defaults):
@@ -357,7 +373,7 @@ def _create_process_with_token(
         None,  # lpProcessAttributes — default security
         None,  # lpThreadAttributes
         True,  # bInheritHandles — inherit the stdio pipe handles
-        CREATE_NO_WINDOW,  # dwCreationFlags — no console window for the child
+        creation_flags,  # dwCreationFlags — CREATE_NO_WINDOW [+ CREATE_SUSPENDED if requested]
         None,  # lpEnvironment — inherit parent's environment
         cwd,  # lpCurrentDirectory
         ctypes.byref(si),
@@ -365,11 +381,12 @@ def _create_process_with_token(
     )
     if not ok:
         _log.warning("CreateProcessAsUserW failed (err=%s)", ctypes.get_last_error())
-        return None
+        return (None, None, 0)
 
-    # Close the thread handle (we don't need it); return the process handle.
-    kernel32.CloseHandle(pi.hThread)
-    return pi.hProcess
+    # Return proc + thread handle + pid. The caller:
+    #   - if suspended: assigns to Job Object, then ResumeThread(pi.hThread)
+    #   - else: closes the thread handle immediately (we don't need it)
+    return (pi.hProcess, pi.hThread, pi.dwProcessId)
 
 
 def _read_pipe_to_eof(pipe_handle: int, max_bytes: int = 512_000) -> str:
@@ -496,8 +513,6 @@ def run_sandboxed(
         if not ok:
             return (-1, "stdout pipe creation failed")
         # Ensure the READ end is NOT inheritable (only the write end goes to child).
-        kernel32.SetHandleProperty(stdout_read_h.value, 2, None) if False else None  # placeholder
-        # SetHandleInformation is simpler than the above — use it directly.
         HANDLE_FLAG_INHERIT = 0x00000001
         kernel32.SetHandleInformation(stdout_read_h, HANDLE_FLAG_INHERIT, 0)
 
@@ -510,28 +525,33 @@ def run_sandboxed(
             return (-1, "stderr pipe creation failed")
         kernel32.SetHandleInformation(stderr_read_h, HANDLE_FLAG_INHERIT, 0)
 
-        # stdin: use a null handle (child gets no stdin — DEVNULL equivalent).
-        stdin_write_h = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE, but we want DEVNULL
-        # Simpler: just pass 0 / NULL for stdin handle (child gets no input).
+        # stdin: NULL handle (child gets no stdin — DEVNULL equivalent).
         stdin_write_h = 0
 
         stdout_read = stdout_read_h.value
         stderr_read = stderr_read_h.value
 
-        # Step 4: create the Job Object (resource limits + reliable kill).
+        # Step 4: create the Job Object BEFORE launching the process.
+        # The process will be created suspended, assigned to this job, then
+        # resumed — ensuring all descendants (e.g. `cmd /c powershell`'s
+        # powershell.exe grandchild) are in the job from the start. This fixes
+        # the timeout-kill bug where grandchildren escaped job assignment and
+        # kept running after timeout (sleep 5 + timeout 2 ran the full 5s).
         job = create_job_with_limits(process_limit=128)
         if job is None:
             _log.warning("win_sandbox: Job Object creation failed — running without resource limits")
 
-        # Step 5: launch the process with the restricted token.
+        # Step 5: launch the process SUSPENDED so we can assign it to the job
+        # before it starts executing (and spawns children that would escape).
         command_line = f'cmd /c "{command}"'
-        proc_handle = _create_process_with_token(
+        proc_handle, thread_handle, pid = _create_process_with_token(
             command_line,
             primary_token,
             cwd=cwd,
             stdin_handle=stdin_write_h,
             stdout_handle=stdout_write_h.value,
             stderr_handle=stderr_write_h.value,
+            suspended=(job is not None),  # only suspend if we have a job to assign
         )
 
         # Close our copy of the write ends (child has its own; ours staying
@@ -540,18 +560,24 @@ def run_sandboxed(
         kernel32.CloseHandle(stderr_write_h)
         kernel32.CloseHandle(h_primary)
 
-        if proc_handle is None:
+        if proc_handle is None or thread_handle is None:
             # Process launch failed — fall back. The pipes' read ends are
             # still open (no data to read).
             kernel32.CloseHandle(stdout_read_h)
             kernel32.CloseHandle(stderr_read_h)
             return (-1, "CreateProcessAsUserW failed — cannot launch sandboxed child")
 
-        # Step 6: assign the process to the Job Object (for resource limits
-        # + reliable kill). Must happen early so the Job Object tracks children.
-        if job is not None:
-            pid = kernel32.GetProcessId(proc_handle)
-            assign_to_job(job, pid)
+        try:
+            # Step 6: assign the SUSPENDED process to the Job Object, then
+            # resume its main thread. Now any children it spawns are in the
+            # job too — TerminateJobObject on timeout will kill them all.
+            if job is not None and pid:
+                assign_to_job(job, pid)
+            # ResumeThread: -1 on error, otherwise the previous suspend count
+            # (1 means it was suspended, now running).
+            kernel32.ResumeThread(thread_handle)
+        finally:
+            kernel32.CloseHandle(thread_handle)
 
         # Step 7: wait for the child to exit (with timeout).
         WAIT_TIMEOUT = 0x00000102
@@ -560,14 +586,19 @@ def run_sandboxed(
         wait_result = kernel32.WaitForSingleObject(proc_handle, timeout_ms)
 
         if wait_result == WAIT_TIMEOUT:
-            # Timed out — kill the process tree (Job Object or TerminateProcess).
-            from coderio.tools.win_job import kill_process_tree
-
-            class _StubProc:
-                pid = kernel32.GetProcessId(proc_handle)
-
-            kill_process_tree(_StubProc())  # type: ignore[arg-type]
-            # Drain any partial output.
+            # Timed out — kill the ENTIRE process tree via the Job Object.
+            # TerminateJobObject kills the process assigned to the job AND all
+            # its descendants (grandchildren included), which is exactly what
+            # we need for `cmd /c powershell` chains. This is why we created
+            # the process suspended and assigned it to the job before resume.
+            if job is not None:
+                kernel32.TerminateJobObject(job, 1)
+            else:
+                # No job (creation failed earlier) — best-effort direct kill.
+                kernel32.TerminateProcess(proc_handle, 1)
+            # Wait briefly for the kill to complete so we can drain output.
+            kernel32.WaitForSingleObject(proc_handle, 2000)
+            # Drain any partial output the child produced before being killed.
             stdout = _read_pipe_to_eof(stdout_read, max_output_bytes)
             stderr = _read_pipe_to_eof(stderr_read, max_output_bytes)
             output = stdout

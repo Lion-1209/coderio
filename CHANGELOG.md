@@ -9,6 +9,13 @@ All notable changes to coderio are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **mypy 现在是 CI 硬门 (P1-3)**: 之前 mypy 是 `continue-on-error`（类型错误只报告不 fail）。现在用 per-module overrides 把 14 个有问题文件的 `ignore_errors=true` 标为显式 TODO，其余 49 个干净文件强制类型清洁——新代码的类型错误会真正阻断 CI。`config/models.py` 的 dataclass None-default idiom 用行级 `# type: ignore[assignment]` 标注（mypy 对 dataclass 这种"声明具体类型但默认 None，post_init 后非 None"的宽容用法）。
+
+### Fixed
+- **sandbox 超时杀进程失效 (可靠性 bug)**: 之前 `kill_process_tree` 在进程启动后才 assign Job Object，导致 `cmd /c powershell` 创建的孙进程逃逸出 Job——`timeout=2` 跑 `sleep 10` 实际跑满 10 秒（进程没被杀，只返回了 124 exit code）。修复：进程以 `CREATE_SUSPENDED` 启动 → 立即 assign Job Object → ResumeThread，确保所有子孙从开始就在 Job 里。超时时 `TerminateJobObject` 杀整树。实测验证：sleep 10 + timeout 2 现在 2.0s 返回（原 10s+）。+2 回归测试（含孙进程场景）。
+- **`run_sandboxed` 里 `SetHandleProperty(...) if False else None` 死代码**: 清理。
+
+### Added (prior)
 - **Permission-sandbox 联动 (Claude Code "autoAllowBashIfSandboxed" design)**:
   new `[tools].auto_allow_if_sandboxed` config (default false). When sandbox is
   active + this flag is true, the `execute` (shell) tool auto-approves without

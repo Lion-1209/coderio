@@ -87,14 +87,14 @@ jobs:
           python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=70
 
       - name: Type check (mypy)
-        # Non-blocking (continue-on-error): gradual typing. The config in
-        # pyproject.toml [tool.mypy] is lenient (ignore_missing_imports, no
-        # check_untyped_defs) so this catches gross type errors without
-        # blocking on every untyped third-party dep. Tighten over time.
-        continue-on-error: true
+        # HARD GATE for clean modules. pyproject.toml's [[tool.mypy.overrides]]
+        # lists modules with known type issues (ignore_errors=true) — each is a
+        # tracked cleanup TODO. Modules NOT in that list must stay type-clean,
+        # so new type errors in clean code fail CI. Remove the `|| true` once
+        # the override list is empty (all modules cleaned up).
         shell: bash
         run: |
-          python -m mypy src/coderio || true
+          python -m mypy src/coderio
 
       - name: Build wheel (smoke)
         shell: bash

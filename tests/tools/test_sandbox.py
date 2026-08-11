@@ -301,6 +301,56 @@ def test_run_sandboxed_truncates_large_output():
     assert "truncated" in output.lower(), f"output should be truncated, got {len(output)} bytes"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_run_sandboxed_timeout_kills_process_quickly():
+    """REGRESSION GUARD: when timeout fires, the process MUST be killed quickly.
+
+    Before the fix, kill_process_tree was called AFTER the process had already
+    spawned children (cmd /c powershell) that escaped the Job Object assignment.
+    Result: timeout=2 on a `sleep 10` ran the full 10 seconds (the process
+    kept running, only the exit code said 124). Now the process is created
+    SUSPENDED, assigned to the Job Object, then resumed — so all descendants
+    are in the job and TerminateJobObject kills them all.
+
+    This test runs `sleep 10` with timeout=2 and asserts elapsed < 5s. If the
+    regression returns (process not killed), elapsed will be ~10s and this test
+    fails loudly.
+    """
+    import time
+
+    start = time.time()
+    code, _ = win_sandbox.run_sandboxed('powershell -Command "Start-Sleep -Seconds 10"', cwd=".", timeout=2)
+    elapsed = time.time() - start
+    assert code == 124, f"timeout should return exit 124, got {code}"
+    assert elapsed < 5, (
+        f"timeout=2 should kill the process within ~2-3s, but elapsed={elapsed:.1f}s "
+        "— the process tree kill is broken (regression of the cmd/c grandchild escape bug)"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_run_sandboxed_timeout_kills_grandchild_process():
+    """REGRESSION GUARD (the original bug scenario): a `cmd /c <grandchild>` chain
+    must have the grandchild killed on timeout too.
+
+    This is the EXACT scenario that was broken: cmd.exe spawns powershell.exe
+    as a grandchild; the old code assigned only cmd.exe to the Job Object AFTER
+    it started, so powershell.exe escaped and kept running. The suspended-create
+    + assign-before-resume fix ensures all descendants are in the job.
+    """
+    import time
+
+    start = time.time()
+    # cmd /c powershell = the grandchild-spawning chain that broke before.
+    code, _ = win_sandbox.run_sandboxed('cmd /c "powershell -Command Start-Sleep -Seconds 8"', cwd=".", timeout=2)
+    elapsed = time.time() - start
+    assert code == 124, f"timeout should return exit 124, got {code}"
+    assert elapsed < 5, (
+        f"grandchild (powershell under cmd /c) must be killed on timeout, "
+        f"but elapsed={elapsed:.1f}s — the job-assign-before-resume fix regressed"
+    )
+
+
 # NOTE on the absence of write-isolation tests:
 #
 # Before this cleanup, there were two tests (test_run_sandboxed_denies_system_dir_write

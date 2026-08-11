@@ -159,16 +159,21 @@ class ContextConfig:
 
 @dataclass
 class Config:
-    model: ModelConfig = None
-    tools: ToolsConfig = None
-    skills: SkillsConfig = None
-    session: SessionConfig = None
-    cli: CliConfig = None
-    context: ContextConfig = None
+    # All sub-config fields default to None and are populated in __post_init__.
+    # The `Type = None` default is a dataclass idiom: the field IS declared as
+    # the concrete type, but defaults to None before __post_init__ runs. mypy
+    # accepts this for dataclasses (the None is the "not yet initialized"
+    # sentinel, replaced in __post_init__ which the loader always calls).
+    model: ModelConfig = None  # type: ignore[assignment]
+    tools: ToolsConfig = None  # type: ignore[assignment]
+    skills: SkillsConfig = None  # type: ignore[assignment]
+    session: SessionConfig = None  # type: ignore[assignment]
+    cli: CliConfig = None  # type: ignore[assignment]
+    context: ContextConfig = None  # type: ignore[assignment]
     # Named profiles (multi-config). Empty list = legacy single-config mode:
     # build_chat_model falls through to the [model] section's 3-layer path,
     # so existing users with no profiles are unaffected.
-    profiles: list = None
+    profiles: list = None  # type: ignore[assignment]
     active_profile: str = ""
 
     def __post_init__(self):
