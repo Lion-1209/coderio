@@ -15,6 +15,11 @@
 # Scope: main dependencies + [dev] extra (pytest/ruff/build/mypy).
 # The [mcp] extra is intentionally NOT pinned here — it's opt-in and MCP users
 # manage their own server deps (npx, node, etc.).
+#
+# Cross-platform note: pywin32 is excluded because it's Windows-only (required
+# by the mcp package on Windows via a platform marker, but not published for
+# Linux/macOS). If you regenerate and see pywin32, remove the line manually —
+# keeping it breaks `pip install -r` on Linux/macOS CI.
 PyJWT==2.13.0
 PyYAML==6.0.3
 Pygments==2.20.0
@@ -105,7 +110,9 @@ pytest-cov==7.1.0
 pytest==9.1.1
 python-dotenv==1.2.2
 python-multipart==0.0.32
-pywin32==312
+# pywin32 omitted: Windows-only package (required by mcp on Windows). It's not
+# published for Linux/macOS, so pinning it here breaks cross-platform installs.
+# The mcp extra installs it automatically on Windows via its environment marker.
 referencing==0.37.0
 regex==2026.5.9
 requests-toolbelt==1.0.0
