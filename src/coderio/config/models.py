@@ -60,6 +60,23 @@ class ToolsConfig:
     # tools blocked). True (default) = web tools available subject to the
     # normal permission gate.
     network_allowed: bool = True
+    # Whitelist mode: when True, commands whose first token isn't in the
+    # allowed set (built-in + allowed_commands) are flagged for confirmation
+    # (NOT hard-blocked — FULL mode still allows them). Defaults to False
+    # (blacklist-only, backward compatible). See command_policy.py.
+    whitelist_mode: bool = False
+    # User-supplied additions to the built-in command whitelist. Applied only
+    # when whitelist_mode is True. E.g. ["docker", "kubectl"] to allow those
+    # without confirmation in whitelist mode.
+    allowed_commands: list[str] = field(default_factory=list)
+    # Sandbox mode: OS-level isolation for the execute tool.
+    #   "off"    = no OS sandbox (regex blacklist + whitelist only) [default]
+    #   "job"    = Job Object resource limits + reliable process-tree kill
+    #              (prevents fork bombs, OOM, orphaned grandchildren)
+    #   "write"  = Job Object + Windows Restricted Token write isolation
+    #              (reads system-wide, writes gated — needs Win10+, no admin)
+    # On Linux, "write" uses bubblewrap if available (see linux_sandbox.py).
+    sandbox_mode: str = "off"
 
 
 @dataclass

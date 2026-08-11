@@ -320,3 +320,73 @@ def test_handle_custom_mode_unknown_type_noop():
     _handle_custom_mode({"type": "something_else"}, stream)
     _handle_custom_mode("not a dict", stream)
     assert stream.harness_signals == []
+
+
+# ----------------------------------------------------- _WinLocalShellBackend cwd fix
+# REGRESSION (2026-08-10 sandbox analysis): the execute override read
+# self._root_dir (which doesn't exist) instead of self.cwd, so workspace_root
+# config silently had no effect on shell execution. These tests verify the fix.
+
+
+def test_win_shell_backend_uses_cwd_attr(tmp_path):
+    """The production shell backend must read self.cwd (set by FilesystemBackend
+    from root_dir), not the non-existent self._root_dir.
+
+    Instantiates the backend with root_dir=tmp_path, then runs `pwd` (POSIX)
+    or `cd` (Windows) and verifies the output reflects tmp_path, not Path.cwd().
+    """
+    import pytest
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import _WinLocalShellBackend
+
+    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True)
+    # self.cwd should be set by FilesystemBackend.__init__ from root_dir.
+    assert getattr(backend, "cwd", None) is not None, "backend.cwd must be set from root_dir"
+    # Execute a cwd-reporting command.
+    import sys
+
+    cmd = "cd" if sys.platform == "win32" else "pwd"
+    result = backend.execute(cmd)
+    output = getattr(result, "output", "") or ""
+    # The output must mention tmp_path (the shell ran in the workspace root).
+    assert str(tmp_path) in output, f"execute should run in self.cwd ({tmp_path}), got output: {output!r}"
+
+
+def test_win_shell_backend_truncates_oversized_output(tmp_path):
+    """The execute override must truncate output at _max_output_bytes.
+
+    Restores upstream behavior the old override dropped: a command producing
+    huge output (e.g. `yes` or a big find) must be truncated to prevent OOM
+    in the agent's context window.
+    """
+    import pytest
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import _WinLocalShellBackend
+
+    # Use a small max_output_bytes so the test doesn't generate 100KB of output.
+    backend = _WinLocalShellBackend(
+        root_dir=str(tmp_path),
+        virtual_mode=True,
+        inherit_env=True,
+        max_output_bytes=200,  # small threshold for fast testing
+    )
+    import sys
+
+    # Generate ~2KB of output (well over the 200-byte threshold).
+    if sys.platform == "win32":
+        cmd = "powershell -Command \"'x' * 2000\""
+    else:
+        cmd = "yes x | head -c 2000"
+    result = backend.execute(cmd)
+    output = getattr(result, "output", "") or ""
+    assert "truncated" in output.lower() or "..." in output, (
+        f"output should be truncated, got {len(output)} bytes: {output[:100]!r}..."
+    )

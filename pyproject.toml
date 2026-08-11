@@ -84,7 +84,9 @@ select = ["E", "F", "W", "I", "S"]
 #   S101 — assert statements (test code uses assert, not exceptions).
 #   S108 — /tmp paths in test fixtures (mock data, not real file access).
 #   S607 — partial executable path ('git') in test setup scripts.
-"tests/**" = ["F841", "E731", "S101", "S108", "S607"]
+#   S110 — try/except/pass in test cleanup (proc.kill() teardown); a failed
+#          kill in a test fixture must not mask the real assertion failure.
+"tests/**" = ["F841", "E731", "S101", "S108", "S607", "S110"]
 # TUI rendering: S110 (try-except-pass) is intentional — these are UI
 # fault-tolerance guards. A failed widget mount/scroll/remove must never crash
 # the agent's main loop. Logging would spam the terminal during streaming.
@@ -116,6 +118,14 @@ select = ["E", "F", "W", "I", "S"]
 # Deep agent: S602 — shell=True is required by deepagents' LocalShellBackend.
 # Experimental module, not wired into the default CLI path.
 "src/coderio/agent/deep_loop.py" = ["S602"]
+# Sandbox modules: S602/S603 — running arbitrary subprocess commands IS the
+# sandbox's entire purpose. The sandbox itself (bubblewrap namespace isolation
+# on Linux, Restricted Token + Job Object on Windows) is the security boundary,
+# not subprocess filtering. S108 on linux_sandbox is the bwrap "--tmpfs /tmp"
+# arg — that path is INSIDE the namespace (a private tmpfs), never the host /tmp.
+"src/coderio/tools/win_sandbox.py" = ["S602", "S603"]
+"src/coderio/tools/linux_sandbox.py" = ["S603", "S108"]
+"src/coderio/tools/sandbox_runner.py" = ["S603"]
 # REPL onboarding check: S110 — best-effort config parse, failure means skip.
 "src/coderio/cli/repl.py" = ["S110"]
 # App entry: S110 — stream.reconfigure may fail on some platforms; skip is safe.

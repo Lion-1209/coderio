@@ -53,7 +53,7 @@ def _extract_thinking(content: Any) -> str:
 
 
 class _WinLocalShellBackend:
-    """LocalShellBackend subclass that decodes subprocess output lossily on Windows.
+    """LocalShellBackend subclass that decodes subprocess output lossibly on Windows.
 
     deepagents' LocalShellBackend uses subprocess.run(text=True), which decodes
     stdout/stderr as strict UTF-8. On a non-UTF-8 Windows locale (e.g. GBK/CP936),
@@ -66,6 +66,14 @@ class _WinLocalShellBackend:
     composite.py:560 gates the `execute` tool on this check. A composition
     wrapper with __getattr__ proxying fails the isinstance test and the agent
     gets "backend doesn't support command execution" errors.
+
+    REGRESSION FIX (2026-08-10 sandbox analysis): the previous override read
+    `self._root_dir` for cwd, but FilesystemBackend stores the root as
+    `self.cwd` (not `_root_dir`). The getattr fallback meant `workspace_root`
+    config and the `workdir` arg silently had NO effect on shell execution —
+    commands always ran in Path.cwd(). Now reads `self.cwd` (matching upstream
+    local_shell.py:335). Also restores stdin=DEVNULL, max_output_bytes
+    truncation, and env=self._env that the old override dropped.
     """
 
     # Subclass created lazily at instantiation time (deepagents is optional).
@@ -73,28 +81,64 @@ class _WinLocalShellBackend:
     # be importable. This factory builds a real subclass per instance.
     _RealCls = None
 
-    def __new__(cls, **kwargs):
+    def __new__(cls, sandbox_mode: str = "off", **kwargs):
         if cls._RealCls is None:
             from deepagents.backends import LocalShellBackend
 
             class _Sub(LocalShellBackend):
-                """Real subclass overriding execute for Windows GBK safety."""
+                """Real subclass overriding execute for Windows GBK safety.
+
+                Overrides the upstream execute (local_shell.py:238-384) to read
+                bytes and decode with errors='replace'. Preserves upstream's
+                cwd=self.cwd, env=self._env, stdin=DEVNULL, max_output_bytes
+                truncation, and timeout semantics that the prior coderio
+                override had dropped.
+
+                When sandbox_mode is "job" or "write", delegates to the sandbox
+                module (win_sandbox / linux_sandbox) for OS-level isolation
+                instead of plain subprocess.run. See config ToolsConfig.sandbox_mode.
+                """
+
+                # Set per-instance via __init__ below. Default "off" keeps the
+                # legacy subprocess path for existing users.
+                _sandbox_mode: str = "off"
 
                 def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
                     import subprocess
 
                     from deepagents.backends.protocol import ExecuteResponse
 
-                    cwd = getattr(self, "_root_dir", None) or str(Path.cwd())
-                    effective_timeout = timeout if timeout is not None else 120
+                    # Sandbox path: delegate to win_sandbox / linux_sandbox when
+                    # configured. The sandbox module handles cwd/env/timeout/
+                    # truncation internally, so we skip the subprocess block below.
+                    mode = getattr(self, "_sandbox_mode", "off")
+                    if mode in ("job", "write"):
+                        from coderio.tools.sandbox_runner import run_with_sandbox
+
+                        exit_code, output = run_with_sandbox(
+                            command,
+                            cwd=str(getattr(self, "cwd", None) or Path.cwd()),
+                            mode=mode,
+                            timeout=timeout or 120,
+                            env=getattr(self, "_env", None),
+                        )
+                        return ExecuteResponse(output=output, exit_code=exit_code)
+
+                    # Plain subprocess path (sandbox_mode="off" or sandbox failure).
+                    cwd = str(getattr(self, "cwd", None) or Path.cwd())
+                    effective_timeout = timeout if timeout is not None else getattr(self, "_default_timeout", 120)
+                    max_output = getattr(self, "_max_output_bytes", 100_000)
+                    env = getattr(self, "_env", None)
                     try:
                         proc = subprocess.run(
                             command,
                             shell=True,
                             capture_output=True,
-                            cwd=str(cwd),
+                            cwd=cwd,
                             timeout=effective_timeout,
                             text=False,  # bytes — decode ourselves (Windows GBK safety)
+                            stdin=subprocess.DEVNULL,  # prevent stdin-reading cmds from hanging
+                            env=env,
                         )
                         stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
                         stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
@@ -106,10 +150,17 @@ class _WinLocalShellBackend:
                     output = stdout
                     if stderr:
                         output += f"\n[stderr]\n{stderr}"
+                    # Truncate oversized output (restores upstream behavior that
+                    # the old override dropped — without this, a `find /` or
+                    # verbose build log can OOM the agent's context window).
+                    if len(output) > max_output:
+                        output = output[:max_output] + f"\n\n... Output truncated at {max_output} bytes."
                     return ExecuteResponse(output=output, exit_code=exit_code)
 
             cls._RealCls = _Sub
-        return cls._RealCls(**kwargs)
+        inst = cls._RealCls(**kwargs)
+        inst._sandbox_mode = sandbox_mode
+        return inst
 
 
 def _resolve_system_prompt(system_prompt, skill_store, active_skills):
@@ -247,6 +298,7 @@ def run_deep_agent(
     harness_enabled: bool = True,
     recursion_limit: int = 200,
     command_policy=None,
+    sandbox_mode: str = "off",
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -294,16 +346,19 @@ def run_deep_agent(
     # Command-content review: always active (even in FULL mode). Blocks rm -rf /,
     # mkfs, fork bombs, etc. before they reach subprocess.run(shell=True).
     # This is NOT a real OS sandbox — see command_policy.py for limitations.
+    # The gate reference lets the whitelist (if enabled) degrade based on mode
+    # (FULL allows, others prompt) rather than hard-blocking unknown commands.
     from coderio.agent.command_review import CommandReviewMiddleware
     from coderio.tools.command_policy import CommandPolicy
 
     policy = command_policy or CommandPolicy.default()
-    middleware.append(CommandReviewMiddleware(policy))
+    middleware.append(CommandReviewMiddleware(policy, gate=gate))
 
     backend = _WinLocalShellBackend(
         root_dir=str(workdir or Path.cwd()),
         virtual_mode=True,
         inherit_env=True,
+        sandbox_mode=sandbox_mode,
     )
 
     extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)

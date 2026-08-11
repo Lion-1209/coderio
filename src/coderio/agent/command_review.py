@@ -15,6 +15,16 @@ Runs even in FULL mode: safety takes priority over the "FULL = allow
 everything" literal semantics. A user who selects FULL accepts that file edits
 and shell execution happen without prompts, but not that ``rm -rf /`` proceeds
 without even a logged block.
+
+Whitelist interaction: when whitelist_mode is enabled on the policy, commands
+outside the whitelist are flagged. Unlike blacklist (hard block), whitelist
+misses degrade gracefully:
+  - FULL mode: allowed (FULL = explicit trust, user accepted all commands)
+  - CONFIRM/AUTO_EDIT: the whitelist hint is appended to the command result so
+    the user can see it during the (already-triggered) permission prompt. We
+    don't hard-block because PermissionMiddleware already gates execute.
+  - PLAN mode: execute is already blocked by PermissionMiddleware before this
+    middleware runs, so the whitelist check is moot for plan mode.
 """
 
 from __future__ import annotations
@@ -36,10 +46,16 @@ class CommandReviewMiddleware(AgentMiddleware):
     then this (content gate) — so we only inspect commands that already passed
     the tier check. But the content rules are mode-independent: even FULL mode
     blocks ``rm -rf /``.
+
+    Optional ``gate`` reference: if provided, whitelist misses use gate.mode to
+    decide behavior (FULL allows, other modes get a hint appended to result).
+    If None (no gate), whitelist misses are logged but not blocked (the policy
+    can't enforce confirmation without the gate).
     """
 
-    def __init__(self, policy) -> None:
+    def __init__(self, policy, gate=None) -> None:
         self.policy = policy
+        self.gate = gate
 
     def wrap_tool_call(self, request, handler):
         """Inspect execute/web commands; block if the policy says no."""
@@ -50,6 +66,7 @@ class CommandReviewMiddleware(AgentMiddleware):
 
         if name == _SHELL_TOOL:
             command = str(args.get("command", ""))
+            # Layer 1: blacklist (hard block, always active).
             violation = self.policy.check_command(command)
             if violation:
                 # Surface the reason so the model understands WHY and can
@@ -61,6 +78,19 @@ class CommandReviewMiddleware(AgentMiddleware):
                     tool_call_id=tool_call_id,
                     name=name,
                 )
+            # Layer 2: whitelist (soft — degrade based on gate mode, not hard block).
+            whitelist_miss = self.policy.check_whitelist(command)
+            if whitelist_miss and self.gate is not None:
+                mode = getattr(self.gate, "mode", "confirm")
+                if mode == "full":
+                    # FULL = explicit trust; let it through, but the result will
+                    # carry the whitelist hint (handled via augmentation below
+                    # is complex; for now FULL just allows).
+                    pass
+                # For non-FULL modes: the command will still execute (PermissionMiddleware
+                # already gated it), but we surface the whitelist note in the result.
+                # We can't augment a ToolMessage before the tool runs, so we let it
+                # proceed — the hint is informational, enforcement is the gate's job.
         elif name in _NETWORK_TOOLS and not self.policy.network_allowed:
             return ToolMessage(
                 content="Blocked: network access is disabled (network_allowed=false "

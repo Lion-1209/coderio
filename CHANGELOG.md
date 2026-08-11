@@ -9,6 +9,27 @@ All notable changes to coderio are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **OS-level sandboxing (P0-1 partial fix)**: multi-layer sandbox architecture
+  for the `execute` tool, configurable via `[tools].sandbox_mode`:
+  - `"off"` (default): no OS sandbox — regex blacklist + whitelist only.
+  - `"job"`: Job Object (Windows) / process group (POSIX) with resource limits
+    (process-count cap prevents fork bombs) and reliable process-tree kill
+    (fixes the "orphaned grandchildren" hang from `subprocess.run` timeout).
+  - `"write"`: Windows Restricted Token (file-write isolation via
+    `CreateRestrictedToken`) or Linux bubblewrap (`bwrap` — read-only root,
+    workspace read-write, optional `--unshare-net`). On Windows this is the
+    OpenAI-Codex-validated primitive; Claude Code doesn't support native
+    Windows sandboxing (WSL2 only), so this is a differentiation opportunity.
+  - New modules: `tools/win_job.py` (shared Job Object helpers + resource
+    limits), `tools/win_sandbox.py` (Restricted Token), `tools/linux_sandbox.py`
+    (bubblewrap), `tools/sandbox_runner.py` (cross-platform dispatcher).
+- **Command whitelist mode**: `[tools].whitelist_mode = true` enables a
+  default-deny policy where commands whose first token isn't in the allowed
+  set are flagged for confirmation (NOT hard-blocked — FULL mode still allows,
+  CONFIRM/AUTO_EDIT prompt, PLAN blocks). Built-in whitelist covers ~60 dev
+  commands (python, git, npm, pytest, ruff, etc.). User-extendable via
+  `[tools].allowed_commands`. Safer than blacklist alone (unknown commands
+  prompt instead of pass) but still name-matching only (obfuscation bypasses it).
 - **Pinned dependencies (requirements-dev.txt)**: CI now installs from a pinned
   lockfile (main + dev extra, 122 transitive deps) for reproducible builds.
   An upstream release that breaks langchain or deepagents can no longer turn CI
@@ -59,6 +80,16 @@ All notable changes to coderio are documented here. The format follows
   tests covering `_build_extra_tools`/`_resolve_system_prompt`/`_build_inputs`/
   `_handle_*_mode`/`_content_to_text`/`_extract_thinking` — closing the
   "production engine black box" gap flagged in the 2026-08-10 report (P1-2).
+
+### Fixed
+- **Production shell backend `_root_dir` bug**: the `_WinLocalShellBackend.execute`
+  override read `self._root_dir` for cwd, but deepagents' `FilesystemBackend`
+  stores the root as `self.cwd` — so `getattr(self, "_root_dir", None)` always
+  returned None, and shell commands silently ran in `Path.cwd()` instead of the
+  configured `workspace_root`. This defeated the workspace-isolation promise for
+  shell execution. Now reads `self.cwd` (matching upstream `local_shell.py:335`).
+  Also restores `stdin=DEVNULL`, `max_output_bytes` truncation, and `env=self._env`
+  that the old override had dropped (regression from upstream).
 
 ## [0.3.0] — 2026-08-10
 

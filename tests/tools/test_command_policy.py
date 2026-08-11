@@ -192,3 +192,125 @@ def test_network_allowed_default_true():
 def test_network_can_be_disabled():
     p = CommandPolicy(network_allowed=False)
     assert p.network_allowed is False
+
+
+# ----------------------------------------------------- whitelist mode (P0-1, stage B)
+
+
+def test_whitelist_disabled_by_default():
+    """Default policy: whitelist_mode=False → check_whitelist always returns None."""
+    p = CommandPolicy()
+    assert p.whitelist_mode is False
+    # Even an unknown command passes (whitelist is off).
+    assert p.check_whitelist("totally-bogus-command --flag") is None
+
+
+def test_whitelist_blocks_unknown_command():
+    """whitelist_mode=True: unknown command flagged (returns reason string)."""
+    p = CommandPolicy(whitelist_mode=True)
+    result = p.check_whitelist("totally-bogus-command")
+    assert result is not None
+    assert "totally-bogus-command" in result
+    assert "whitelist" in result.lower()
+
+
+def test_whitelist_allows_known_command():
+    """whitelist_mode=True: built-in whitelist commands pass (return None)."""
+    p = CommandPolicy(whitelist_mode=True)
+    for cmd in ("python script.py", "git status", "npm install", "pytest -x", "ls -la"):
+        assert p.check_whitelist(cmd) is None, f"{cmd!r} should be whitelisted"
+
+
+def test_whitelist_user_allowed_commands():
+    """allowed_commands extends the built-in whitelist."""
+    p = CommandPolicy(whitelist_mode=True, allowed_commands=["docker", "kubectl"])
+    assert p.check_whitelist("docker ps") is None
+    assert p.check_whitelist("kubectl get pods") is None
+    # Non-allowed still flagged.
+    assert p.check_whitelist("terraform apply") is not None
+
+
+def test_whitelist_extracts_first_token_only():
+    """The whitelist checks only the first token (the executable name), not args."""
+    from coderio.tools.command_policy import _extract_command_name
+
+    assert _extract_command_name("python script.py --verbose") == "python"
+    assert _extract_command_name("git commit -m 'msg'") == "git"
+    assert _extract_command_name("ls -la /tmp") == "ls"
+
+
+def test_whitelist_strips_path_prefix():
+    """Path-qualified commands match by bare name: /usr/bin/python → python."""
+    from coderio.tools.command_policy import _extract_command_name
+
+    assert _extract_command_name("/usr/bin/python script.py") == "python"
+    assert _extract_command_name("./my-tool --flag") == "my-tool"
+    assert _extract_command_name("C:\\tools\\node.exe app.js") == "node.exe"
+
+
+def test_whitelist_skips_source_prefix():
+    """``source venv/bin/activate && python ...`` → first real command is python."""
+    from coderio.tools.command_policy import _extract_command_name
+
+    name = _extract_command_name("source venv/bin/activate && python script.py")
+    assert name == "python"
+
+
+def test_whitelist_skips_env_prefix():
+    """``env VAR=x python ...`` → first real command is python."""
+    from coderio.tools.command_policy import _extract_command_name
+
+    name = _extract_command_name("env DJANGO_SETTINGS=x python manage.py runserver")
+    assert name == "python"
+
+
+def test_whitelist_skips_sudo_prefix():
+    """``sudo apt install ...`` → first real command is apt."""
+    from coderio.tools.command_policy import _extract_command_name
+
+    name = _extract_command_name("sudo apt install -y curl")
+    assert name == "apt"
+
+
+def test_whitelist_empty_command_returns_none():
+    """An empty command string returns None (nothing to check)."""
+    p = CommandPolicy(whitelist_mode=True)
+    assert p.check_whitelist("") is None
+    assert p.check_whitelist("   ") is None
+
+
+def test_whitelist_blacklist_both_active():
+    """Blacklist (hard block) takes priority over whitelist (soft flag).
+
+    Even in whitelist mode, a blacklist-matching command returns the blacklist
+    reason from check_command (hard block), not the whitelist miss."""
+    p = CommandPolicy(whitelist_mode=True)
+    # 'rm' isn't in the whitelist, AND 'rm -rf /' matches the blacklist.
+    # check_command (blacklist) should return the hard-block reason.
+    blocked = p.check_command("rm -rf /")
+    assert blocked is not None
+    assert "recursive delete" in blocked.lower() or "root" in blocked.lower()
+    # check_whitelist would also flag it (rm not in whitelist), but that's a
+    # separate layer — the caller checks check_command first.
+
+    # A whitelist miss on a NON-blacklisted command returns the whitelist reason.
+    assert p.check_command("totally-bogus-command") is None  # not blacklisted
+    assert p.check_whitelist("totally-bogus-command") is not None  # whitelist miss
+
+
+def test_whitelist_default_allowed_has_dev_tools():
+    """The built-in whitelist includes the core dev tooling a coding agent needs."""
+    from coderio.tools.command_policy import _DEFAULT_ALLOWED
+
+    for must_have in ("python", "git", "npm", "pytest", "ruff", "ls", "cat", "grep"):
+        assert must_have in _DEFAULT_ALLOWED, f"{must_have!r} should be in the default whitelist"
+
+
+def test_whitelist_destructive_commands_not_in_defaults():
+    """The built-in whitelist does NOT include destructive commands (rm, dd, mkfs).
+
+    Even in whitelist mode, these should prompt — they're never auto-allowed."""
+    from coderio.tools.command_policy import _DEFAULT_ALLOWED
+
+    for must_block in ("rm", "rmdir", "dd", "mkfs", "shutdown"):
+        assert must_block not in _DEFAULT_ALLOWED, f"{must_block!r} must NOT be in the default whitelist (destructive)"

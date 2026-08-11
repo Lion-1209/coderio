@@ -98,6 +98,9 @@ permission_mode = "auto"                # confirm | plan | auto_edit | full
 workspace_root = ""                     # shell 后端的 CWD（空=用启动目录）；文件路径隔离由 deepagents virtual_mode 处理
 blocked_commands = []                   # 追加到内置黑名单（正则），如 ["git push --force", "npm publish"]
 network_allowed = true                  # false = 禁用 web_fetch/web_search（离线模式）
+whitelist_mode = false                  # true = 未知命令降级 confirm（见下方"沙箱"）
+allowed_commands = []                   # 追加到内置白名单，如 ["docker", "kubectl"]
+sandbox_mode = "off"                    # off | job | write（见下方"沙箱"）
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）
@@ -157,6 +160,33 @@ coderio mcp remove filesystem
 ```
 
 **MCP 工具权限**：MCP 工具名含 `write`/`create`/`delete`/`execute`/`run`/`fetch`/`request` 等关键词时，会被权限系统按 destructive 工具处理（PLAN 模式拒绝、CONFIRM 模式询问、FULL 模式放行）——与内置工具一致。只读 MCP 工具（`read`/`get`/`list`/`query`）在所有模式都放行。
+
+**沙箱与命令安全**（多层防御）：
+
+coderio 对 shell 命令（`execute` 工具）有多层安全防线，从轻到重：
+
+| 层 | 机制 | 配置 | 强度 |
+|---|---|---|---|
+| 1. 黑名单 | 正则匹配破坏性命令（`rm -rf /`、`mkfs`、fork bomb 等），即使 FULL 模式也挡 | `[tools].blocked_commands` 追加 | 防 grep，可被 base64/变量绕过 |
+| 2. 白名单 | 未知命令（不在内置 ~60 个开发命令里）降级 confirm | `[tools].whitelist_mode = true` | 比 grep 强（未知命令会问），仍可绕过 |
+| 3. OS 沙箱 | 内核级隔离，进程**物理上**没有越权写入的权限 | `[tools].sandbox_mode` | 真正的安全边界 |
+
+`sandbox_mode` 三档：
+
+- **`off`**（默认）：不开 OS 沙箱，只用黑名单+白名单。现有行为，不影响兼容性。
+- **`job`**：Windows Job Object / POSIX 进程组 + 资源限制（进程数上限防 fork bomb）+ 可靠进程树杀（修复 `subprocess.run` timeout 杀不干净孙进程导致 TUI 挂起的老问题）。无文件隔离，但解决资源滥用。
+- **`write`**：文件写隔离。
+  - **Windows**：`CreateRestrictedToken(WRITE_RESTRICTED)`——OpenAI Codex 验证过的路径，纯 ctypes 无需 admin。进程可读全系统，写操作受 token ACL 约束。（v1：token 原语已就绪，完整目录 ACL 应用是后续工作）
+  - **Linux**：`bubblewrap`（`bwrap`）——Claude Code Linux 版同款。根目录只读挂载，workspace 读写挂载，`network_allowed=false` 时 `--unshare-net` 断网。需要 `apt install bubblewrap`。
+
+```toml
+# 推荐：开发时用 job（防 fork bomb + 可靠清理），跑不可信代码时用 write
+sandbox_mode = "job"
+whitelist_mode = true
+allowed_commands = ["docker", "kubectl"]  # 白名单外的命令会触发 confirm
+```
+
+**安全模型诚实声明**：`job` 档是资源限制 + 进程控制，不是权限沙箱。`write` 档的 Windows 路径在 v1 创建了 Restricted Token 但尚未通过 `CreateProcessAsUserW` 应用到子进程（Job Object + 资源限制已生效）。Linux 的 bubblewrap 路径是完整的命名空间隔离（开箱即用）。对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker）。
 
 支持的 provider：
 | provider_id | 说明 | 协议 |

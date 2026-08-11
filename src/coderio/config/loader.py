@@ -172,6 +172,9 @@ def _from_dict(data: dict) -> Config:
             workspace_root=t.get("workspace_root", cfg.tools.workspace_root),
             blocked_commands=_str_list(t, "blocked_commands", cfg.tools.blocked_commands),
             network_allowed=_bool(t, "network_allowed", cfg.tools.network_allowed),
+            whitelist_mode=_bool(t, "whitelist_mode", cfg.tools.whitelist_mode),
+            allowed_commands=_str_list(t, "allowed_commands", cfg.tools.allowed_commands),
+            sandbox_mode=t.get("sandbox_mode", cfg.tools.sandbox_mode),
         ),
         skills=SkillsConfig(
             auto_load=s.get("auto_load", cfg.skills.auto_load),

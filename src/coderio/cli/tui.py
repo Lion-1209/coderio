@@ -1462,6 +1462,8 @@ def run_tui(
         cmd_policy = CommandPolicy(
             extra_blocked=rt["cfg"].tools.blocked_commands,
             network_allowed=rt["cfg"].tools.network_allowed,
+            whitelist_mode=rt["cfg"].tools.whitelist_mode,
+            allowed_commands=rt["cfg"].tools.allowed_commands,
         )
         run_deep_agent(
             user_input=user_content,
@@ -1475,6 +1477,7 @@ def run_tui(
             workdir=rt["cfg"].tools.workspace_root or None,
             harness_enabled=rt["cfg"].skills.harness,
             command_policy=cmd_policy,
+            sandbox_mode=rt["cfg"].tools.sandbox_mode,
         )
 
     def _load_session(sid: str) -> None:
