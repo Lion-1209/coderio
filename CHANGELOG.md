@@ -9,27 +9,35 @@ All notable changes to coderio are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **OS-level sandboxing (P0-1 partial fix)**: multi-layer sandbox architecture
-  for the `execute` tool, configurable via `[tools].sandbox_mode`:
+- **OS-level sandboxing (partial)**: multi-layer sandbox architecture for the
+  `execute` tool, configurable via `[tools].sandbox_mode`:
   - `"off"` (default): no OS sandbox — regex blacklist + whitelist only.
   - `"job"`: Job Object (Windows) / process group (POSIX) with resource limits
     (process-count cap prevents fork bombs) and reliable process-tree kill
     (fixes the "orphaned grandchildren" hang from `subprocess.run` timeout).
-  - `"write"`: Windows Restricted Token (file-write isolation via
-    `CreateRestrictedToken`) or Linux bubblewrap (`bwrap` — read-only root,
-    workspace read-write, optional `--unshare-net`). On Windows this is the
-    OpenAI-Codex-validated primitive; Claude Code doesn't support native
-    Windows sandboxing (WSL2 only), so this is a differentiation opportunity.
+    Works on all platforms.
+  - `"write"`: file-write isolation — but ONLY on Linux.
+    - **Linux**: ✅ bubblewrap (`bwrap`) — read-only root, workspace read-write,
+      optional `--unshare-net`. Real namespace isolation, same approach as
+      Claude Code's Linux sandbox. Requires `apt install bubblewrap`.
+    - **Windows**: ⚠️ the `CreateRestrictedToken` + `CreateProcessAsUserW`
+      plumbing is in place (the token IS applied to the child), but on non-admin
+      accounts the token is a no-op (verified: original and restricted tokens
+      both have Medium integrity 0x2000 — identical write permissions). True
+      Windows write-isolation needs per-directory ACLs (~500 lines, tracked as
+      follow-up). On Windows, `write` currently behaves identically to `job`.
   - New modules: `tools/win_job.py` (shared Job Object helpers + resource
-    limits), `tools/win_sandbox.py` (Restricted Token), `tools/linux_sandbox.py`
-    (bubblewrap), `tools/sandbox_runner.py` (cross-platform dispatcher).
+    limits), `tools/win_sandbox.py` (Restricted Token plumbing — see honest
+    status in its docstring), `tools/linux_sandbox.py` (bubblewrap),
+    `tools/sandbox_runner.py` (cross-platform dispatcher).
 - **Command whitelist mode**: `[tools].whitelist_mode = true` enables a
   default-deny policy where commands whose first token isn't in the allowed
-  set are flagged for confirmation (NOT hard-blocked — FULL mode still allows,
-  CONFIRM/AUTO_EDIT prompt, PLAN blocks). Built-in whitelist covers ~60 dev
-  commands (python, git, npm, pytest, ruff, etc.). User-extendable via
-  `[tools].allowed_commands`. Safer than blacklist alone (unknown commands
-  prompt instead of pass) but still name-matching only (obfuscation bypasses it).
+  set are flagged. Enforcement by mode: PLAN hard-blocks (returns ToolMessage);
+  CONFIRM/AUTO_EDIT let the command run but append a `[whitelist]` note to the
+  result so the model sees it was flagged; FULL allows without annotation.
+  Built-in whitelist covers ~60 dev commands (python, git, npm, pytest, ruff,
+  etc.). User-extendable via `[tools].allowed_commands`. Name-matching only
+  (obfuscation bypasses it) — for accidental-damage prevention, not adversarial.
 - **Pinned dependencies (requirements-dev.txt)**: CI now installs from a pinned
   lockfile (main + dev extra, 122 transitive deps) for reproducible builds.
   An upstream release that breaks langchain or deepagents can no longer turn CI

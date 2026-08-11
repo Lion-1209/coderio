@@ -37,6 +37,30 @@ _SHELL_TOOL = "execute"
 _NETWORK_TOOLS = frozenset({"web_fetch", "web_search"})
 
 
+def _augment_with_whitelist_note(result, note: str):
+    """Return ``result`` with the whitelist note appended.
+
+    Handles three result shapes the execute tool can return:
+      - str (plain string): return a new string with the note appended.
+      - ToolMessage (deepagents wraps results): mutate .content in-place and return.
+      - ExecuteResponse (deepagents backends): mutate .output in-place and return.
+
+    Returns the (possibly mutated) result so the caller can return it directly.
+    """
+    content = getattr(result, "content", None)
+    if content is not None and isinstance(content, str):
+        result.content = f"{content}\n[whitelist] {note}"
+        return result
+    output = getattr(result, "output", None)
+    if output is not None and isinstance(output, str):
+        result.output = f"{output}\n[whitelist] {note}"
+        return result
+    if isinstance(result, str):
+        return f"{result}\n[whitelist] {note}"
+    # Unknown type — return unchanged (best-effort; note is informational).
+    return result
+
+
 class CommandReviewMiddleware(AgentMiddleware):
     """Inspects shell commands and network calls against a CommandPolicy.
 
@@ -79,18 +103,32 @@ class CommandReviewMiddleware(AgentMiddleware):
                     name=name,
                 )
             # Layer 2: whitelist (soft — degrade based on gate mode, not hard block).
+            # Unlike the blacklist (which hard-blocks), a whitelist miss is enforced
+            # by the gate's tier semantics:
+            #   - PLAN mode: execute is already blocked by PermissionMiddleware, so
+            #     we won't reach here in production. But if we do (e.g. gate=None),
+            #     we hard-block to stay safe.
+            #   - FULL mode: explicit trust — allow without annotation.
+            #   - CONFIRM/AUTO_EDIT: let the tool run (PermissionMiddleware already
+            #     prompted the user), but APPEND the whitelist hint to the result so
+            #     the model/user sees WHY the command was flagged.
             whitelist_miss = self.policy.check_whitelist(command)
-            if whitelist_miss and self.gate is not None:
-                mode = getattr(self.gate, "mode", "confirm")
-                if mode == "full":
-                    # FULL = explicit trust; let it through, but the result will
-                    # carry the whitelist hint (handled via augmentation below
-                    # is complex; for now FULL just allows).
-                    pass
-                # For non-FULL modes: the command will still execute (PermissionMiddleware
-                # already gated it), but we surface the whitelist note in the result.
-                # We can't augment a ToolMessage before the tool runs, so we let it
-                # proceed — the hint is informational, enforcement is the gate's job.
+            if whitelist_miss:
+                mode = getattr(self.gate, "mode", "confirm") if self.gate is not None else "confirm"
+                if mode == "plan":
+                    return ToolMessage(
+                        content=f"Blocked by whitelist policy (plan mode): {whitelist_miss}",
+                        tool_call_id=tool_call_id,
+                        name=name,
+                    )
+                if mode != "full":
+                    # Non-FULL, non-PLAN: annotate the result. Let the tool execute
+                    # (the user was already prompted by PermissionMiddleware), but
+                    # surface the whitelist note in the result content so the model
+                    # understands the command was outside the trusted set.
+                    result = handler(request)
+                    return _augment_with_whitelist_note(result, whitelist_miss)
+                # FULL mode: fall through to the normal handler(request) below.
         elif name in _NETWORK_TOOLS and not self.policy.network_allowed:
             return ToolMessage(
                 content="Blocked: network access is disabled (network_allowed=false "

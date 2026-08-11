@@ -176,17 +176,23 @@ coderio 对 shell 命令（`execute` 工具）有多层安全防线，从轻到�
 - **`off`**（默认）：不开 OS 沙箱，只用黑名单+白名单。现有行为，不影响兼容性。
 - **`job`**：Windows Job Object / POSIX 进程组 + 资源限制（进程数上限防 fork bomb）+ 可靠进程树杀（修复 `subprocess.run` timeout 杀不干净孙进程导致 TUI 挂起的老问题）。无文件隔离，但解决资源滥用。
 - **`write`**：文件写隔离。
-  - **Windows**：`CreateRestrictedToken(WRITE_RESTRICTED)`——OpenAI Codex 验证过的路径，纯 ctypes 无需 admin。进程可读全系统，写操作受 token ACL 约束。（v1：token 原语已就绪，完整目录 ACL 应用是后续工作）
-  - **Linux**：`bubblewrap`（`bwrap`）——Claude Code Linux 版同款。根目录只读挂载，workspace 读写挂载，`network_allowed=false` 时 `--unshare-net` 断网。需要 `apt install bubblewrap`。
+  - **Linux**：✅ **真隔离**——`bubblewrap`（`bwrap`），Claude Code Linux 版同款。根目录只读挂载，workspace 读写挂载，`network_allowed=false` 时 `--unshare-net` 断网。需要 `apt install bubblewrap`。
+  - **Windows**：⚠️ **当前等价于 `job` 档**。代码里有 `CreateRestrictedToken` + `CreateProcessAsUserW` 的完整管道，但在非 admin 用户上 token 是空操作（实测：原 token 与 restricted token 都是 Medium 完整性，写权限完全相同）。要实现真隔离需要 per-directory ACL（~500 行），是后续工作。**Windows 用户目前没有 OS 级写隔离**——用 `job` 档即可，`write` 档不会提供额外保护。
 
 ```toml
-# 推荐：开发时用 job（防 fork bomb + 可靠清理），跑不可信代码时用 write
+# 推荐：开发时用 job（防 fork bomb + 可靠清理）
+# Linux 用户如果需要真隔离：sandbox_mode = "write"（需装 bubblewrap）
 sandbox_mode = "job"
 whitelist_mode = true
 allowed_commands = ["docker", "kubectl"]  # 白名单外的命令会触发 confirm
 ```
 
-**安全模型诚实声明**：`job` 档是资源限制 + 进程控制，不是权限沙箱。`write` 档的 Windows 路径在 v1 创建了 Restricted Token 但尚未通过 `CreateProcessAsUserW` 应用到子进程（Job Object + 资源限制已生效）。Linux 的 bubblewrap 路径是完整的命名空间隔离（开箱即用）。对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker）。
+**安全模型诚实声明**：
+- `job` 档：资源限制 + 进程控制，不是权限沙箱。
+- `write` 档 Linux：bubblewrap 提供完整的命名空间隔离（开箱即用）。
+- `write` 档 Windows：**当前无实际隔离效果**（token 空操作），与 `job` 等价。真隔离待 ACL 实现。
+- 白名单降级：CONFIRM/AUTO_EDIT 模式下白名单外的命令**会执行但 result 里会带 `[whitelist]` 标注**（让模型/用户知道该命令不在受信集合里）；PLAN 模式硬拒；FULL 模式放行不标注。
+- 对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker），不依赖本沙箱。
 
 支持的 provider：
 | provider_id | 说明 | 协议 |

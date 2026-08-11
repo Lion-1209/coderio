@@ -157,41 +157,26 @@ def test_run_sandboxed_truncates_large_output():
     assert "truncated" in output.lower(), f"output should be truncated, got {len(output)} bytes"
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
-def test_run_sandboxed_denies_system_dir_write(tmp_path):
-    """REGRESSION GUARD: the sandboxed process must NOT be able to write to
-    C:\\Windows\\. This is the core isolation promise — if this test fails,
-    the restricted token isn't being applied (regression to the v1 state where
-    the token was created but discarded).
-
-    Uses LUA_TOKEN (reduced integrity) by default. The child process inherits
-    read access to system directories (a coding agent needs to read libraries)
-    but write attempts fail with EACCES at the OS level.
-    """
-    # Attempt to write to C:\\Windows\\ — must fail (non-zero exit).
-    code, output = win_sandbox.run_sandboxed(
-        "echo test > C:\\Windows\\coderio-sandbox-deny-test.txt",
-        cwd=str(tmp_path),
-        timeout=10,
-    )
-    assert code != 0, (
-        f"sandboxed process must NOT write to C:\\Windows — got exit 0, "
-        f"output: {output!r}. The restricted token may not be applied."
-    )
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
-def test_run_sandboxed_allows_workspace_write(tmp_path):
-    """The sandboxed process CAN write to its workspace (cwd) — otherwise the
-    sandbox would be useless for a coding agent. This complements the
-    deny-system-dir test above: read-broad, write-narrow."""
-    code, output = win_sandbox.run_sandboxed(
-        f"echo ok > {tmp_path}\\sandbox-allow-test.txt",
-        cwd=str(tmp_path),
-        timeout=10,
-    )
-    assert code == 0, f"workspace write must succeed, got {code}: {output}"
-    assert (tmp_path / "sandbox-allow-test.txt").is_file(), "file should exist after write"
+# NOTE on the absence of write-isolation tests:
+#
+# Before this cleanup, there were two tests (test_run_sandboxed_denies_system_dir_write
+# and test_run_sandboxed_allows_workspace_write) claiming to verify OS-level write
+# isolation. They were INVALID: the deny test wrote to C:\Windows, which a normal
+# user can't write to REGARDLESS of sandbox, so it passed even with no sandbox at all.
+#
+# Writing a valid isolation test requires a path where:
+#   (a) the user normally HAS write permission, AND
+#   (b) the sandbox DENIES that write.
+#
+# On Windows with the current LUA_TOKEN implementation, no such path exists —
+# CreateRestrictedToken with no SID lists returns an equivalent token (verified:
+# original and restricted tokens both have Medium integrity 0x2000). The Windows
+# write-isolation feature is therefore currently a no-op; a valid test cannot be
+# written until real per-directory ACLs (SetEntriesInAcl + SetSecurityInfo) are
+# added. See win_sandbox.py docstring for the honest status.
+#
+# Do NOT re-add a C:\Windows write test claiming to verify isolation — it proves
+# nothing (the user already lacks permission there).
 
 
 # ----------------------------------------------------- deep_loop integration

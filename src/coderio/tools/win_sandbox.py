@@ -1,42 +1,47 @@
-"""Windows sandbox foundation: Restricted Token + Job Object integration.
+"""Windows sandbox: Job Object resource limits + Restricted Token plumbing.
 
-This module is the OS-level security boundary that regex blacklists (command_policy.py)
-and whitelists cannot provide: even a model that obfuscates ``rm -rf /`` through
-base64 or variable expansion faces OS-level permission denial here.
+HONEST STATUS (verified by independent audit, 2026-08-11):
 
-Inspired by OpenAI Codex's Windows sandbox (CreateRestrictedToken + WRITE_RESTRICTED),
-adapted to coderio's constraints:
-  - No admin rights required (CreateRestrictedToken works on the current
-    process's own token — a non-admin operation).
-  - Pure ctypes, no pywin32 dependency.
-  - Graceful degradation: any Win32 API failure falls back to plain subprocess
-    (log a warning, never block the agent).
+This module provides TWO layers, with very different maturity:
 
-Current status (v1 — foundation):
-  - ``create_write_restricted_token()``: creates a WRITE_RESTRICTED filtered
-    token via ``CreateRestrictedToken``. This is the Codex-validated primitive.
-  - ``run_sandboxed()``: runs a command with Job Object process-tree control
-    (via win_job.py) + resource limits. The token is created but NOT YET
-    applied to the child process (needs ``CreateProcessAsUserW`` — tracked as
-    follow-up). v1 focuses on the Job Object foundation.
+1. **Job Object resource limits** — ✅ WORKS. Child processes run in a Job
+   Object with KILL_ON_JOB_CLOSE (reliable cleanup) and a process-count cap
+   (prevents fork bombs). This is real and tested.
 
-What v1 isolates:
-  - **Process tree**: child + descendants are in a Job Object (reliable kill,
-    resource caps via win_job.create_job_with_limits).
-  - **Resource limits**: memory + process-count caps prevent fork bombs / OOM.
+2. **Restricted Token write isolation** — ⚠️ PLUMBED BUT NOT EFFECTIVE.
+   ``create_restricted_token`` calls ``CreateRestrictedToken`` with the
+   LUA_TOKEN flag and ``run_sandboxed`` applies the token to the child via
+   ``CreateProcessAsUserW`` (the plumbing is real — the token IS used to
+   launch the process). HOWEVER, the token is currently a NO-OP:
 
-What v1 does NOT yet isolate (follow-up work):
-  - **File writes**: the token exists but isn't applied to the subprocess.
-    Full write-isolation needs ``CreateProcessAsUserW`` + per-directory ACLs
-    (grant workspace write, deny elsewhere). The token primitive is here,
-    the application layer is not.
-  - **Network**: needs WFP (too heavy). Use ``network_allowed=False``.
+   On a non-admin user (the common case), the process is already running at
+   Medium integrity. ``CreateRestrictedToken(LUA_TOKEN)`` with no disable/
+   remove/restrict SID lists returns an equivalent token. Verified by
+   ``GetTokenInformation``: original and restricted tokens both report
+   integrity level 0x2000 (Medium) — identical privileges. The sandboxed
+   child has the SAME filesystem write permissions as an unsandboxed child.
 
-Security model honesty: v1 is "Job Object with resource limits + a prepared
-token we haven't wired yet." It's stronger than plain subprocess (reliable
-cleanup + resource caps) but NOT yet the OS-level write isolation the docstring
-above aspires to. The aspiration is documented so the gap is visible and the
-follow-up work is obvious.
+   To make the token actually restrict writes, ONE of these is needed (none
+   are currently implemented):
+     (a) Pass a Low IntegrityLevel SID to ``SetTokenInformation`` — but then
+         the child can't write ANYTHING (including the workspace), which
+         breaks a coding agent. Would need per-directory ACL grants.
+     (b) Pass restricting SIDs to ``CreateRestrictedToken`` + per-directory
+         ACLs (SetEntriesInAcl + SetSecurityInfo) — grant workspace write,
+         deny elsewhere. This is the OpenAI Codex approach but needs ~500
+         lines of ACL code.
+     (c) Drop privileges via DISABLE_MAX_PRIVILEGE — removes admin-style
+         privileges but doesn't restrict file writes (ACL controls those).
+
+   Until one of these is implemented, ``sandbox_mode = "write"`` on Windows
+   provides the SAME isolation as ``sandbox_mode = "job"`` (resource limits
+   only). The Restricted Token machinery is kept here as plumbing for the
+   eventual ACL work, not as a functional isolation layer.
+
+WHAT ACTUALLY ISOLATES WRITES ON WINDOWS TODAY: nothing in this module. Use
+the command blacklist (command_policy.py) for accidental-damage prevention,
+or run on Linux with bubblewrap (linux_sandbox.py) for true OS-level
+write isolation. For fully untrusted code, use a VM.
 """
 
 from __future__ import annotations
