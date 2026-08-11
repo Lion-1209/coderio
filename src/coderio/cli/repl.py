@@ -29,8 +29,8 @@ class TuiPermissionGate(PermissionGate):
     which would deadlock against Textual's terminal takeover.
     """
 
-    def __init__(self, mode, tui):
-        super().__init__(mode)
+    def __init__(self, mode, tui, auto_allow_execute: bool = False):
+        super().__init__(mode, auto_allow_execute=auto_allow_execute)
         self._tui = tui
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
@@ -50,24 +50,34 @@ def build_gate(cfg: Config, console=None, tui=None):
 
     Path isolation is handled by deepagents' backend virtual_mode, not by
     this gate. This gate only controls WHICH tool types may execute.
+
+    Sandbox联动 (Claude Code "autoAllowBashIfSandboxed" design): when
+    sandbox_mode != "off" AND cfg.tools.auto_allow_if_sandboxed is True, the
+    execute tool auto-approves without prompting (the sandbox provides the real
+    isolation boundary, so per-command prompts become noise). The blacklist
+    still applies via CommandReviewMiddleware. PLAN mode is unaffected.
     """
     mode = PermissionMode.normalize(cfg.tools.permission_mode)
+    # auto_allow_execute is meaningful only when a sandbox is active + the
+    # user opted in. FULL mode already allows everything; PLAN stays read-only.
+    sandbox_active = cfg.tools.sandbox_mode != "off"
+    auto_exec = sandbox_active and cfg.tools.auto_allow_if_sandboxed
     if mode == PermissionMode.FULL:
         return AutoPermissionGate()
     if mode == PermissionMode.PLAN:
         return PermissionGate(PermissionMode.PLAN)
     if tui is not None:
-        return TuiPermissionGate(mode, tui=tui)
+        return TuiPermissionGate(mode, tui=tui, auto_allow_execute=auto_exec)
     if mode == PermissionMode.AUTO_EDIT:
-        return _ReplAutoEditGate(console=console)
-    return RichPromptPermissionGate(console=console)
+        return _ReplAutoEditGate(console=console, auto_allow_execute=auto_exec)
+    return RichPromptPermissionGate(console=console, auto_allow_execute=auto_exec)
 
 
 class _ReplAutoEditGate(PermissionGate):
     """AUTO_EDIT gate for the non-TUI REPL (uses input() for high-risk tools)."""
 
-    def __init__(self, console=None):
-        super().__init__(PermissionMode.AUTO_EDIT)
+    def __init__(self, console=None, auto_allow_execute: bool = False):
+        super().__init__(PermissionMode.AUTO_EDIT, auto_allow_execute=auto_allow_execute)
         self._console = console
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool:

@@ -11,6 +11,7 @@ from coderio.config.models import (
     ContextConfig,
     ModelConfig,
     Profile,
+    SandboxFsConfig,
     SessionConfig,
     SkillsConfig,
     ToolsConfig,
@@ -110,6 +111,36 @@ def _resolve_active_profile(data: dict) -> str:
     return ""
 
 
+def _read_fs_list(data: dict, key: str, default: list[str]) -> list[str]:
+    """Read a list-of-strings field from a config subtable (inline copy of
+    _from_dict._str_list, which is a closure-local helper and not visible here).
+
+    Returns the default on missing/malformed values — a bad config shouldn't
+    block startup.
+    """
+    v = data.get(key, default)
+    if isinstance(v, list) and all(isinstance(x, str) for x in v):
+        return v
+    return default
+
+
+def _read_sandbox_fs(data, default: SandboxFsConfig | None) -> SandboxFsConfig | None:
+    """Read the [tools.sandbox_filesystem] subtable into a SandboxFsConfig.
+
+    Returns the `default` unchanged when the subtable is empty/missing, so
+    users who don't configure filesystem isolation get None (bubblewrap uses
+    its built-in workspace-only layout).
+    """
+    if not isinstance(data, dict) or not data:
+        return default
+    return SandboxFsConfig(
+        allow_write=_read_fs_list(data, "allow_write", default.allow_write if default else []),
+        deny_write=_read_fs_list(data, "deny_write", default.deny_write if default else []),
+        deny_read=_read_fs_list(data, "deny_read", default.deny_read if default else []),
+        allow_read=_read_fs_list(data, "allow_read", default.allow_read if default else []),
+    )
+
+
 def _from_dict(data: dict) -> Config:
     cfg = Config()
     m = data.get("model", {})
@@ -175,6 +206,8 @@ def _from_dict(data: dict) -> Config:
             whitelist_mode=_bool(t, "whitelist_mode", cfg.tools.whitelist_mode),
             allowed_commands=_str_list(t, "allowed_commands", cfg.tools.allowed_commands),
             sandbox_mode=t.get("sandbox_mode", cfg.tools.sandbox_mode),
+            auto_allow_if_sandboxed=_bool(t, "auto_allow_if_sandboxed", cfg.tools.auto_allow_if_sandboxed),
+            sandbox_fs=_read_sandbox_fs(t.get("sandbox_filesystem", {}), cfg.tools.sandbox_fs),
         ),
         skills=SkillsConfig(
             auto_load=s.get("auto_load", cfg.skills.auto_load),

@@ -34,6 +34,8 @@ def run_with_sandbox(
     timeout: int = 120,
     env: dict | None = None,
     max_output_bytes: int = 100_000,
+    network_allowed: bool = True,
+    fs_config=None,
 ) -> tuple[int, str]:
     """Run a command with the requested sandbox mode.
 
@@ -44,6 +46,14 @@ def run_with_sandbox(
     The caller (shell backend's execute) passes mode through from config. If
     the sandbox isn't available on this platform (e.g. "write" on a Linux
     without bubblewrap), we log + fall back to subprocess — never block work.
+
+    Args:
+        network_allowed: forwarded to bubblewrap as ``--unshare-net`` when
+            False. REGRESSION GUARD: this was previously not forwarded (the
+            ``run_bwrap`` call omitted it), so ``network_allowed=false`` had
+            zero effect on Linux sandbox mode — a silent security gap.
+        fs_config: optional SandboxFsConfig for filesystem allow/deny lists
+            (bubblewrap only; Windows ignores it — token is a no-op there).
     """
     if mode == "off":
         # Shouldn't reach here (caller checks mode before calling), but handle
@@ -53,6 +63,7 @@ def run_with_sandbox(
     if sys.platform == "win32":
         from coderio.tools.win_sandbox import run_sandboxed
 
+        # Windows: fs_config not yet applied (token is no-op; ACL is TODO).
         return run_sandboxed(command, cwd, timeout=timeout, env=env, max_output_bytes=max_output_bytes)
 
     # POSIX: try bubblewrap (linux_sandbox module) for "write" mode; for "job"
@@ -64,7 +75,15 @@ def run_with_sandbox(
             from coderio.tools.linux_sandbox import bwrap_available, run_bwrap
 
             if bwrap_available():
-                return run_bwrap(command, cwd, timeout=timeout, env=env, max_output_bytes=max_output_bytes)
+                return run_bwrap(
+                    command,
+                    cwd,
+                    timeout=timeout,
+                    env=env,
+                    max_output_bytes=max_output_bytes,
+                    network_allowed=network_allowed,
+                    fs_config=fs_config,
+                )
             _log.warning("sandbox_mode=write but bubblewrap not installed — falling back to plain run")
         except ImportError:
             _log.warning("linux_sandbox not available — falling back to plain run")

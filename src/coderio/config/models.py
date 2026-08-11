@@ -77,6 +77,40 @@ class ToolsConfig:
     #              (reads system-wide, writes gated — needs Win10+, no admin)
     # On Linux, "write" uses bubblewrap if available (see linux_sandbox.py).
     sandbox_mode: str = "off"
+    # When True + sandbox_mode != "off", the execute (shell) tool auto-approves
+    # without a confirmation prompt (Claude Code's "autoAllowBashIfSandboxed"
+    # design: the sandbox provides the real isolation boundary, so per-command
+    # prompts become noise). Defaults False (backward compat). The blacklist
+    # still applies — rm -rf / is blocked even in auto-allow mode.
+    auto_allow_if_sandboxed: bool = False
+    # Filesystem isolation 4-tuple for the sandbox (Linux bubblewrap only;
+    # Windows ignores it — token is no-op). See SandboxFsConfig.
+    sandbox_fs: "SandboxFsConfig | None" = None
+
+
+@dataclass
+class SandboxFsConfig:
+    """Filesystem isolation config for the sandbox (Claude-Code-compatible 4-tuple).
+
+    Applied on Linux via bubblewrap mounts. Windows ignores these (the token
+    is currently a no-op — see win_sandbox.py docstring). All paths support:
+      - ``~/foo``  → home-relative
+      - ``./foo``  → workspace-relative
+      - ``foo``    → workspace-relative (same as ./)
+      - ``/abs``   → absolute
+
+    Semantics (bwrap mount order matters — later mounts override earlier):
+      - workspace is ALWAYS read-write (built-in, no need to list it)
+      - ``allow_write``  → extra read-write mounts (e.g. /tmp/build, ~/.cache)
+      - ``deny_write``   → read-only override (e.g. .git/hooks inside workspace)
+      - ``deny_read``    → tmpfs blackhole (path exists but contents invisible)
+      - ``allow_read``   → read-only re-mount punching through a deny_read
+    """
+
+    allow_write: list[str] = field(default_factory=list)
+    deny_write: list[str] = field(default_factory=list)
+    deny_read: list[str] = field(default_factory=list)
+    allow_read: list[str] = field(default_factory=list)
 
 
 @dataclass

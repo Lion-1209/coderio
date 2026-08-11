@@ -87,6 +87,92 @@ def test_build_bwrap_args_resolves_relative_workspace(tmp_path):
     assert abs_ws in args
 
 
+# --- filesystem 4-tuple (Gap 3, Claude-Code-compatible) ---
+
+
+def _make_fs_config(**kwargs):
+    """Build a minimal SandboxFsConfig-like stub for testing."""
+    from types import SimpleNamespace
+
+    defaults = {"allow_write": [], "deny_write": [], "deny_read": [], "allow_read": []}
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def test_build_bwrap_args_with_allow_write():
+    """fs_config.allow_write adds extra --bind (read-write) mounts."""
+    cfg = _make_fs_config(allow_write=["/tmp/build", "~/.cache"])
+    args = linux_sandbox.build_bwrap_args("ls", "/workspace", fs_config=cfg)
+    # Each allow_write entry becomes a --bind src src pair.
+    assert "--bind" in args
+    # /tmp/build is absolute → passed as-is.
+    idx = args.index("--bind")  # first --bind is workspace; allow_write comes after
+    # Find the /tmp/build entry specifically.
+    assert "/tmp/build" in args, "allow_write /tmp/build must appear in args"
+
+
+def test_build_bwrap_args_with_deny_read():
+    """fs_config.deny_read adds --tmpfs blackholes (path exists but empty)."""
+    cfg = _make_fs_config(deny_read=["~/.ssh"])
+    args = linux_sandbox.build_bwrap_args("ls", "/workspace", fs_config=cfg)
+    assert "--tmpfs" in args
+    # The expanded ~/.ssh path should appear (home-resolved).
+    from pathlib import Path
+
+    ssh_path = str(Path.home() / ".ssh")
+    assert ssh_path in args, f"deny_read ~/.ssh must resolve to {ssh_path}"
+
+
+def test_build_bwrap_args_deny_read_before_allow_read():
+    """Order matters: deny_read tmpfs must come BEFORE allow_read ro-bind.
+
+    bwrap applies later mounts on top of earlier ones, so the allow_read
+    "hole punch" only works if it's mounted after the deny_read blackhole.
+    """
+    cfg = _make_fs_config(deny_read=["~/.ssh"], allow_read=["~/.ssh/known_hosts"])
+    args = linux_sandbox.build_bwrap_args("ls", "/workspace", fs_config=cfg)
+    from pathlib import Path
+
+    ssh_path = str(Path.home() / ".ssh")
+    known_hosts = str(Path.home() / ".ssh" / "known_hosts")
+    # Find positions of the tmpfs (deny) and ro-bind target (allow).
+    # The tmpfs arg is at position of "--tmpfs" + 1 (the path).
+    deny_pos = args.index(ssh_path) if ssh_path in args else -1
+    allow_pos = args.index(known_hosts) if known_hosts in args else -1
+    assert deny_pos >= 0 and allow_pos >= 0, "both deny_read and allow_read paths must appear"
+    assert deny_pos < allow_pos, (
+        f"deny_read tmpfs (pos {deny_pos}) must come BEFORE allow_read ro-bind (pos {allow_pos}) "
+        "— bwrap mounts later args on top of earlier ones"
+    )
+
+
+def test_resolve_fs_path_tilde_expansion():
+    """~/.foo expands to home/.foo."""
+    from pathlib import Path
+
+    result = linux_sandbox._resolve_fs_path("~/.ssh", "/ws", Path.home())
+    assert result == str((Path.home() / ".ssh").resolve())
+
+
+def test_resolve_fs_path_relative_to_workspace():
+    """./foo and bare 'foo' resolve to workspace/foo."""
+    from pathlib import Path
+
+    result1 = linux_sandbox._resolve_fs_path("./build", "/ws", Path.home())
+    result2 = linux_sandbox._resolve_fs_path("build", "/ws", Path.home())
+    expected = str((Path("/ws") / "build").resolve())
+    assert result1 == expected
+    assert result2 == expected
+
+
+def test_resolve_fs_path_absolute_unchanged():
+    """/abs/path passes through unchanged."""
+    from pathlib import Path
+
+    result = linux_sandbox._resolve_fs_path("/tmp/build", "/ws", Path.home())
+    assert result == "/tmp/build"
+
+
 # ----------------------------------------------------- sandbox_runner fallback
 
 
@@ -95,6 +181,64 @@ def test_run_with_sandbox_off_returns_minus_one():
     code, msg = sandbox_runner.run_with_sandbox("ls", ".", mode="off")
     assert code == -1
     assert "off" in msg
+
+
+def test_run_with_sandbox_forwards_network_allowed_to_bwrap():
+    """REGRESSION GUARD (Gap 1): run_with_sandbox MUST forward network_allowed
+    to run_bwrap. Previously this parameter was omitted at the call site
+    (sandbox_runner.py:67), so network_allowed=false had ZERO effect on Linux
+    sandbox mode — --unshare-net was never added. This test mocks run_bwrap
+    to verify the parameter actually reaches it.
+    """
+    import sys
+    from unittest.mock import patch
+
+    if sys.platform == "win32":
+        pytest.skip("bubblewrap forwarding test is POSIX-only")
+
+    # Patch run_bwrap to capture its kwargs (don't actually run bwrap).
+    captured: dict = {}
+
+    def _fake_run_bwrap(command, cwd, **kwargs):
+        captured.update(kwargs)
+        return (0, "ok")
+
+    # Patch bwrap_available to True so the bwrap path is taken.
+    with patch.object(sandbox_runner.sys, "platform", "linux"):
+        with patch("coderio.tools.linux_sandbox.bwrap_available", return_value=True):
+            with patch("coderio.tools.linux_sandbox.run_bwrap", side_effect=_fake_run_bwrap):
+                sandbox_runner.run_with_sandbox("echo test", ".", mode="write", network_allowed=False)
+
+    assert "network_allowed" in captured, "run_with_sandbox must forward network_allowed"
+    assert captured["network_allowed"] is False, (
+        "network_allowed=False must reach run_bwrap (was silently dropped before Gap 1 fix)"
+    )
+
+
+def test_run_with_sandbox_forwards_fs_config_to_bwrap():
+    """REGRESSION GUARD (Gap 3): fs_config must be forwarded to run_bwrap so
+    the filesystem 4-tuple (allow_write/deny_read/etc.) actually takes effect
+    inside the sandbox."""
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    if sys.platform == "win32":
+        pytest.skip("bubblewrap forwarding test is POSIX-only")
+
+    fs_cfg = SimpleNamespace(allow_write=["/tmp/build"], deny_read=["~/.ssh"], deny_write=[], allow_read=[])
+    captured: dict = {}
+
+    def _fake_run_bwrap(command, cwd, **kwargs):
+        captured.update(kwargs)
+        return (0, "ok")
+
+    with patch.object(sandbox_runner.sys, "platform", "linux"):
+        with patch("coderio.tools.linux_sandbox.bwrap_available", return_value=True):
+            with patch("coderio.tools.linux_sandbox.run_bwrap", side_effect=_fake_run_bwrap):
+                sandbox_runner.run_with_sandbox("echo test", ".", mode="write", fs_config=fs_cfg)
+
+    assert captured.get("fs_config") is fs_cfg, "fs_config must be forwarded to run_bwrap"
 
 
 def test_run_with_sandbox_degrades_gracefully_on_failure():

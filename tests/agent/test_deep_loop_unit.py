@@ -390,3 +390,55 @@ def test_win_shell_backend_truncates_oversized_output(tmp_path):
     assert "truncated" in output.lower() or "..." in output, (
         f"output should be truncated, got {len(output)} bytes: {output[:100]!r}..."
     )
+
+
+def test_win_shell_backend_nonexistent_workspace_clear_error(tmp_path):
+    """REGRESSION GUARD: when workspace_root points to a non-existent directory,
+    the sandbox path must return a CLEAR error (exit=1 + actionable message),
+    not a cryptic 'CreateProcessAsUserW failed (err=0)'.
+
+    Context (found during E2E testing 2026-08-11): before this check, a typo in
+    [tools].workspace_root caused CreateProcessAsUserW to fail with err=0
+    (misleading — real cause is ERROR_PATH_NOT_FOUND), and the error surface
+    was 'CreateProcessAsUserW failed — cannot launch sandboxed child' which
+    neither the model nor the user could diagnose. Now we pre-check and return
+    an actionable message naming the bad path + how to fix it.
+    """
+    import pytest
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import _WinLocalShellBackend
+
+    # A path that definitely doesn't exist.
+    bad_ws = str(tmp_path / "never-created-xyz")
+    backend = _WinLocalShellBackend(root_dir=bad_ws, virtual_mode=True, inherit_env=True, sandbox_mode="job")
+    result = backend.execute("echo test")
+    ec = getattr(result, "exit_code", None)
+    out = getattr(result, "output", "") or ""
+
+    assert ec == 1, f"nonexistent workspace should return exit=1, got {ec}"
+    assert "non-existent" in out.lower() or "does not exist" in out.lower(), (
+        f"error should clearly say the directory doesn't exist, got: {out!r}"
+    )
+    assert bad_ws in out, "error should name the bad path so the user can fix it"
+    assert "workspace_root" in out, "error should tell the user which config to fix"
+
+
+def test_win_shell_backend_existing_workspace_runs_normally(tmp_path):
+    """A real existing workspace must still execute normally (the existence
+    check must not false-positive on valid paths)."""
+    import pytest
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import _WinLocalShellBackend
+
+    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="job")
+    result = backend.execute("echo workspace-ok")
+    out = getattr(result, "output", "") or ""
+    assert "workspace-ok" in out, f"existing workspace should run normally, got: {out!r}"

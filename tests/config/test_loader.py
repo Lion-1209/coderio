@@ -318,3 +318,66 @@ def test_malformed_profile_entries_skipped(tmp_path):
     cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
     assert len(cfg.profiles) == 1
     assert cfg.profiles[0].name == "good"
+
+
+def test_load_sandbox_fs_config(tmp_path):
+    """[tools.sandbox_filesystem] subtable is parsed into SandboxFsConfig.
+
+    REGRESSION GUARD: the first implementation of _read_sandbox_fs called a
+    closure-local _str_list helper that wasn't visible at module scope,
+    causing NameError when a user actually configured the subtable. The empty-
+    subtable path returned early and hid the bug. This test exercises the
+    non-empty path so the NameError (or any future regression) is caught.
+    """
+    proj = tmp_path / "proj"
+    write(
+        proj / ".coderio" / "config.toml",
+        """
+        [tools]
+        sandbox_mode = "write"
+
+        [tools.sandbox_filesystem]
+        allow_write = ["/tmp/build", "~/.cache"]
+        deny_read = ["~/.ssh", "~/.aws/credentials"]
+        allow_read = ["~/.ssh/known_hosts"]
+        deny_write = [".git/hooks"]
+        """,
+    )
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.tools.sandbox_mode == "write"
+    fs = cfg.tools.sandbox_fs
+    assert fs is not None, "non-empty [tools.sandbox_filesystem] must produce a config"
+    assert fs.allow_write == ["/tmp/build", "~/.cache"]
+    assert fs.deny_read == ["~/.ssh", "~/.aws/credentials"]
+    assert fs.allow_read == ["~/.ssh/known_hosts"]
+    assert fs.deny_write == [".git/hooks"]
+
+
+def test_load_sandbox_fs_empty_returns_none(tmp_path):
+    """No [tools.sandbox_filesystem] section → sandbox_fs is None (bubblewrap
+    uses its built-in workspace-only layout)."""
+    proj = tmp_path / "proj"
+    write(
+        proj / ".coderio" / "config.toml",
+        """
+        [tools]
+        sandbox_mode = "write"
+        """,
+    )
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.tools.sandbox_fs is None
+
+
+def test_load_auto_allow_if_sandboxed(tmp_path):
+    """The auto_allow_if_sandboxed flag is read from [tools]."""
+    proj = tmp_path / "proj"
+    write(
+        proj / ".coderio" / "config.toml",
+        """
+        [tools]
+        sandbox_mode = "write"
+        auto_allow_if_sandboxed = true
+        """,
+    )
+    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
+    assert cfg.tools.auto_allow_if_sandboxed is True

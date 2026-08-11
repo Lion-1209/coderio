@@ -49,10 +49,11 @@ def build_bwrap_args(
     workspace: str,
     *,
     network_allowed: bool = True,
+    fs_config=None,
 ) -> list[str]:
     """Build the bwrap argument list for a write-restricted sandbox.
 
-    Mount layout:
+    Mount layout (default, no fs_config):
       - ``/`` read-only (system libraries readable, no writes).
       - ``workspace`` read-write (the only writable path).
       - ``/dev``, ``/proc`` mounted (many tools need them; /dev is read-only).
@@ -60,6 +61,13 @@ def build_bwrap_args(
 
     Network: if ``network_allowed=False``, ``--unshare-net`` puts the process
     in its own network namespace with only loopback — no external connectivity.
+
+    Filesystem config (Claude-Code-compatible four-tuple, when fs_config given):
+      - ``allow_write``: extra read-write mounts beyond workspace.
+      - ``deny_write``: read-only overrides (workspace subpaths forced read-only).
+      - ``deny_read``: tmpfs blackholes (path exists but contents invisible).
+      - ``allow_read``: read-only re-mounts that punch through a deny_read.
+    Paths support ``~`` (home) and ``./`` (workspace-relative) prefixes.
     """
     # Resolve workspace to an absolute path (bwrap requires it).
     ws = str(Path(workspace).resolve())
@@ -81,11 +89,54 @@ def build_bwrap_args(
     ]
     if not network_allowed:
         args.append("--unshare-net")
+    # Filesystem four-tuple (Gap 3). Each path is expanded and appended in
+    # order; bwrap applies later mounts on top of earlier ones, so deny_read's
+    # tmpfs must come before allow_read's ro-bind to "punch a hole".
+    if fs_config is not None:
+        from pathlib import Path as _Path
+
+        home = _Path.home()
+        # allow_write: extra read-write mounts (e.g. /tmp/build, ~/.cache).
+        for p in getattr(fs_config, "allow_write", []) or []:
+            resolved = _resolve_fs_path(p, ws, home)
+            args += ["--bind", resolved, resolved]
+        # deny_write: read-only overrides (force a path read-only even if it
+        # would otherwise be writable, e.g. .git/hooks inside workspace).
+        for p in getattr(fs_config, "deny_write", []) or []:
+            resolved = _resolve_fs_path(p, ws, home)
+            args += ["--ro-bind", resolved, resolved]
+        # deny_read: tmpfs blackholes (path exists but is empty — hides the
+        # real contents, e.g. ~/.ssh appears as an empty dir).
+        for p in getattr(fs_config, "deny_read", []) or []:
+            resolved = _resolve_fs_path(p, ws, home)
+            args += ["--tmpfs", resolved]
+        # allow_read: read-only re-mounts that punch through a deny_read
+        # blackhole. MUST come after the deny_read tmpfs to take effect.
+        for p in getattr(fs_config, "allow_read", []) or []:
+            resolved = _resolve_fs_path(p, ws, home)
+            args += ["--ro-bind", resolved, resolved]
     # Die if the child can't set up the namespace (don't silently run unsandboxed).
     args.append("--die-with-parent")
     # Finally, the command to run inside the sandbox.
     args += ["--", "sh", "-c", command]
     return args
+
+
+def _resolve_fs_path(path: str, workspace: str, home) -> str:
+    """Expand ~ and relative paths in a filesystem config entry.
+
+    - ``~/foo`` → ``{home}/foo``
+    - ``./foo`` or ``foo`` → ``{workspace}/foo`` (project-relative)
+    - ``/abs/path`` → unchanged
+    """
+    if path.startswith("~"):
+        return str((home / path[2:]).resolve()) if path.startswith("~/") else str(home.resolve())
+    if path.startswith("./"):
+        return str((Path(workspace) / path[2:]).resolve())
+    if not path.startswith("/"):
+        # Bare relative path → workspace-relative (same as ./).
+        return str((Path(workspace) / path).resolve())
+    return path
 
 
 def run_bwrap(
@@ -96,16 +147,24 @@ def run_bwrap(
     env: dict | None = None,
     max_output_bytes: int = 100_000,
     network_allowed: bool = True,
+    fs_config=None,
 ) -> tuple[int, str]:
     """Run a command in a bubblewrap sandbox.
 
     Returns (exit_code, combined_output). On bwrap failure (not installed,
     userns disabled), the caller (sandbox_runner) falls back to plain subprocess.
+
+    Args:
+        network_allowed: if False, adds ``--unshare-net`` (own network namespace,
+            only loopback — no external connectivity). Prevents ``curl``/``wget``
+            in shell commands from exfiltrating data.
+        fs_config: optional SandboxFsConfig with allow_write/deny_write/deny_read/
+            allow_read lists for per-path filesystem isolation.
     """
     if not bwrap_available():
         return (-1, "bubblewrap not installed")
 
-    args = build_bwrap_args(command, cwd, network_allowed=network_allowed)
+    args = build_bwrap_args(command, cwd, network_allowed=network_allowed, fs_config=fs_config)
     try:
         proc = subprocess.run(
             args,

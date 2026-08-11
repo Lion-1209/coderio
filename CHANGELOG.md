@@ -9,6 +9,36 @@ All notable changes to coderio are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Permission-sandbox 联动 (Claude Code "autoAllowBashIfSandboxed" design)**:
+  new `[tools].auto_allow_if_sandboxed` config (default false). When sandbox is
+  active + this flag is true, the `execute` (shell) tool auto-approves without
+  a confirmation prompt — the sandbox provides the real isolation boundary, so
+  per-command prompts become noise. The blacklist still applies (`rm -rf /` is
+  blocked even in auto-allow mode); PLAN mode is unaffected (always read-only).
+- **Filesystem 4-tuple isolation (Claude-Code-compatible)**: new
+  `[tools.sandbox_filesystem]` subtable with `allow_write` / `deny_write` /
+  `deny_read` / `allow_read` lists for per-path filesystem isolation inside the
+  bubblewrap sandbox (Linux only; Windows ignores it — token is no-op).
+  `deny_read` lets you hide sensitive files (`~/.ssh`, `~/.aws/credentials`)
+  from sandboxed shell commands — the real prompt-injection exfiltration
+  threat. Paths support `~` (home), `./` or bare (workspace-relative), `/abs`.
+- **Sandbox network isolation (Linux)**: `network_allowed = false` now actually
+  adds `--unshare-net` to bubblewrap (previously the parameter was silently
+  dropped at the call site — REGRESSION FIX, see Fixed below).
+
+### Fixed
+- **bwrap `--unshare-net` was dead code (Gap 1)**: `sandbox_runner.run_with_sandbox`
+  called `run_bwrap` without forwarding `network_allowed`, so the
+  `network_allowed = false` config had ZERO effect on Linux sandbox mode —
+  `curl`/`wget` in shell commands could still reach the network. Now forwarded
+  correctly; regression-guarded by `test_run_with_sandbox_forwards_network_allowed_to_bwrap`.
+- **`_read_sandbox_fs` NameError**: the helper called `_str_list` which was a
+  closure-local function inside `_from_dict` — invisible at module scope. Any
+  user configuring `[tools.sandbox_filesystem]` would hit `NameError` at load
+  time. Fixed by inlining the list-parse logic; regression-guarded by
+  `test_load_sandbox_fs_config`.
+
+### Added (prior)
 - **OS-level sandboxing (partial)**: multi-layer sandbox architecture for the
   `execute` tool, configurable via `[tools].sandbox_mode`:
   - `"off"` (default): no OS sandbox — regex blacklist + whitelist only.

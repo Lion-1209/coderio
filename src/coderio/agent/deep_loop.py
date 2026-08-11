@@ -81,7 +81,7 @@ class _WinLocalShellBackend:
     # be importable. This factory builds a real subclass per instance.
     _RealCls = None
 
-    def __new__(cls, sandbox_mode: str = "off", **kwargs):
+    def __new__(cls, sandbox_mode: str = "off", network_allowed: bool = True, fs_config=None, **kwargs):
         if cls._RealCls is None:
             from deepagents.backends import LocalShellBackend
 
@@ -102,6 +102,11 @@ class _WinLocalShellBackend:
                 # Set per-instance via __init__ below. Default "off" keeps the
                 # legacy subprocess path for existing users.
                 _sandbox_mode: str = "off"
+                # Network policy + filesystem config forwarded to the sandbox
+                # runner. Set per-instance so the shell backend can pass them
+                # without changing LocalShellBackend's own __init__ signature.
+                _network_allowed: bool = True
+                _fs_config = None
 
                 def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
                     import subprocess
@@ -115,12 +120,34 @@ class _WinLocalShellBackend:
                     if mode in ("job", "write"):
                         from coderio.tools.sandbox_runner import run_with_sandbox
 
+                        cwd_val = getattr(self, "cwd", None) or Path.cwd()
+                        cwd_str = str(cwd_val)
+                        # Workspace existence check: CreateProcessAsUserW (Win) and
+                        # bwrap (Linux) both fail opaquely when cwd doesn't exist
+                        # (Win: "CreateProcessAsUserW failed err=0"; bwrap: cryptic
+                        # mount error). A clear error here lets the model understand
+                        # the root cause (misconfigured workspace_root) and surface
+                        # it to the user, instead of a chain of mystery failures.
+                        # We check self.cwd (a Path) rather than the resolved string
+                        # so symlinked paths still pass.
+                        if not Path(cwd_str).is_dir():
+                            return ExecuteResponse(
+                                output=(
+                                    f"Error: workspace_root points to a non-existent "
+                                    f"directory: {cwd_str}. Update [tools].workspace_root "
+                                    f"in config.toml to point to your project directory, "
+                                    f"or leave it empty to use the current working directory."
+                                ),
+                                exit_code=1,
+                            )
                         exit_code, output = run_with_sandbox(
                             command,
-                            cwd=str(getattr(self, "cwd", None) or Path.cwd()),
+                            cwd=cwd_str,
                             mode=mode,
                             timeout=timeout or 120,
                             env=getattr(self, "_env", None),
+                            network_allowed=getattr(self, "_network_allowed", True),
+                            fs_config=getattr(self, "_fs_config", None),
                         )
                         return ExecuteResponse(output=output, exit_code=exit_code)
 
@@ -160,6 +187,8 @@ class _WinLocalShellBackend:
             cls._RealCls = _Sub
         inst = cls._RealCls(**kwargs)
         inst._sandbox_mode = sandbox_mode
+        inst._network_allowed = network_allowed
+        inst._fs_config = fs_config
         return inst
 
 
@@ -299,6 +328,8 @@ def run_deep_agent(
     recursion_limit: int = 200,
     command_policy=None,
     sandbox_mode: str = "off",
+    network_allowed: bool = True,
+    fs_config=None,
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -359,6 +390,8 @@ def run_deep_agent(
         virtual_mode=True,
         inherit_env=True,
         sandbox_mode=sandbox_mode,
+        network_allowed=network_allowed,
+        fs_config=fs_config,
     )
 
     extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)

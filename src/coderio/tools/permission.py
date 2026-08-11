@@ -106,12 +106,31 @@ class PermissionGate:
     a tool TYPE is allowed in the current MODE — it does NOT inspect paths.
     """
 
-    def __init__(self, mode: str):
+    def __init__(self, mode: str, auto_allow_execute: bool = False):
+        """Initialize the gate.
+
+        Args:
+            mode: permission tier (plan/confirm/auto_edit/full).
+            auto_allow_execute: when True, the ``execute`` (shell) tool is
+                auto-allowed in CONFIRM/AUTO_EDIT modes without prompting —
+                this is the "sandbox 消除问题" design from Claude Code
+                (``autoAllowBashIfSandboxed``). Intended for use when
+                ``sandbox_mode != "off"``: the sandbox provides the real
+                isolation boundary, so the per-command prompt becomes noise.
+                PLAN mode is unaffected (always read-only — sandbox doesn't
+                change that semantics). The command blacklist still applies
+                (via CommandReviewMiddleware, which runs after this gate).
+        """
         self._mode = PermissionMode.normalize(mode)
+        self._auto_allow_execute = auto_allow_execute
 
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def auto_allow_execute(self) -> bool:
+        return self._auto_allow_execute
 
     def check(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
@@ -133,6 +152,13 @@ class PermissionGate:
             return True
         # FULL: auto-allow everything.
         if self._mode == PermissionMode.FULL:
+            return True
+        # auto_allow_execute: the "sandbox 消除问题" path. When a sandbox is
+        # active, the OS provides the real isolation boundary, so prompting
+        # the user for every shell command becomes noise. Skip the prompt for
+        # the execute tool specifically. PLAN mode is excluded — PLAN is always
+        # read-only, and sandbox doesn't change that contract.
+        if tool_name == "execute" and self._auto_allow_execute and self._mode != PermissionMode.PLAN:
             return True
         # AUTO_EDIT: auto-allow file edits, shell/web/note still confirm.
         # MCP destructive tools always confirm in AUTO_EDIT (we can't reliably
@@ -166,8 +192,9 @@ class RichPromptPermissionGate(PermissionGate):
         self,
         console=None,
         prompt_fn: Callable[[str, dict[str, Any]], bool] | None = None,
+        auto_allow_execute: bool = False,
     ):
-        super().__init__(PermissionMode.CONFIRM)
+        super().__init__(PermissionMode.CONFIRM, auto_allow_execute=auto_allow_execute)
         self._console = console
         self._prompt_fn = prompt_fn or _default_prompt
 

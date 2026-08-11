@@ -4,8 +4,8 @@ from coderio.tools.permission import PermissionGate, PermissionMode
 
 
 class _AlwaysAllow(PermissionGate):
-    def __init__(self, mode):
-        super().__init__(mode)
+    def __init__(self, mode, auto_allow_execute: bool = False):
+        super().__init__(mode, auto_allow_execute=auto_allow_execute)
 
     def _ask(self, tool_name, args):
         return True
@@ -14,8 +14,8 @@ class _AlwaysAllow(PermissionGate):
 class _AlwaysAllow_AskTracker(PermissionGate):
     """Like _AlwaysAllow but records which tools triggered _ask."""
 
-    def __init__(self, mode):
-        super().__init__(mode)
+    def __init__(self, mode, auto_allow_execute: bool = False):
+        super().__init__(mode, auto_allow_execute=auto_allow_execute)
         self.asked: list[str] = []
 
     def _ask(self, tool_name, args):
@@ -239,3 +239,68 @@ def test_write_todos_not_misclassified_as_destructive():
     # And in actual gate behavior: PLAN mode must allow write_todos.
     gate = _AlwaysAllow("plan")
     assert gate.check("write_todos", {}) is True
+
+
+# --- auto_allow_execute (permission-sandbox 联动, Gap 2) ---
+# Claude Code's "autoAllowBashIfSandboxed" design: when a sandbox is active,
+# the execute tool auto-approves (the OS provides the real isolation boundary,
+# so per-command prompts become noise). The blacklist still applies (that's
+# CommandReviewMiddleware's job, tested separately).
+
+
+def test_auto_allow_execute_skips_confirm_prompt():
+    """CONFIRM mode + auto_allow_execute=True → execute runs without _ask.
+
+    REGRESSION GUARD: without this, sandbox users get prompted on every shell
+    command even though the sandbox provides the isolation — defeating the
+    "sandbox 消除问题" design philosophy.
+    """
+    gate = _AlwaysAllow_AskTracker("confirm", auto_allow_execute=True)
+    assert gate.check("execute", {"command": "ls"}) is True
+    assert gate.asked == [], "execute must NOT trigger _ask when auto_allow_execute is True"
+
+
+def test_auto_allow_execute_inactive_by_default():
+    """Without auto_allow_execute, CONFIRM mode still prompts for execute.
+
+    Backward compat: existing users who don't set auto_allow_if_sandboxed get
+    the same per-command prompts as before.
+    """
+    gate = _AlwaysAllow_AskTracker("confirm")  # default auto_allow_execute=False
+    gate.check("execute", {"command": "ls"})
+    assert "execute" in gate.asked, "execute MUST trigger _ask without auto_allow_execute"
+
+
+def test_auto_allow_execute_still_blocks_in_plan_mode():
+    """PLAN mode is always read-only — auto_allow_execute does NOT override it.
+
+    PLAN means "explore only, no writes/shell". A sandbox doesn't change that
+    contract (PLAN is the user saying "don't let the agent do anything destructive",
+    and sandbox is not a license to ignore that).
+    """
+    gate = _AlwaysAllow("plan", auto_allow_execute=True)
+    assert gate.check("execute", {"command": "ls"}) is False, (
+        "PLAN must block execute even with auto_allow_execute — read-only contract"
+    )
+
+
+def test_auto_allow_execute_only_applies_to_execute_tool():
+    """auto_allow_execute affects ONLY the execute tool, not write_file/edit_file/web_fetch.
+
+    The sandbox isolates shell commands; file-edit tools are gated by deepagents'
+    virtual_mode (separate mechanism), and web tools are gated by network policy.
+    Only execute gets the auto-allow shortcut.
+    """
+    gate = _AlwaysAllow_AskTracker("confirm", auto_allow_execute=True)
+    gate.check("write_file", {})
+    gate.check("edit_file", {})
+    gate.check("web_fetch", {})
+    assert "write_file" in gate.asked, "write_file must still prompt (not execute)"
+    assert "edit_file" in gate.asked
+    assert "web_fetch" in gate.asked
+
+
+def test_auto_allow_execute_property_reflects_flag():
+    """The auto_allow_execute property exposes the flag for introspection."""
+    assert _AlwaysAllow("confirm").auto_allow_execute is False
+    assert _AlwaysAllow("confirm", auto_allow_execute=True).auto_allow_execute is True

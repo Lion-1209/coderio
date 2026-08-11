@@ -1478,6 +1478,8 @@ def run_tui(
             harness_enabled=rt["cfg"].skills.harness,
             command_policy=cmd_policy,
             sandbox_mode=rt["cfg"].tools.sandbox_mode,
+            network_allowed=rt["cfg"].tools.network_allowed,
+            fs_config=rt["cfg"].tools.sandbox_fs,
         )
 
     def _load_session(sid: str) -> None:

@@ -97,10 +97,18 @@ max_output_tokens = 16384               # （可选）单次回复最大 token �
 permission_mode = "auto"                # confirm | plan | auto_edit | full
 workspace_root = ""                     # shell 后端的 CWD（空=用启动目录）；文件路径隔离由 deepagents virtual_mode 处理
 blocked_commands = []                   # 追加到内置黑名单（正则），如 ["git push --force", "npm publish"]
-network_allowed = true                  # false = 禁用 web_fetch/web_search（离线模式）
+network_allowed = true                  # false = 禁用 web_fetch/web_search + Linux sandbox 断网（--unshare-net）
 whitelist_mode = false                  # true = 未知命令降级 confirm（见下方"沙箱"）
 allowed_commands = []                   # 追加到内置白名单，如 ["docker", "kubectl"]
 sandbox_mode = "off"                    # off | job | write（见下方"沙箱"）
+auto_allow_if_sandboxed = false         # sandbox 开启时，execute 自动放行不弹审批（Claude Code "autoAllowBashIfSandboxed"）
+
+# 可选：sandbox 文件系统隔离（Linux bubblewrap 专用，Windows 暂不生效）
+[tools.sandbox_filesystem]
+allow_write = []                        # 额外可写路径（workspace 总是可写），如 ["/tmp/build", "~/.cache"]
+deny_write = []                         # 禁写路径（即使 workspace 内也挡），如 [".git/hooks"]
+deny_read = []                          # 禁读路径，如 ["~/.ssh", "~/.aws/credentials", "~/.gnupg"]
+allow_read = []                         # 在 deny_read 内打洞，如 ["~/.ssh/known_hosts"]
 
 [context]
 enabled = true                          # 长会话自动压缩（默认开）
@@ -185,11 +193,33 @@ coderio 对 shell 命令（`execute` 工具）有多层安全防线，从轻到�
 sandbox_mode = "job"
 whitelist_mode = true
 allowed_commands = ["docker", "kubectl"]  # 白名单外的命令会触发 confirm
+
+# 进阶：sandbox 开启后，shell 命令自动放行（减少审批打扰）
+# 这是 Claude Code 的 "autoAllowBashIfSandboxed" 设计——sandbox 提供真隔离边界，
+# 每个命令都弹审批就成了噪音。黑名单（rm -rf /）仍生效。
+auto_allow_if_sandboxed = true
 ```
+
+**sandbox 开启时的审批联动**（Claude Code "autoAllowBashIfSandboxed" 设计）：
+- 默认（`auto_allow_if_sandboxed = false`）：sandbox 开了仍弹每个 execute 审批（向后兼容）
+- 设为 `true`：sandbox 开启时 execute 自动放行——sandbox 提供真隔离边界，审批是噪音
+- **黑名单永远生效**：`rm -rf /` 即使在 sandbox + auto_allow 下也挡（CommandReviewMiddleware 独立于 permission gate）
+- **PLAN mode 不受影响**：PLAN 永远是 read-only，sandbox 不改变这个语义
+
+**Linux filesystem 四元组隔离**（`[tools.sandbox_filesystem]`，bubblewrap 专用）：
+```toml
+[tools.sandbox_filesystem]
+# 防沙箱内进程偷密钥（prompt injection 后 cat ~/.ssh 的真实威胁）
+deny_read = ["~/.ssh", "~/.aws/credentials", "~/.gnupg"]
+allow_read = ["~/.ssh/known_hosts"]  # 在 deny_read 里打洞（仍允许 SSH 连接验证）
+allow_write = ["/tmp/build", "~/.cache"]  # 额外可写路径
+deny_write = [".git/hooks"]  # workspace 内也强制只读
+```
+路径支持 `~`（home）、`./` 或裸路径（workspace 相对）、`/abs`（绝对）。`deny_read` 的 tmpfs 黑洞**必须**在 `allow_read` 的 ro-bind 之前（bwrap 后挂载覆盖先挂载）——代码已保证这个顺序。
 
 **安全模型诚实声明**：
 - `job` 档：资源限制 + 进程控制，不是权限沙箱。
-- `write` 档 Linux：bubblewrap 提供完整的命名空间隔离（开箱即用）。
+- `write` 档 Linux：bubblewrap 提供完整的命名空间隔离（开箱即用）+ filesystem 四元组精细控制。
 - `write` 档 Windows：**当前无实际隔离效果**（token 空操作），与 `job` 等价。真隔离待 ACL 实现。
 - 白名单降级：CONFIRM/AUTO_EDIT 模式下白名单外的命令**会执行但 result 里会带 `[whitelist]` 标注**（让模型/用户知道该命令不在受信集合里）；PLAN 模式硬拒；FULL 模式放行不标注。
 - 对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker），不依赖本沙箱。
