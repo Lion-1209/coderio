@@ -29,6 +29,7 @@ from typing import Any
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
+from coderio.agent._deepagents_compat import get_state_todos
 from coderio.agent.harness import Harness, HarnessState
 from coderio.tools.todo import TodoStore
 
@@ -249,7 +250,7 @@ class HarnessMiddleware(AgentMiddleware):
         # from checkpoint) but the HarnessMiddleware's TodoStore was reset (it's
         # recreated each run_deep_agent call). Without this, CompletionGate
         # would see an empty todo list even though graph state has pending todos.
-        state_todos = state.get("todos") if hasattr(state, "get") else getattr(state, "todos", None)
+        state_todos = get_state_todos(state)
         if state_todos and isinstance(state_todos, list):
             from coderio.tools.todo import Todo
 

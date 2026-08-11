@@ -126,11 +126,37 @@ model_context_limit = 200000            # fallback：当 profile 未探测到 co
 }
 ```
 
-- **stdio 服务器**：`{command, args, env?}` — 启动本地子进程（如 npx 运行的 server-filesystem）
-- **HTTP 服务器**：`{type: "http", url, headers?}` — 连接远程 MCP 端点（如 GitHub MCP）
+- **stdio 服务器**：`{command, args, env?, cwd?, timeoutMs?, enabled?}` — 启动本地子进程（如 npx 运行的 server-filesystem）
+- **HTTP 服务器**：`{type: "http", url, headers?, timeoutMs?, enabled?}` — 连接远程 MCP 端点（如 GitHub MCP）
+- **SSE 服务器**：`{type: "sse", url, headers?, timeoutMs?, enabled?}` — SSE 传输
+- **type 推断**：省略 `type` 时，有 `command` 推 stdio，有 `url` 推 http
 - 工具名自动加服务器名前缀（如 `filesystem_read_file`），不会与内置工具冲突
 - 连接失败的服务器会跳过（log warning），不阻塞启动
 - 需要先安装 MCP extra：`pip install -e ".[mcp]"`
+
+可选字段（与 ZCode 兼容）：
+- `enabled: false` — 临时禁用某个服务器而不删配置
+- `cwd` — stdio 子进程工作目录（Windows 上 npx/node 常需要）
+- `timeoutMs` — 请求超时毫秒数（默认不限制），转发给 adapter 为 `timeout`（秒）
+- 旧字段别名自动迁移：`enable`→`enabled`、`environment`→`env`、`http_headers`→`headers`、`type:"remote"`→`http`
+
+**命令行管理**（`coderio mcp`）：
+
+```bash
+# 添加 stdio 服务器到项目 .mcp.json
+coderio mcp add filesystem --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg /tmp
+
+# 添加 HTTP 服务器到用户配置
+coderio mcp add github --type http --url https://api.githubcopilot.com/mcp/ --scope user
+
+# 列出所有已配置的服务器（project + user）
+coderio mcp list
+
+# 移除一个服务器
+coderio mcp remove filesystem
+```
+
+**MCP 工具权限**：MCP 工具名含 `write`/`create`/`delete`/`execute`/`run`/`fetch`/`request` 等关键词时，会被权限系统按 destructive 工具处理（PLAN 模式拒绝、CONFIRM 模式询问、FULL 模式放行）——与内置工具一致。只读 MCP 工具（`read`/`get`/`list`/`query`）在所有模式都放行。
 
 支持的 provider：
 | provider_id | 说明 | 协议 |

@@ -5,6 +5,59 @@ from typing import Any, Callable
 
 from coderio.tools.base import DESTRUCTIVE_TOOLS, FILE_EDIT_TOOLS
 
+# Heuristic keywords for classifying MCP tool risk by NAME. MCP tools arrive
+# with server-prefixed names (e.g. "filesystem_write_file", "github_create_pr")
+# that PermissionGate's DESTRUCTIVE_TOOLS set doesn't recognize — without this
+# classification, a PLAN-mode agent could freely call an MCP server's write/exec
+# tools because they fall through to the "not in DESTRUCTIVE_TOOLS → allow" path.
+#
+# This is a NAME-HEURISTIC, not a capability check: a server could expose a
+# destructive tool under a benign name. The goal is to catch the obvious cases
+# (write/create/delete/execute in the tool name) so the tier gate engages, same
+# as for coderio's built-in tools. False negatives are possible; false positives
+# only trigger a confirm prompt (safe direction).
+_MCP_DESTRUCTIVE_KEYWORDS = frozenset(
+    {
+        "write",
+        "create",
+        "delete",
+        "remove",
+        "execute",
+        "exec",
+        "run",
+        "shell",
+        "fetch",  # network egress
+        "request",
+        "post",  # HTTP POST
+        "put",  # HTTP PUT
+        "patch",  # HTTP PATCH
+    }
+)
+
+# Built-in tool names that CONTAIN a destructive keyword but must NOT be
+# classified destructive by the heuristic — they're handled explicitly by the
+# mode logic (or are read-only despite the name). Without this exclusion,
+# write_todos (deepagents' planning tool) would match "write" and be blocked in
+# PLAN mode, preventing the agent from ever creating a todo list.
+_HEURISTIC_EXCLUDE = frozenset({"write_todos"})
+
+
+def _is_mcp_destructive(tool_name: str) -> bool:
+    """Heuristic: does this tool name suggest a destructive/network action?
+
+    Used for MCP tools whose names aren't in the static DESTRUCTIVE_TOOLS set.
+    Matches any keyword as a substring (case-insensitive) — "filesystem_write",
+    "github_create_pr", "db_delete_row" all match.
+
+    Excludes built-in names in _HEURISTIC_EXCLUDE that happen to contain a
+    keyword but have their own explicit handling (e.g. write_todos is a
+    planning tool, not a file write).
+    """
+    if tool_name in _HEURISTIC_EXCLUDE:
+        return False
+    lower = tool_name.lower()
+    return any(kw in lower for kw in _MCP_DESTRUCTIVE_KEYWORDS)
+
 
 class PermissionMode(StrEnum):
     """Four permission levels (industry-standard tiered access).
@@ -67,12 +120,23 @@ class PermissionGate:
             action = str(args.get("action", "")).lower()
             if action in ("read", "list"):
                 return True
-        if tool_name not in DESTRUCTIVE_TOOLS:
+        if tool_name in DESTRUCTIVE_TOOLS:
+            pass  # fall through to mode-based decision below
+        elif _is_mcp_destructive(tool_name):
+            # MCP tool with a destructive-sounding name (write/create/delete/execute/...).
+            # Treat it like a built-in destructive tool so the tier gate engages.
+            # This prevents a PLAN-mode agent from calling an MCP server's write
+            # tool just because "filesystem_write_file" isn't in DESTRUCTIVE_TOOLS.
+            pass
+        else:
+            # Read-only tool (built-in or MCP) — allow regardless of mode.
             return True
         # FULL: auto-allow everything.
         if self._mode == PermissionMode.FULL:
             return True
         # AUTO_EDIT: auto-allow file edits, shell/web/note still confirm.
+        # MCP destructive tools always confirm in AUTO_EDIT (we can't reliably
+        # tell an MCP write from an MCP execute, so be conservative).
         if self._mode == PermissionMode.AUTO_EDIT:
             if tool_name in FILE_EDIT_TOOLS:
                 return True

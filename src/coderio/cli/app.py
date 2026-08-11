@@ -19,6 +19,9 @@ app = typer.Typer(
 skills_app = typer.Typer(help="Manage skills (install/list/update).")
 app.add_typer(skills_app, name="skills")
 
+mcp_app = typer.Typer(help="Manage MCP servers (add/list/remove).")
+app.add_typer(mcp_app, name="mcp")
+
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
 
@@ -100,6 +103,78 @@ def skills_update(
 ):
     """Update installed skills (git pull)."""
     skills_install(repo=repo, force=False)
+
+
+# ----------------------------------------------------------- coderio mcp
+
+
+@mcp_app.command("list")
+def mcp_list_cmd():
+    """List configured MCP servers (project + user scope)."""
+    from coderio.cli.mcp_cmd import mcp_list
+
+    console = Console()
+    entries = mcp_list()
+    if not entries:
+        console.print("No MCP servers configured. Add one with [cyan]coderio mcp add <name> --command ...[/cyan]")
+        return
+    # Group by scope for readability.
+    project = [(n, p) for n, s, p in entries if s == "project"]
+    user = [(n, p) for n, s, p in entries if s == "user"]
+    if project:
+        console.print("[bold green]project scope[/bold green] (.mcp.json):")
+        for name, path in project:
+            console.print(f"  - {name}   [dim]{path}[/dim]")
+    if user:
+        console.print("[bold blue]user scope[/bold blue] (~/.coderio/mcp.json):")
+        for name, path in user:
+            console.print(f"  - {name}   [dim]{path}[/dim]")
+
+
+@mcp_app.command("add")
+def mcp_add_cmd(
+    name: str = typer.Argument(..., help="Server name (used as tool-name prefix)."),
+    type: str = typer.Option("stdio", "--type", help="Transport: stdio (default), http, or sse."),
+    command: str = typer.Option(None, "--command", help="stdio: executable to run (e.g. npx)."),
+    url: str = typer.Option(None, "--url", help="http/sse: server endpoint URL."),
+    scope: str = typer.Option("project", "--scope", help="Config scope: project (default) or user."),
+    arg: list[str] = typer.Option(
+        None, "--arg", help="stdio: argument (repeatable, in order). E.g. --arg -y --arg @mcp/server-fs"
+    ),
+):
+    """Add an MCP server to the project (.mcp.json) or user (~/.coderio/mcp.json) config."""
+    from coderio.cli.mcp_cmd import mcp_add
+
+    result = mcp_add(
+        name,
+        server_type=type,
+        command=command,
+        url=url,
+        args=arg,
+        scope=scope,
+    )
+    console = Console()
+    if result.success:
+        console.print(f"[green]{result.action.capitalize()}[/green]: {result.message}")
+    else:
+        console.print(f"[red]Error:[/red] {result.message}")
+        raise typer.Exit(1)
+
+
+@mcp_app.command("remove")
+def mcp_remove_cmd(
+    name: str = typer.Argument(..., help="Server name to remove."),
+    scope: str = typer.Option("project", "--scope", help="Config scope: project (default) or user."),
+):
+    """Remove an MCP server entry (no-op if the name is absent)."""
+    from coderio.cli.mcp_cmd import mcp_remove
+
+    result = mcp_remove(name, scope=scope)
+    console = Console()
+    if result.action == "noop":
+        console.print(f"[yellow]No-op:[/yellow] {result.message}")
+    else:
+        console.print(f"[green]{result.action.capitalize()}[/green]: {result.message}")
 
 
 @app.command("config")

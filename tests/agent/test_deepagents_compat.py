@@ -149,3 +149,53 @@ def test_neutralize_base_prompt_idempotent():
     neutralize_base_prompt()  # first call empties it (or it's already empty)
     result = neutralize_base_prompt()  # second call: already empty → False
     assert result is False, "second neutralize should be a no-op (already empty)"
+
+
+# --------------------------------------------------------------- state-key adapter
+
+
+def test_todos_state_key_constant():
+    """TODOS_STATE_KEY must match langchain's PlanningState.todos field name.
+
+    If langchain renames this field upstream, this constant is the single
+    source of truth — update it here and all get_state_todos() callers follow.
+    """
+    from coderio.agent._deepagents_compat import TODOS_STATE_KEY
+
+    assert TODOS_STATE_KEY == "todos"
+
+
+def test_get_state_todos_from_dict():
+    """get_state_todos reads 'todos' from a dict-shaped state (the langgraph norm)."""
+    from coderio.agent._deepagents_compat import get_state_todos
+
+    state = {"messages": [], "todos": [{"content": "a", "status": "pending"}]}
+    todos = get_state_todos(state)
+    assert todos == [{"content": "a", "status": "pending"}]
+
+
+def test_get_state_todos_from_object():
+    """get_state_todos falls back to attribute access for object-shaped state."""
+    from coderio.agent._deepagents_compat import get_state_todos
+
+    class _ObjState:
+        todos = [{"content": "x", "status": "completed"}]
+
+    todos = get_state_todos(_ObjState())
+    assert todos == [{"content": "x", "status": "completed"}]
+
+
+def test_get_state_todos_missing_returns_none():
+    """Missing todos key → None (caller treats None as 'nothing to sync')."""
+    from coderio.agent._deepagents_compat import get_state_todos
+
+    assert get_state_todos({"messages": []}) is None
+    assert get_state_todos(object()) is None  # no .todos attribute
+
+
+def test_get_state_todos_empty_list_is_truthy_enough():
+    """An explicit empty list is returned as-is (not None) — distinguishes
+    'no todos key' from 'todos key present but empty'."""
+    from coderio.agent._deepagents_compat import get_state_todos
+
+    assert get_state_todos({"todos": []}) == []

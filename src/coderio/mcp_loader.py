@@ -97,39 +97,97 @@ def load_mcp_config(
 
 
 def _normalize_connection(server_name: str, cfg: dict) -> dict:
-    """Convert a Claude Code .mcp.json entry to langchain-mcp-adapters format.
+    """Convert a .mcp.json entry to langchain-mcp-adapters connection format.
 
     Claude Code uses ``"type": "http"``; the adapter expects
     ``"transport": "streamable_http"``. stdio entries omit the transport key
     (it's the default) — we add it explicitly.
+
+    ZCode-compatible fields (all optional, all backward-compatible):
+      - ``enabled`` (bool, default True): set False to temporarily disable a
+        server without removing its config. Legacy alias ``enable`` accepted.
+      - ``cwd`` (str, stdio only): working directory for the subprocess. Key
+        on Windows where ``npx`` may not be on PATH without it.
+      - ``timeoutMs`` (int): per-request timeout in milliseconds, forwarded to
+        the adapter as ``timeout`` (seconds). Default 30000 if unset by caller.
+      - ``type`` inference: when ``type`` is omitted, infer from the presence
+        of ``command`` (→ stdio) or ``url`` (→ http).
+
+    Legacy field migrations (ZCode auto-migrates these; we follow suit so
+    ZCode/Cursor-style configs work unchanged):
+      - ``type: "remote"`` → ``http``
+      - ``environment`` → ``env``
+      - ``http_headers`` → ``headers``
+      - ``enable`` → ``enabled``
     """
+    # --- enabled gate (ZCode-compatible): disabled servers return {} → skipped.
+    if not cfg.get("enabled", cfg.get("enable", True)):
+        _log.info("MCP server %r is disabled (enabled=false), skipping", server_name)
+        return {}
+
+    # --- legacy field migrations (applied before branch logic).
     server_type = cfg.get("type", "")
+    if server_type == "remote":  # ZCode legacy name for http
+        server_type = "http"
+
+    # timeoutMs → seconds (forwarded to adapter on each branch).
+    timeout_s: float | None = None
+    if "timeoutMs" in cfg:
+        try:
+            timeout_s = float(cfg["timeoutMs"]) / 1000.0
+        except (TypeError, ValueError):
+            _log.warning("MCP server %r has invalid timeoutMs %r, ignoring", server_name, cfg["timeoutMs"])
+
+    # --- stdio branch (command present, or type explicitly stdio).
     if "command" in cfg:
-        # stdio server: {command, args, env?}
         conn: dict[str, Any] = {
             "transport": "stdio",
             "command": cfg["command"],
             "args": cfg.get("args", []),
         }
-        if "env" in cfg:
-            conn["env"] = cfg["env"]
+        # env (ZCode legacy: environment → env)
+        env = cfg.get("env", cfg.get("environment"))
+        if env:
+            conn["env"] = env
+        # cwd (Windows PATH robustness — npx/node often need an explicit cwd)
+        if "cwd" in cfg:
+            conn["cwd"] = cfg["cwd"]
+        if timeout_s is not None:
+            conn["timeout"] = timeout_s
         return conn
-    if server_type in ("http", "streamable_http"):
+
+    # --- type inference: url present without command → http (ZCode behavior).
+    if server_type in ("http", "streamable_http") or ("url" in cfg and not server_type):
+        if "url" not in cfg:
+            _log.warning("MCP server %r has type=http but no url, skipping", server_name)
+            return {}
         conn = {
             "transport": "streamable_http",
             "url": cfg["url"],
         }
-        if "headers" in cfg:
-            conn["headers"] = cfg["headers"]
+        # headers (ZCode legacy: http_headers → headers)
+        headers = cfg.get("headers", cfg.get("http_headers"))
+        if headers:
+            conn["headers"] = headers
+        if timeout_s is not None:
+            conn["timeout"] = timeout_s
         return conn
+
     if server_type == "sse":
+        if "url" not in cfg:
+            _log.warning("MCP server %r has type=sse but no url, skipping", server_name)
+            return {}
         conn = {
             "transport": "sse",
             "url": cfg["url"],
         }
-        if "headers" in cfg:
-            conn["headers"] = cfg["headers"]
+        headers = cfg.get("headers", cfg.get("http_headers"))
+        if headers:
+            conn["headers"] = headers
+        if timeout_s is not None:
+            conn["timeout"] = timeout_s
         return conn
+
     # Unknown format — return a marker that will be skipped.
     _log.warning("MCP server %r has unrecognized config: %s", server_name, cfg)
     return {}

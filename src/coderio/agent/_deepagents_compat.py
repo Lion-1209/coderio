@@ -9,6 +9,12 @@ Centralizes all usage of deepagents internals (non-public APIs) so that:
 Current internal dependencies:
 - BASE_AGENT_PROMPT (deepagents.graph): module-level string, monkey-patched
   to empty to prevent prompt conflicts. Public alternative not yet available.
+- PlanningState.todos state key (langchain.agents.middleware.todo): the graph
+  state field where write_todos persists its output. The key name "todos" is
+  an undocumented implementation detail of langchain's planning middleware —
+  centralized here (TODOS_STATE_KEY + get_state_todos) so a rename upstream
+  only requires updating this one constant instead of scattered state.get()
+  reads across harness_middleware.
 
 The research subagent's tool isolation (_ToolWhitelistMiddleware below) is
 NOT a deepagents internal dependency — it subclasses the public AgentMiddleware
@@ -28,6 +34,26 @@ from typing import Any
 from langchain.agents.middleware.types import AgentMiddleware
 
 _log = logging.getLogger(__name__)
+
+# Graph state key under which langchain's planning middleware (TodoListMiddleware)
+# persists the todo list. Sourced from langchain.agents.middleware.todo.PlanningState
+# (the "todos: Annotated[NotRequired[list[Todo]], OmitFromInput]" field). This key
+# name is an undocumented implementation detail — if langchain renames it (e.g. to
+# "todo_list"), only this constant needs updating, not every state.get("todos") call.
+TODOS_STATE_KEY = "todos"
+
+
+def get_state_todos(state: Any) -> list | None:
+    """Read the todos list from graph state, dict-or-object agnostic.
+
+    Centralizes the state.get("todos") read so that a key rename upstream
+    produces a single-file fix (update TODOS_STATE_KEY) instead of scattered
+    silent failures across harness_middleware. Returns None when the key is
+    absent (the caller treats None as "no todos to sync").
+    """
+    if hasattr(state, "get"):
+        return state.get(TODOS_STATE_KEY)
+    return getattr(state, TODOS_STATE_KEY, None)
 
 
 def neutralize_base_prompt() -> bool:

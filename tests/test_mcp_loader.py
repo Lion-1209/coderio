@@ -170,6 +170,101 @@ def test_normalize_unknown_format():
     assert conn == {}
 
 
+# ----------------------------------------------------- ZCode-compatible fields (P1-5, 3a)
+
+
+def test_normalize_enabled_false_skips():
+    """enabled=false (ZCode-compatible) → server is skipped (returns {})."""
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"], "enabled": False})
+    assert conn == {}, "enabled=false should produce an empty marker (skip)"
+
+
+def test_normalize_enabled_true_default():
+    """enabled defaults to True — a server without the field is NOT skipped."""
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"]})
+    assert conn != {}, "absent enabled field should default to True (not skipped)"
+
+
+def test_normalize_legacy_enable_field():
+    """Legacy alias 'enable' (ZCode) works the same as 'enabled'."""
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"], "enable": False})
+    assert conn == {}, "enable=false (legacy) should skip the server"
+
+
+def test_normalize_cwd_stdio():
+    """cwd (ZCode-compatible) is forwarded to the adapter for stdio servers.
+
+    Important on Windows: npx/node may not resolve without an explicit cwd
+    when the shell backend's PATH doesn't include the install location.
+    """
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"], "cwd": "/custom/path"})
+    assert conn["cwd"] == "/custom/path"
+
+
+def test_normalize_timeoutMs_converted_to_seconds():
+    """timeoutMs (ZCode-compatible, int ms) is forwarded as 'timeout' (float sec)."""
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"], "timeoutMs": 30000})
+    assert conn["timeout"] == 30.0
+
+
+def test_normalize_timeoutMs_http_branch():
+    """timeoutMs works on the http branch too."""
+    conn = _normalize_connection("api", {"type": "http", "url": "https://x.com/mcp", "timeoutMs": 5000})
+    assert conn["timeout"] == 5.0
+
+
+def test_normalize_invalid_timeoutMs_ignored():
+    """A non-numeric timeoutMs is logged + ignored (no crash, no timeout key)."""
+    conn = _normalize_connection("fs", {"command": "npx", "args": ["srv"], "timeoutMs": "not-a-number"})
+    assert "timeout" not in conn
+
+
+def test_normalize_type_inference_url_only():
+    """No 'type' field but 'url' present → inferred as http (ZCode behavior).
+
+    Lets users write ``{"url": "https://..."}`` without specifying type.
+    """
+    conn = _normalize_connection("api", {"url": "https://example.com/mcp"})
+    assert conn["transport"] == "streamable_http"
+    assert conn["url"] == "https://example.com/mcp"
+
+
+def test_normalize_legacy_environment_field():
+    """Legacy alias 'environment' (ZCode) → 'env' in the adapter connection."""
+    conn = _normalize_connection(
+        "db",
+        {"command": "node", "args": ["db.js"], "environment": {"DB_URL": "x"}},
+    )
+    assert conn["env"] == {"DB_URL": "x"}
+
+
+def test_normalize_legacy_remote_type():
+    """Legacy type 'remote' (ZCode) → treated as http."""
+    conn = _normalize_connection("old", {"type": "remote", "url": "https://example.com/mcp"})
+    assert conn["transport"] == "streamable_http"
+
+
+def test_normalize_legacy_http_headers_field():
+    """Legacy alias 'http_headers' (ZCode) → 'headers' in the adapter connection."""
+    conn = _normalize_connection(
+        "api",
+        {"type": "http", "url": "https://x.com/mcp", "http_headers": {"Authorization": "Bearer y"}},
+    )
+    assert conn["headers"] == {"Authorization": "Bearer y"}
+
+
+def test_normalize_http_without_url_returns_empty():
+    """type=http but no url → empty (can't connect to nothing)."""
+    conn = _normalize_connection("bad", {"type": "http"})
+    assert conn == {}
+
+
+def test_normalize_sse_without_url_returns_empty():
+    """type=sse but no url → empty."""
+    conn = _normalize_connection("bad", {"type": "sse"})
+    assert conn == {}
+
+
 # ----------------------------------------------------- load_mcp_tools (no servers)
 
 

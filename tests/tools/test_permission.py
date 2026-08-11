@@ -143,3 +143,99 @@ def test_note_write_prompts_in_confirm_mode():
     """note(action='write') in confirm mode should go through _ask (not bypass)."""
     gate = _AlwaysAllow("confirm")
     assert gate.check("note", {"action": "write", "name": "x"}) is True  # _ask returns True
+
+
+# --- MCP tool heuristic classification (P1-5c, 2026-08-10 report) ---
+# MCP tools arrive with server-prefixed names (filesystem_write_file, etc.) that
+# aren't in DESTRUCTIVE_TOOLS. Without heuristic classification, PLAN mode would
+# let a destructive MCP tool through — a permission-model hole.
+
+
+def test_mcp_write_tool_blocked_in_plan_mode():
+    """An MCP tool whose name contains 'write' must be gated in PLAN mode.
+
+    Regression guard: before the _is_mcp_destructive heuristic, a PLAN-mode
+    agent could call filesystem_write_file freely because the name wasn't in
+    DESTRUCTIVE_TOOLS and the old check() returned True for anything unknown.
+    """
+    gate = _AlwaysAllow("plan")
+    assert gate.check("filesystem_write_file", {}) is False
+    assert gate.check("github_create_pr", {}) is False
+    assert gate.check("db_delete_row", {}) is False
+
+
+def test_mcp_execute_tool_blocked_in_plan_mode():
+    """MCP execute/run/shell tools are gated in PLAN mode."""
+    gate = _AlwaysAllow("plan")
+    assert gate.check("custom_exec_command", {}) is False
+    assert gate.check("sandbox_run_script", {}) is False
+    assert gate.check("cloud_shell_exec", {}) is False
+
+
+def test_mcp_network_tool_blocked_in_plan_mode():
+    """MCP fetch/request/post tools (network egress) are gated in PLAN mode."""
+    gate = _AlwaysAllow("plan")
+    assert gate.check("api_fetch_url", {}) is False
+    assert gate.check("http_request", {}) is False
+
+
+def test_mcp_read_tool_allowed_in_plan_mode():
+    """MCP read-only tools (no destructive keyword) pass in PLAN mode."""
+    gate = _AlwaysAllow("plan")
+    assert gate.check("filesystem_read_file", {}) is True
+    assert gate.check("github_get_issue", {}) is True
+    assert gate.check("db_query", {}) is True
+
+
+def test_mcp_write_tool_allowed_in_full_mode():
+    """FULL mode auto-approves MCP destructive tools (same as built-in)."""
+    gate = _AlwaysAllow_AskTracker("full")
+    assert gate.check("filesystem_write_file", {}) is True
+    assert gate.asked == [], "FULL mode should never call _ask (even for MCP)"
+
+
+def test_mcp_destructive_confirms_in_confirm_mode():
+    """CONFIRM mode prompts for MCP destructive tools (goes through _ask)."""
+    gate = _AlwaysAllow_AskTracker("confirm")
+    gate.check("filesystem_write_file", {})
+    gate.check("github_create_pr", {})
+    assert "filesystem_write_file" in gate.asked
+    assert "github_create_pr" in gate.asked
+
+
+def test_mcp_destructive_confirms_in_auto_edit_mode():
+    """AUTO_EDIT mode is conservative for MCP: destructive MCP tools always
+    confirm (we can't reliably distinguish an MCP write from an MCP execute,
+    so we don't auto-allow either)."""
+    gate = _AlwaysAllow_AskTracker("auto_edit")
+    gate.check("filesystem_write_file", {})
+    assert "filesystem_write_file" in gate.asked, (
+        "AUTO_EDIT should confirm MCP destructive tools (conservative default)"
+    )
+
+
+def test_mcp_keyword_substring_matching():
+    """The keyword match is substring-based (case-insensitive), so 'ReWrite'
+    and 'WRITE_FILE' both match 'write'."""
+    from coderio.tools.permission import _is_mcp_destructive
+
+    assert _is_mcp_destructive("filesystem_write_file")
+    assert _is_mcp_destructive("GitHub_Create_PR")
+    assert _is_mcp_destructive("DB_DELETE_Row")
+    assert not _is_mcp_destructive("read_file")
+    assert not _is_mcp_destructive("get_status")
+    assert not _is_mcp_destructive("list_items")
+
+
+def test_write_todos_not_misclassified_as_destructive():
+    """REGRESSION GUARD: write_todos (deepagents' planning tool) contains
+    'write' but must NOT be flagged destructive — it only updates the in-memory
+    todo list, it doesn't write files. Without this exclusion, PLAN mode would
+    block the agent from ever creating a todo list, breaking the harness's
+    CompletionGate (which relies on todos being present)."""
+    from coderio.tools.permission import _is_mcp_destructive
+
+    assert not _is_mcp_destructive("write_todos"), "write_todos must be excluded from the MCP destructive heuristic"
+    # And in actual gate behavior: PLAN mode must allow write_todos.
+    gate = _AlwaysAllow("plan")
+    assert gate.check("write_todos", {}) is True

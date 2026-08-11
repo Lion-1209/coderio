@@ -17,6 +17,40 @@ All notable changes to coderio are documented here. The format follows
   are prefixed with the server name to avoid collisions. MCP deps are opt-in:
   `pip install -e ".[mcp]"`. Without the extra, `.mcp.json` is silently ignored.
   New modules: `src/coderio/mcp_loader.py` (config + tool loading). 18 tests.
+- **`coderio mcp` CLI subcommand** (`add`/`list`/`remove`): manage MCP server
+  entries in the project `.mcp.json` or user `~/.coderio/mcp.json` from the
+  command line. `coderio mcp add <name> --command npx --arg -y --arg @mcp/server`
+  creates a stdio entry; `--type http --url ...` for remote servers. New module:
+  `src/coderio/cli/mcp_cmd.py`. 13 tests.
+- **MCP tool permission integration**: `PermissionGate` now classifies MCP tools
+  by name heuristic — tools whose names contain `write`/`create`/`delete`/
+  `execute`/`run`/`fetch`/`request`/`post`/`put`/`patch` are gated by the tier
+  system just like coderio's built-in destructive tools. This closes a hole
+  where PLAN mode would freely allow a destructive MCP tool (e.g.
+  `filesystem_write_file`) because the name wasn't in `DESTRUCTIVE_TOOLS`.
+  `write_todos` is explicitly excluded (planning tool, not a file write).
+- **ZCode-compatible MCP config fields**: `.mcp.json` entries now accept
+  `enabled` (bool, disable a server without removing config), `cwd` (stdio
+  working directory — key on Windows for npx/node PATH resolution), `timeoutMs`
+  (per-request timeout, forwarded to adapter as `timeout` in seconds), and
+  `type` inference (omit `type` and provide `url` → http). Legacy field aliases
+  auto-migrated: `enable`→`enabled`, `environment`→`env`, `http_headers`→
+  `headers`, `type:"remote"`→`http`.
+
+### Changed
+- **P1-1 (todos compat)**: The `state.get("todos")` read in
+  `harness_middleware.after_model` is now centralized in
+  `_deepagents_compat.get_state_todos()` + `TODOS_STATE_KEY` constant. If
+  langchain renames the `todos` state field upstream, only the constant needs
+  updating instead of scattered reads — preventing silent CompletionGate
+  regression on checkpoint-resumed turns.
+- **deep_loop test coverage expanded**: `tests/agent/conftest.py` now shares
+  the `_FakeModel`/`NoOpStream`/`make_session` fixtures. 5 new graph-level
+  integration tests (harness force-continue, command-review block,
+  network-disabled block, session persistence, custom-mode signal) and 23 unit
+  tests covering `_build_extra_tools`/`_resolve_system_prompt`/`_build_inputs`/
+  `_handle_*_mode`/`_content_to_text`/`_extract_thinking` — closing the
+  "production engine black box" gap flagged in the 2026-08-10 report (P1-2).
 
 ## [0.3.0] — 2026-08-10
 

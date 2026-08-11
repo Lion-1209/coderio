@@ -221,3 +221,61 @@ def test_phase_tracker_not_wired_without_stream():
 
     mw2 = HarnessMiddleware(stream=_BareStream())
     assert mw2.harness.state_tracker is None, "stream without on_phase_change = no tracker"
+
+
+# --- after_model: checkpoint-recovery todos sync (P1-1) ---
+
+
+def test_after_model_syncs_state_todos_into_harness():
+    """Graph state todos must be synced into the harness's TodoStore on each
+    after_model call.
+
+    This covers the checkpoint-resume path: write_todos ran in a PREVIOUS turn
+    (persisted to graph state via sqlite checkpoint), but the HarnessMiddleware
+    was recreated for this run_deep_agent call (its TodoStore starts empty).
+    Without this sync, CompletionGate would see an empty todo list and let the
+    model end despite pending todos — a silent regression of the harness's
+    hard constraint.
+
+    P1-1 (2026-08-10 report): the state.get('todos') read is now centralized in
+    _deepagents_compat.get_state_todos so a langchain key rename upstream is a
+    single-file fix, not a scattered silent failure.
+    """
+    mw = HarnessMiddleware()
+    # Simulate a state restored from checkpoint: messages + a pending todo list.
+    state = {
+        "messages": [AIMessage(content="all done", tool_calls=[])],
+        "todos": [
+            {"content": "implement feature X", "status": "completed"},
+            {"content": "write tests for X", "status": "pending"},
+        ],
+    }
+    # The harness's TodoStore starts empty (rebuilt each run_deep_agent call).
+    assert mw.harness.todos.todos == []
+
+    mw.after_model(state, None)
+
+    # The sync must populate the harness's TodoStore from graph state.
+    synced = mw.harness.todos.todos
+    assert len(synced) == 2, f"expected 2 todos synced from state, got {len(synced)}"
+    assert synced[0].content == "implement feature X"
+    assert synced[0].status == "completed"
+    assert synced[1].content == "write tests for X"
+    assert synced[1].status == "pending"
+
+
+def test_after_model_no_sync_when_state_has_no_todos():
+    """No todos key in state → no sync, harness TodoStore stays as-is (empty)."""
+    mw = HarnessMiddleware()
+    state = {"messages": [AIMessage(content="done", tool_calls=[])]}  # no "todos" key
+    mw.after_model(state, None)
+    assert mw.harness.todos.todos == []
+
+
+def test_after_model_sync_handles_empty_todo_list():
+    """An explicit empty todos list in state syncs to an empty TodoStore (not an
+    error). Distinguishes 'no todos key' (None) from 'todos present but empty'."""
+    mw = HarnessMiddleware()
+    state = {"messages": [AIMessage(content="done", tool_calls=[])], "todos": []}
+    mw.after_model(state, None)
+    assert mw.harness.todos.todos == []
