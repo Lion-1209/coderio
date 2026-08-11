@@ -48,10 +48,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
+        # Install from the pinned lockfile for reproducible builds. The project
+        # itself is installed with --no-deps so the locked versions win (without
+        # --no-deps, pip would resolve coderio's dependencies fresh and could
+        # pick different transitive versions, defeating the lockfile).
+        #
+        # The lockfile pins main + [dev] extras. To add the [mcp] extra in CI,
+        # append `mcp` to the extras and re-pin (see requirements-dev.txt header).
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
 
       - name: Check dependency consistency
         # Verifies no broken/conflicting requirements after install.

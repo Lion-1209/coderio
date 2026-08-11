@@ -9,6 +9,14 @@ All notable changes to coderio are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Pinned dependencies (requirements-dev.txt)**: CI now installs from a pinned
+  lockfile (main + dev extra, 122 transitive deps) for reproducible builds.
+  An upstream release that breaks langchain or deepagents can no longer turn CI
+  red without a corresponding change to the lockfile. To regenerate after
+  changing pyproject.toml deps: `pip install -e ".[dev]" && pip freeze | grep -v
+  '^-e ' | grep -v '^coderio==' | sort > requirements-dev.txt`. The [mcp] extra
+  is intentionally not pinned (opt-in, users manage their own server deps).
+
 - **MCP (Model Context Protocol) support**: coderio can now connect to external
   MCP servers and expose their tools to the agent. Config format is compatible
   with Claude Code's `.mcp.json` (project-level `.mcp.json` + user-level
