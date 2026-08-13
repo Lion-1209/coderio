@@ -83,7 +83,7 @@ linkify-it-py==2.1.0
 lxml==6.1.1
 markdown-it-py==4.2.0
 mcp-types==2.0.0
-mcp==1.29.0
+mcp==2.0.0
 mdit-py-plugins==0.6.1
 mdurl==0.1.2
 mypy==2.3.0
