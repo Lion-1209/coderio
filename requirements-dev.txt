@@ -139,7 +139,7 @@ uc-micro-py==2.0.0
 urllib3==2.7.0
 uuid_utils==0.16.2
 uvicorn==0.52.1
-wcmatch==10.2
+wcmatch==11.0
 websockets==15.0.1
 xxhash==3.7.1
 zstandard==0.25.0
