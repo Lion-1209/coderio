@@ -60,7 +60,10 @@ jobs:
         run: uv sync --frozen --extra dev
 
       - name: Check dependency consistency
-        run: uv run python -m pip check
+        # uv-managed venvs ship WITHOUT the pip module (uv manages installs
+        # itself), so `python -m pip check` fails there. `uv pip check` reads
+        # the same installed-package metadata via uv's own interface.
+        run: uv pip check
 
       - name: Audit dependencies for known vulnerabilities
         # Scans installed packages against the PyPI advisory database.
