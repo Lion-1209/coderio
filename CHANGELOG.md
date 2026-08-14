@@ -8,6 +8,63 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — 2026-08-14 report P0 batch (5 fixes, all verified end-to-end)
+- **P0-1 · VerifyGate was inert in production**: the exit-code parser only
+  matched coderio's legacy BashTool format (`[exit_code: N]`), but the
+  production engine (deepagents) wraps ExecuteResponse into a ToolMessage —
+  the exit code survives only as text (`[Command failed with exit code 1]`,
+  deepagents/middleware/filesystem.py). Result: every failed test run parsed
+  as "neutral pass" → unverified-writes cleared → the gate (the project's
+  headline feature) never blocked "done" after a FAILING test. Fixed: the
+  regex accepts both formats; +5 contract tests pinning the seam with real
+  deepagents message shapes.
+- **P0-2 · general-purpose subagent bypassed ALL security layers**: deepagents
+  auto-injects a `general-purpose` subagent (graph.py:711-770) whose hardcoded
+  middleware lacks coderio's Permission/CommandReview — via
+  `task(subagent_type="general-purpose")`, a model could write files and run
+  shell in PLAN mode (nominally read-only). Fixed: an explicit same-named spec
+  with coderio's middleware stack (deepagents skips auto-injection then), and
+  `task` added to DESTRUCTIVE_TOOLS as defense in depth. E2E-verified.
+- **P0-3 · web_fetch had zero SSRF protection**: bare `httpx.get(url,
+  follow_redirects=True)` could reach 127.0.0.1, 169.254.169.254 (cloud
+  metadata credential exfil), [::1], 10/8, 192.168/16. Fixed: scheme
+  allowlist (http/https) + resolved-IP blocklist (loopback/private/link-
+  local/reserved) + MANUAL redirect hopping with per-hop validation + 1 MB
+  response cap + content-type sniff. +13 tests.
+- **P0-4 · Windows production shell was cmd.exe, prompt said Git Bash**:
+  `subprocess.run(shell=True)` on win32 routes to COMSPEC; cmd.exe doesn't
+  process single quotes, so `python -c 'print(42)'` returned EMPTY output
+  with exit 0 — the model believed broken commands succeeded (uncorrectable).
+  Fixed: production execute resolves Git Bash ([tools].bash_shell or
+  auto-detect) and runs `[bash, '-c', cmd]`; falls back to cmd.exe with a
+  warning when bash is absent. Verified: python -c prints 42, $HOME expands,
+  bash for-loops run.
+- **P0-5 · blacklist caught the harmless form, missed the destructive ones**:
+  bare `rm -rf /` is refused by coreutils itself, but `rm -rf /
+  --no-preserve-root` (the form that ACTUALLY deletes root), `rm -r -f /`
+  (split flags), `rm -rf "/"` (quoted), `chmod -R 0777 /` (leading zero) and
+  `find / -delete` all passed. All blocked now (+6 regression tests; relative
+  forms like `rm -rf ./build` unaffected).
+
+### Changed — dependency management: uv.lock replaces requirements-dev.txt
+- **Why**: the bare requirements lockfile and Dependabot fought over version
+  authority — Dependabot's updates to it were internally inconsistent
+  (pydantic_core conflict → CI red on its group PR #6). uv.lock is a
+  first-class lockfile for BOTH uv and Dependabot: CI gets reproducible
+  installs (P1-4), Dependabot updates pyproject + regenerates uv.lock in its
+  PRs — the mechanisms cooperate.
+- CI now uses astral-sh/setup-uv + `uv sync --frozen --extra dev` (fails if
+  lock is out of sync with pyproject, forcing both to be committed together);
+  steps run via `uv run`; wheel via `uv build`.
+- `requirements-dev.txt` deleted. Also removed the accidental `mcp==1.29.0`
+  pin it carried (venv leftover that contradicted pyproject's mcp extra).
+- **mcp extra constraint fixed**: explicit `mcp>=2.0` conflicted with
+  langchain-mcp-adapters 0.3.2's upper bound (`mcp>=1.24.0,<2.0.0`) —
+  resolution was unsatisfiable under uv. The mcp version is now managed
+  transitively via langchain-mcp-adapters until it ships mcp-2.x support.
+- Dependabot PRs #6-#10 closed with explanations (they targeted the deleted
+  lockfile; Dependabot will re-open clean PRs against uv.lock).
+
 ### Added
 - **mypy 现在是 CI 硬门 (P1-3)**: 之前 mypy 是 `continue-on-error`（类型错误只报告不 fail）。现在用 per-module overrides 把 14 个有问题文件的 `ignore_errors=true` 标为显式 TODO，其余 49 个干净文件强制类型清洁——新代码的类型错误会真正阻断 CI。`config/models.py` 的 dataclass None-default idiom 用行级 `# type: ignore[assignment]` 标注（mypy 对 dataclass 这种"声明具体类型但默认 None，post_init 后非 None"的宽容用法）。
 

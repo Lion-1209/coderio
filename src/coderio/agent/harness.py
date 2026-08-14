@@ -116,23 +116,36 @@ def _is_success(result: str) -> bool:
     return not (result.startswith("Error") or result.startswith("Permission denied"))
 
 
-# Matches the trailing ``[exit_code: N]`` marker the BashTool appends to its
-# result string. Used by the VerifyGate logic to distinguish a PASSED run
-# (exit 0) from a FAILED one (non-zero) — the old code treated any bash call
-# that "looked like" a test as verification passed, even when the tests failed.
-_EXIT_CODE_RE = re.compile(r"\[exit_code:\s*(-?\d+)\]")
+# Matches BOTH exit-code marker formats the VerifyGate may see:
+#   1. ``[exit_code: N]`` — coderio's legacy BashTool format (bash.py).
+#   2. ``[Command failed with exit code N]`` / ``[Command succeeded with exit
+#      code N]`` — deepagents' native format (deepagents/middleware/
+#      filesystem.py appends this to every execute result's content).
+#
+# REGRESSION (2026-08-14 report P0-1): the production engine (deepagents)
+# wraps ExecuteResponse into a ToolMessage whose .exit_code attribute is
+# GONE — the exit code only survives as text in the content. The regex below
+# originally only matched format 1, so _parse_exit_code returned None for
+# every production execute call → failed tests were treated as "neutral
+# pass" → writes_since_verify was cleared → VerifyGate never blocked "done"
+# after a FAILING test run. The gate (the project's headline feature) was
+# completely inert in production. Both formats must match from now on.
+_EXIT_CODE_RE = re.compile(r"\[exit_code:\s*(-?\d+)\]" r"|\[Command (?:succeeded|failed) with exit code (-?\d+)\]")
 
 
 def _parse_exit_code(result: str) -> int | None:
-    """Extract the exit code from a BashTool result, or None if absent.
+    """Extract the exit code from a shell-tool result, or None if absent.
 
-    The BashTool appends ``\\n[exit_code: N]`` to every command result. When
-    present, a non-zero value means the verification FAILED (tests errored,
-    build broke, lint failed) and must NOT clear the unverified-writes list.
+    Handles both marker formats (see _EXIT_CODE_RE): coderio's legacy
+    ``\\n[exit_code: N]`` and deepagents' ``[Command failed|succeeded with
+    exit code N]``. When present, a non-zero value means the verification
+    FAILED (tests errored, build broke, lint failed) and must NOT clear the
+    unverified-writes list.
     """
     m = _EXIT_CODE_RE.search(result or "")
     if m:
-        return int(m.group(1))
+        # group(1) = coderio format, group(2) = deepagents format.
+        return int(m.group(1) or m.group(2))
     return None
 
 

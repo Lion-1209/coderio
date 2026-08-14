@@ -1480,6 +1480,7 @@ def run_tui(
             sandbox_mode=rt["cfg"].tools.sandbox_mode,
             network_allowed=rt["cfg"].tools.network_allowed,
             fs_config=rt["cfg"].tools.sandbox_fs,
+            bash_shell=rt["cfg"].tools.bash_shell,
         )
 
     def _load_session(sid: str) -> None:

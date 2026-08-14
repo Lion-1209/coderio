@@ -59,25 +59,29 @@ pip install "coderio @ git+https://github.com/Lion-1209/coderio.git"
 pip install coderio-0.3.0-py3-none-any.whl
 ```
 
-**方式三：从源码安装（开发者）**
+**方式三：从源码安装（开发者，推荐 uv）**
 
 ```bash
 git clone https://github.com/Lion-1209/coderio.git
 cd coderio
+
+# 用 uv（推荐——与 CI 一致，依赖锁定在 uv.lock）
+uv sync --extra dev          # 创建 .venv 并按 uv.lock 精确安装
+uv run pytest -q             # 通过 uv run 执行命令
+
+# 或传统 pip（不读锁文件，解析最新兼容版本）
 python -m venv .venv
-
-# Windows (Git Bash)
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
-
-# Linux / macOS
-.venv/bin/python -m pip install -e ".[dev]"
+.venv/Scripts/python.exe -m pip install -e ".[dev]"    # Windows (Git Bash)
+.venv/bin/python -m pip install -e ".[dev]"            # Linux / macOS
 ```
 
-要求：Python 3.11+，Windows 上需安装 Git Bash（bash 工具依赖）。
+要求：Python 3.11+，Windows 上需安装 Git Bash（shell 工具依赖）。
+
+**依赖管理**：CI 用 `uv sync --frozen` 按 [uv.lock](uv.lock) 精确安装（可复现）；Dependabot 每周提依赖升级 PR 时会同时更新 pyproject.toml 和 uv.lock。改依赖后本地跑 `uv lock` 重新生成并提交两者。
 
 **MCP 支持**（可选）：安装 MCP extra 后可接入外部 MCP 服务器工具：
 ```bash
-pip install -e ".[mcp]"    # 安装 mcp + langchain-mcp-adapters
+uv sync --extra dev --extra mcp    # 或 pip install -e ".[mcp]"
 ```
 不安装也不影响 coderio 正常使用——`.mcp.json` 配置会被静默忽略。
 

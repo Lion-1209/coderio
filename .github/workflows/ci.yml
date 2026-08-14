@@ -42,30 +42,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
+      # uv replaces pip for dependency installation (2026-08-14 migration).
+      # uv.lock is a first-class lockfile for both uv and Dependabot: CI gets
+      # fully reproducible installs (P1-4), while Dependabot updates pyproject
+      # constraints AND regenerates uv.lock in its PRs — the two mechanisms
+      # cooperate instead of fighting (the bare requirements-dev.txt approach
+      # had Dependabot produce internally-inconsistent updates; see PR #6).
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
 
-      - name: Install dependencies
-        # Install from the pinned lockfile for reproducible builds. The project
-        # itself is installed with --no-deps so the locked versions win (without
-        # --no-deps, pip would resolve coderio's dependencies fresh and could
-        # pick different transitive versions, defeating the lockfile).
-        #
-        # The lockfile pins main + [dev] extras. To add the [mcp] extra in CI,
-        # append `mcp` to the extras and re-pin (see requirements-dev.txt header).
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-          pip install --no-deps -e .
+      - name: Install dependencies (locked)
+        # --frozen: install EXACTLY what uv.lock pins; error if the lock is
+        # out of sync with pyproject.toml (forces committing both together).
+        # --extra dev: the dev dependency group (pytest/ruff/mypy/build).
+        run: uv sync --frozen --extra dev
 
       - name: Check dependency consistency
-        # Verifies no broken/conflicting requirements after install.
-        # Catches version conflicts between deepagents/langchain/langgraph.
-        shell: bash
-        run: pip check
+        run: uv run python -m pip check
 
       - name: Audit dependencies for known vulnerabilities
         # Scans installed packages against the PyPI advisory database.
@@ -73,8 +68,8 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
-          pip install pip-audit
-          pip-audit --skip-editable
+          uv pip install pip-audit
+          uv run pip-audit
 
       - name: Run tests with coverage
         # Enforces a coverage floor so coverage can't silently regress.
@@ -84,20 +79,19 @@ jobs:
         # fail_under=60 is the local-dev default; CI enforces the stricter 70%.
         shell: bash
         run: |
-          python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=70
+          uv run python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=70
 
       - name: Type check (mypy)
         # HARD GATE for clean modules. pyproject.toml's [[tool.mypy.overrides]]
         # lists modules with known type issues (ignore_errors=true) — each is a
         # tracked cleanup TODO. Modules NOT in that list must stay type-clean,
-        # so new type errors in clean code fail CI. Remove the `|| true` once
-        # the override list is empty (all modules cleaned up).
+        # so new type errors in clean code fail CI.
         shell: bash
         run: |
-          python -m mypy src/coderio
+          uv run python -m mypy src/coderio
 
       - name: Build wheel (smoke)
         shell: bash
         run: |
-          python -m pip wheel --no-deps . -w /tmp/wheel-test
+          uv build --wheel -o /tmp/wheel-test
           echo "Wheel built successfully"

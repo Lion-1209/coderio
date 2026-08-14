@@ -20,6 +20,8 @@ whole-text dumps and misses token streaming entirely.
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,8 @@ from coderio.agent.permission_middleware import PermissionMiddleware
 from coderio.agent.stream import NullStream
 from coderio.session import Message
 from coderio.session.store import Session
+
+_log = logging.getLogger(__name__)
 
 
 def _content_to_text(content: Any) -> str:
@@ -81,7 +85,9 @@ class _WinLocalShellBackend:
     # be importable. This factory builds a real subclass per instance.
     _RealCls = None
 
-    def __new__(cls, sandbox_mode: str = "off", network_allowed: bool = True, fs_config=None, **kwargs):
+    def __new__(
+        cls, sandbox_mode: str = "off", network_allowed: bool = True, fs_config=None, bash_shell: str = "", **kwargs
+    ):
         if cls._RealCls is None:
             from deepagents.backends import LocalShellBackend
 
@@ -107,6 +113,42 @@ class _WinLocalShellBackend:
                 # without changing LocalShellBackend's own __init__ signature.
                 _network_allowed: bool = True
                 _fs_config = None
+                # Explicit bash path ([tools].bash_shell config, empty = auto-detect).
+                # Windows NEEDS this: shell=True on win32 routes to COMSPEC
+                # (cmd.exe), but the system prompt tells the model it's talking
+                # to Git Bash — cmd.exe mangles single-quoted args, so
+                # python -c 'print(42)' silently returns EMPTY output with
+                # exit 0 (2026-08-14 report P0-4: the model thinks the command
+                # succeeded and cannot self-correct).
+                _bash_shell: str = ""
+
+                def _resolve_bash(self) -> str | None:
+                    """Find a bash executable, or None to fall back to shell=True.
+
+                    Cached at module level after the first successful probe —
+                    the probe does filesystem checks we don't want per-command.
+                    """
+                    if sys.platform != "win32":
+                        return None  # POSIX shell=True is /bin/sh -c — already correct
+                    cached = _Sub._bash_cache
+                    if cached is not None:
+                        return cached or None
+                    try:
+                        from coderio.tools.bash import detect_shell
+
+                        path = detect_shell(getattr(self, "_bash_shell", "") or "")
+                        _Sub._bash_cache = path
+                        return path
+                    except FileNotFoundError:
+                        _log.warning(
+                            "bash not found (Git Bash not installed?) — falling back to "
+                            "cmd.exe. Single-quoted args and POSIX syntax will misbehave; "
+                            "install Git Bash or set [tools].bash_shell."
+                        )
+                        _Sub._bash_cache = ""
+                        return None
+
+                _bash_cache: str | None = None
 
                 def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
                     import subprocess
@@ -156,10 +198,18 @@ class _WinLocalShellBackend:
                     effective_timeout = timeout if timeout is not None else getattr(self, "_default_timeout", 120)
                     max_output = getattr(self, "_max_output_bytes", 100_000)
                     env = getattr(self, "_env", None)
+                    # Windows: run through Git Bash explicitly ([bash, '-c', cmd])
+                    # instead of shell=True→cmd.exe. cmd.exe doesn't process single
+                    # quotes, so `python -c 'print(42)'` returned EMPTY output with
+                    # exit 0 — the model believed broken commands succeeded
+                    # (2026-08-14 report P0-4). POSIX keeps shell=True (/bin/sh -c,
+                    # semantically identical to bash -c for our purposes).
+                    bash_path = self._resolve_bash()
+                    run_args = [bash_path, "-c", command] if bash_path else command
                     try:
                         proc = subprocess.run(
-                            command,
-                            shell=True,
+                            run_args,
+                            shell=(bash_path is None),
                             capture_output=True,
                             cwd=cwd,
                             timeout=effective_timeout,
@@ -189,6 +239,7 @@ class _WinLocalShellBackend:
         inst._sandbox_mode = sandbox_mode
         inst._network_allowed = network_allowed
         inst._fs_config = fs_config
+        inst._bash_shell = bash_shell
         return inst
 
 
@@ -283,6 +334,50 @@ def _build_research_subagent():
     }
 
 
+def _build_general_purpose_subagent(gate, command_policy):
+    """Return the general-purpose subagent spec with coderio's security middleware.
+
+    SECURITY FIX (2026-08-14 report P0-2): deepagents auto-injects a
+    ``general-purpose`` subagent when the caller doesn't provide one
+    (graph.py:711-770), with a HARDCODED middleware list that does NOT include
+    coderio's PermissionMiddleware / CommandReviewMiddleware / HarnessMiddleware.
+    That subagent gets execute + write_file + edit_file via FilesystemMiddleware
+    and shares the main backend — so ``task(subagent_type="general-purpose")``
+    bypassed ALL of coderio's security layers. In PLAN mode (nominally
+    read-only), a prompt-injected model could delegate arbitrary shell + file
+    writes to this subagent unchecked.
+
+    Fix: provide an EXPLICIT spec with the same name ("general-purpose") —
+    deepagents skips its auto-injection when a same-named spec exists — and
+    inject coderio's middleware stack so every tool call inside the subagent
+    goes through the same permission gate + command review as the main agent.
+    """
+    from coderio.agent.command_review import CommandReviewMiddleware
+    from coderio.tools.command_policy import CommandPolicy
+
+    middleware = []
+    if gate is not None:
+        from coderio.agent.permission_middleware import PermissionMiddleware
+
+        middleware.append(PermissionMiddleware(gate))
+    policy = command_policy or CommandPolicy.default()
+    middleware.append(CommandReviewMiddleware(policy, gate=gate))
+    return {
+        "name": "general-purpose",
+        "description": (
+            "General-purpose subagent with full tool access. coderio's "
+            "permission gate and command review apply to every tool call "
+            "inside this agent, same as the main agent."
+        ),
+        "system_prompt": (
+            "You are a general-purpose subagent. Complete the task you were "
+            "given and return a clear, complete result. The calling agent "
+            "only sees your final message, not intermediate tool calls."
+        ),
+        "middleware": middleware,
+    }
+
+
 def _build_inputs(checkpointer, user_input: str, session: Session) -> dict:
     """Build the messages input for the agent stream.
 
@@ -330,6 +425,7 @@ def run_deep_agent(
     sandbox_mode: str = "off",
     network_allowed: bool = True,
     fs_config=None,
+    bash_shell: str = "",
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -392,6 +488,7 @@ def run_deep_agent(
         sandbox_mode=sandbox_mode,
         network_allowed=network_allowed,
         fs_config=fs_config,
+        bash_shell=bash_shell,
     )
 
     extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)
@@ -400,7 +497,10 @@ def run_deep_agent(
         "model": model,
         "middleware": middleware,
         "backend": backend,
-        "subagents": [_build_research_subagent()],
+        "subagents": [
+            _build_research_subagent(),
+            _build_general_purpose_subagent(gate, command_policy),
+        ],
     }
     if sp:
         build_kwargs["system_prompt"] = sp

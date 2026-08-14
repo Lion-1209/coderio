@@ -56,8 +56,12 @@ dev = [
 # MCP (Model Context Protocol) support — opt-in. Install with:
 #   pip install -e ".[mcp]"
 # Without this extra, load_mcp_tools returns [] silently (no .mcp.json effect).
+# NOTE: mcp itself is pulled in transitively by langchain-mcp-adapters — do NOT
+# pin it here. adapters 0.3.2 constrains mcp to >=1.24,<2.0; an explicit
+# "mcp>=2.0" here conflicts with that upper bound and makes uv/pip resolution
+# unsatisfiable (found while migrating to uv.lock 2026-08-14). When adapters
+# ships mcp-2.x support, this comment can go.
 mcp = [
-    "mcp>=2.0",
     "langchain-mcp-adapters>=0.3.2",
 ]
 
@@ -116,8 +120,9 @@ select = ["E", "F", "W", "I", "S"]
 # 4-char suffix). No security dependency on unpredictability.
 "src/coderio/session/store.py" = ["S311"]
 # Deep agent: S602 — shell=True is required by deepagents' LocalShellBackend.
-# Experimental module, not wired into the default CLI path.
-"src/coderio/agent/deep_loop.py" = ["S602"]
+# S603 — the LocalShellBackend override runs model-generated bash commands;
+# executing them IS the tool's purpose (same rationale as tools/bash.py).
+"src/coderio/agent/deep_loop.py" = ["S602", "S603"]
 # Sandbox modules: S602/S603 — running arbitrary subprocess commands IS the
 # sandbox's entire purpose. The sandbox itself (bubblewrap namespace isolation
 # on Linux, Restricted Token + Job Object on Windows) is the security boundary,

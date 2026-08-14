@@ -38,14 +38,35 @@ def test_web_search_returns_results(monkeypatch):
 
 
 def test_web_fetch_extracts_text(monkeypatch):
+    """Fetch path now uses httpx.Client (SSRF fix: manual redirect hops), so
+    patch Client — the old httpx.get patch no longer intercepts anything."""
+
     class _Resp:
         status_code = 200
+        is_redirect = False
+        headers = {"content-type": "text/html"}
         text = "<html><body><article>Hello world</article></body></html>"
 
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
+        def iter_bytes(self):
+            yield b"<html><body><article>Hello world</article></body></html>"
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def get(self, url):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
     tool = WebFetchTool()
     out = tool.run(url="http://example.com")
     assert "Hello world" in out

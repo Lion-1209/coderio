@@ -174,6 +174,60 @@ def test_verify_gate_passes_after_bash():
     assert cont is False and inject is None and warn is None
 
 
+# --- CONTRACT tests: exit-code parsing at the coderio↔deepagents seam ---
+# REGRESSION (2026-08-14 report P0-1): the production engine (deepagents)
+# wraps ExecuteResponse into a ToolMessage — the .exit_code attribute is gone,
+# the exit code survives only as text in content:
+#   "[Command failed with exit code 1]" / "[Command succeeded with exit code 0]"
+# (deepagents/middleware/filesystem.py). The old _EXIT_CODE_RE only matched
+# coderio's legacy "[exit_code: N]" format, so EVERY production execute call
+# parsed as None → treated as "neutral pass" → failed tests cleared the
+# unverified-writes list → VerifyGate (the project's headline feature) was
+# completely inert. These tests pin the contract with REAL deepagents
+# message shapes so an upstream format change fails loudly here, not silently
+# in production.
+
+
+def test_verify_gate_failed_test_deepagents_format_blocks():
+    """A FAILING test run (deepagents ToolMessage content format) must NOT
+    clear writes_since_verify — the gate must still block 'done'."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "pytest -q"}, "[Command failed with exit code 1]")
+    cont, inject, _ = h.check_termination("done")
+    assert cont is True, "FAILED pytest (deepagents format) must NOT count as verified"
+    assert inject is not None
+
+
+def test_verify_gate_passed_test_deepagents_format_clears():
+    """A PASSING test run (deepagents format) clears the unverified writes."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "pytest -q"}, "[Command succeeded with exit code 0]")
+    cont, inject, _ = h.check_termination("done")
+    assert cont is False and inject is None
+
+
+def test_verify_gate_legacy_exit_code_format_still_works():
+    """Back-compat: coderio's legacy BashTool format still parses."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "pytest -q"}, "3 failed\n[exit_code: 1]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "FAILED pytest (legacy format) must NOT count as verified"
+
+
+def test_parse_exit_code_both_formats():
+    """Unit-pin the regex: both marker formats parse to the same exit code."""
+    from coderio.agent.harness import _parse_exit_code
+
+    assert _parse_exit_code("output\n[exit_code: 1]") == 1
+    assert _parse_exit_code("output\n[exit_code: 0]") == 0
+    assert _parse_exit_code("[Command failed with exit code 1]") == 1
+    assert _parse_exit_code("[Command succeeded with exit code 0]") == 0
+    assert _parse_exit_code("no markers here") is None
+
+
 def test_verify_gate_passes_when_nothing_written():
     h = _harness()
     cont, inject, warn = h.check_termination("here's your answer")

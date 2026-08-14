@@ -332,8 +332,9 @@ def test_win_shell_backend_uses_cwd_attr(tmp_path):
     """The production shell backend must read self.cwd (set by FilesystemBackend
     from root_dir), not the non-existent self._root_dir.
 
-    Instantiates the backend with root_dir=tmp_path, then runs `pwd` (POSIX)
-    or `cd` (Windows) and verifies the output reflects tmp_path, not Path.cwd().
+    Instantiates the backend with root_dir=tmp_path, then runs a cwd-reporting
+    command (`pwd` on POSIX, `pwd -W` on Windows/Git Bash) and verifies the
+    output reflects tmp_path, not Path.cwd().
     """
     import pytest
 
@@ -349,11 +350,20 @@ def test_win_shell_backend_uses_cwd_attr(tmp_path):
     # Execute a cwd-reporting command.
     import sys
 
-    cmd = "cd" if sys.platform == "win32" else "pwd"
+    # P0-4 (2026-08-14): Windows executes through Git Bash, so the command must
+    # be bash-compatible — bare `cd` is SILENT in bash (it only prints in
+    # cmd.exe). `pwd -W` is a Git Bash builtin that prints the Windows-form
+    # path (C:/...), matching tmp_path.as_posix().
+    if sys.platform == "win32":
+        cmd = "pwd -W"
+        expected = tmp_path.as_posix()
+    else:
+        cmd = "pwd"
+        expected = str(tmp_path)
     result = backend.execute(cmd)
     output = getattr(result, "output", "") or ""
     # The output must mention tmp_path (the shell ran in the workspace root).
-    assert str(tmp_path) in output, f"execute should run in self.cwd ({tmp_path}), got output: {output!r}"
+    assert expected in output, f"execute should run in self.cwd ({expected}), got output: {output!r}"
 
 
 def test_win_shell_backend_truncates_oversized_output(tmp_path):

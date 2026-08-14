@@ -314,3 +314,56 @@ def test_whitelist_destructive_commands_not_in_defaults():
 
     for must_block in ("rm", "rmdir", "dd", "mkfs", "shutdown"):
         assert must_block not in _DEFAULT_ALLOWED, f"{must_block!r} must NOT be in the default whitelist (destructive)"
+
+
+# ----------------------------------------------------- blacklist hardening (P0-5)
+# REGRESSION (2026-08-14 report): the original single-flag regex caught the
+# HARMLESS bare `rm -rf /` (coreutils refuses it without --no-preserve-root)
+# while missing every ACTUALLY-destructive variant. These tests pin all the
+# forms the report verified as bypasses.
+
+
+def test_blacklist_no_preserve_root():
+    """--no-preserve-root is the ONLY way `rm -rf /` actually deletes root —
+    it must be blocked wherever it appears after rm."""
+    p = CommandPolicy()
+    for cmd in ("rm -rf / --no-preserve-root", "rm -rf --no-preserve-root /"):
+        assert p.check_command(cmd) is not None, f"must block: {cmd!r}"
+
+
+def test_blacklist_split_flags():
+    """Flags written separately (rm -r -f /) must be blocked, not just rm -rf."""
+    p = CommandPolicy()
+    assert p.check_command("rm -r -f /") is not None
+    assert p.check_command("rm -r -f /etc") is not None
+
+
+def test_blacklist_quoted_root():
+    """Quoted root (rm -rf "/") must be blocked."""
+    p = CommandPolicy()
+    assert p.check_command('rm -rf "/"') is not None
+    assert p.check_command("rm -rf '/'") is not None
+
+
+def test_blacklist_chmod_leading_zero():
+    """chmod -R 0777 / (leading-zero mode) must be blocked like chmod -R 777 /."""
+    p = CommandPolicy()
+    assert p.check_command("chmod -R 0777 /") is not None
+    assert p.check_command("chmod -R 777 /") is not None
+
+
+def test_blacklist_find_root_delete():
+    """find starting at / with -delete wipes every match under root."""
+    p = CommandPolicy()
+    assert p.check_command("find / -delete") is not None
+    assert p.check_command("find / -name x -delete") is not None
+    assert p.check_command("find / -type f -delete") is not None
+    # Relative find -delete is a legitimate (if aggressive) workspace op.
+    assert p.check_command("find ./src -delete") is None
+
+
+def test_blacklist_hardening_no_false_positives():
+    """The hardened patterns must not block normal workspace commands."""
+    p = CommandPolicy()
+    for cmd in ("rm -rf ./build", "rm -rf build", "chmod -R 755 ./deploy", "find . -name test", "echo find /"):
+        assert p.check_command(cmd) is None, f"false positive on {cmd!r}"

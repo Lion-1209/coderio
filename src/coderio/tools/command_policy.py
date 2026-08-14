@@ -60,13 +60,32 @@ _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     # Recursive deletion of root or any system directory (/home, /etc, /usr, ...).
     # `rm -rf /home` is just as catastrophic as `rm -rf /`. Any absolute path
     # under root with -rf is blocked; `rm -rf ./build` (relative) is fine.
-    (r"\brm\s+-[rRfF]*[rR][fF]*\s+/(?:\S|$)", "recursive delete of system directory (absolute path under /)"),
-    # Also catch bare `rm -rf /` with nothing after (trailing space or EOL):
-    # the \S branch above needs a non-space char, so handle the bare-root case.
-    (r"\brm\s+-[rRfF]*[rR][fF]*\s+/\s*$", "recursive delete of root directory"),
-    (r"\brm\s+-[rRfF]*[rR][fF]*\s+~(?:\s|$|/)", "recursive delete of home directory"),
-    (r"\brm\s+-[rRfF]*[rR][fF]*\s+\$HOME(?:\s|$|/)", "recursive delete of home directory"),
-    (r"\brm\s+-[rRfF]*[rR][fF]*\s+\*", "recursive delete of all files (rm -rf *)"),
+    #
+    # REGRESSION HARDENING (2026-08-14 report): the original single-flag regex
+    # `-[rRfF]*[rR][fF]*` missed several ACTUALLY-DESTRUCTIVE forms while the
+    # harmless bare `rm -rf /` (coreutils refuses it without
+    # --no-preserve-root!) was the only one blocked:
+    #   - `rm -rf / --no-preserve-root`  ← the only form that truly deletes /
+    #   - `rm -r -f /`                  ← flags written separately
+    #   - `rm -rf "/"`                  ← quoted root
+    #   - `chmod -R 0777 /`             ← leading-zero mode
+    # Fixed below with dedicated patterns; each verified by tests in
+    # test_command_policy.py ("blacklist hardening" section).
+    # Flags may be split across multiple dash-groups: rm -r -f, rm -rf -v, ...
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+/(?:\S|$)", "recursive delete of system directory (absolute path under /)"),
+    # Bare `rm -rf /` at end-of-line (trailing space or EOL).
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+/\s*$", "recursive delete of root directory"),
+    # Quoted root: rm -rf "/" or rm -rf '/'.
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+[\"']/[\"'](?:\s|$)", "recursive delete of root directory (quoted)"),
+    # --no-preserve-root anywhere after rm: its ONLY purpose is defeating the
+    # coreutils root protection — no legitimate coding task uses it.
+    (r"\brm\b[^|;&]*--no-preserve-root", "rm with --no-preserve-root (removes root-delete protection)"),
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+~(?:\s|$|/)", "recursive delete of home directory"),
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+\$HOME(?:\s|$|/)", "recursive delete of home directory"),
+    (r"\brm\s+(?:-[rRfFvIi]+\s+)+\*", "recursive delete of all files (rm -rf *)"),
+    # find starting at / with -delete: deletes every match under root.
+    # `find / -name x -delete` etc. — any find rooted at / ending in -delete.
+    (r"\bfind\s+/(?:\s|$).*?-delete\b", "find -delete starting at filesystem root"),
     # Filesystem format — destroys all data on a device.
     (r"\bmkfs(?:\.\w+)?\s", "filesystem format (destroys all data on target)"),
     # Writing to raw block devices.
@@ -75,8 +94,9 @@ _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     # Fork bomb — the bash classic `:(){:|:&};:` and spaced variants.
     # Allow optional space between `:` and `()` (some shells/users space it).
     (r":\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;", "fork bomb"),
-    # Global permission corruption.
-    (r"\bchmod\s+-R\s+777\s+/(?:\S|$)", "recursive world-writable on system directory"),
+    # Global permission corruption. Accept 777 with or without leading 0
+    # (chmod accepts both `777` and `0777`; the old pattern missed 0777).
+    (r"\bchmod\s+-R\s+0?777\s+/(?:\S|$)", "recursive world-writable on system directory"),
     # System power control — no coding task needs these.
     (r"\b(?:shutdown|reboot|halt|poweroff)\b", "system power control"),
     # Kernel module manipulation — loading/unloading kernel code.
