@@ -1,32 +1,49 @@
 [build-system]
-requires = ["hatchling"]
+# hatchling>=1.26 required for SPDX license expressions (PEP 639).
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
 name = "coderio"
-version = "0.3.0"
+version = "0.4.0"
 description = "A skill-driven coding agent — structural harness, foldable thinking TUI, deepagents engine."
-readme = "README.md"
+readme = "README_en.md"
 license = "MIT"
 requires-python = ">=3.11"
-keywords = ["agent", "coding-agent", "llm", "langchain", "langgraph", "textual", "tui", "cli"]
+keywords = [
+    "agent",
+    "coding-agent",
+    "ai-agent",
+    "llm",
+    "langchain",
+    "langgraph",
+    "textual",
+    "tui",
+    "cli",
+    "mcp",
+    "model-context-protocol",
+    "sandbox",
+    "skills",
+]
+# NOTE: no License classifier — PEP 639 forbids combining a license expression
+# with a license classifier; modern hatchling errors on the pair.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Code Generators",
 ]
 authors = [
     { name = "coderio contributors" },
 ]
-project-urls = { Homepage = "https://github.com/Lion-1209/coderio", Issues = "https://github.com/Lion-1209/coderio/issues" }
+project-urls = { Homepage = "https://github.com/Lion-1209/coderio", Repository = "https://github.com/Lion-1209/coderio", Issues = "https://github.com/Lion-1209/coderio/issues", Changelog = "https://github.com/Lion-1209/coderio/blob/main/CHANGELOG.md", Documentation = "https://github.com/Lion-1209/coderio/blob/main/docs/coderio-architecture.md" }
 dependencies = [
     "ddgs>=4.0",
     "deepagents>=0.6",
@@ -68,8 +85,34 @@ mcp = [
 [project.scripts]
 coderio = "coderio.cli.app:main_entry"
 
+[tool.hatch.build]
+# Explicit (hatchling's default glob would also find it, but being explicit
+# documents the intent and keeps future hatchling defaults from changing it).
+license-files = ["LICENSE"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/coderio"]
+
+# sdist: explicit ALLOWLIST. hatchling's default sdist globs the whole project
+# dir (ignoring .gitignore), which would ship local-only files — internal
+# audit reports, scratch scripts, stray session sqlite files. Only what a
+# packager/contributor actually needs goes in.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/.github",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/README.md",
+    "/README_en.md",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/THIRD_PARTY_LICENSES.md",
+]
 
 [tool.ruff]
 line-length = 120

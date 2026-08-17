@@ -1,12 +1,19 @@
 name: Release
 
-# Triggered by pushing a tag like v0.1.0. Builds a wheel and attaches it
-# to a GitHub Release, so users can `pip install coderio-*.whl` without
-# cloning the repo or going through PyPI.
+# Triggered by pushing a tag like v0.4.0. Builds wheel + sdist, runs the test
+# suite, verifies both artifacts in a clean venv, publishes to PyPI (Trusted
+# Publishing, no token) and attaches both to a GitHub Release.
 #
 # To cut a release:
-#   git tag v0.1.0
-#   git push origin v0.1.0
+#   git tag v0.4.0
+#   git push origin v0.4.0
+#
+# PyPI publishing uses Trusted Publishing (OIDC). One-time setup (repo owner):
+#   pypi.org → Account settings → Publishing → Add a new pending publisher:
+#     PyPI project name: coderio
+#     Owner: Lion-1209 / Repository: coderio
+#     Workflow name: release.yml / Environment: pypi
+#   Then create the "pypi" environment in the repo (Settings → Environments).
 
 on:
   push:
@@ -17,7 +24,24 @@ permissions:
   contents: write  # needed to create the release + upload assets
 
 jobs:
+  # Test gate: a tag is a release — it must not ship broken code. The CI
+  # workflow covers pushes/PRs, but a tag could be cut from a commit that
+  # predates a fix; this gate makes the release itself fail loudly instead.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Run test suite
+        run: |
+          uv sync --frozen --extra dev
+          uv run python -m pytest -q
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,21 +50,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build wheel
+      - name: Build wheel + sdist
         run: |
           pip install build
-          python -m build --wheel
+          python -m build
 
       - name: Verify wheel in clean venv (full deps)
         # Install the wheel WITH all dependencies (not --no-deps) to verify
         # the full user install path. Then run --help + import the deepagents
         # engine + verify bundled skills. This catches missing deps that the
-        # old --no-deps + manual 5-package approach missed (deepagents, ddgs,
-        # langgraph-checkpoint-sqlite, etc.).
+        # old --no-deps + manual 5-package approach missed.
         run: |
           python -m venv /tmp/wheel-test-venv
           /tmp/wheel-test-venv/bin/pip install dist/*.whl
           /tmp/wheel-test-venv/bin/coderio --help
+          /tmp/wheel-test-venv/bin/coderio run --help
           # Verify the deepagents engine imports (the production path).
           /tmp/wheel-test-venv/bin/python -c "
           from coderio.agent.deep_loop import run_deep_agent
@@ -60,8 +84,39 @@ jobs:
           print(f'{len(store.names())} bundled skills OK')
           "
 
-      - name: Create GitHub Release + attach wheel
+      - name: Verify sdist installs
+        # sdist is the source-of-truth artifact; verify it installs and runs
+        # too (a broken sdist — missing files, bad metadata — only shows up
+        # at install time).
+        run: |
+          python -m venv /tmp/sdist-test-venv
+          /tmp/sdist-test-venv/bin/pip install dist/*.tar.gz
+          /tmp/sdist-test-venv/bin/coderio --help
+
+      - name: Create GitHub Release + attach artifacts
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: dist/*.whl
+          files: dist/*.whl dist/*.tar.gz
+
+  publish-pypi:
+    # PyPI via Trusted Publishing (OIDC) — no API token to manage or leak.
+    # Requires the one-time pending-publisher setup described at the top.
+    needs: release
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build (same commit as the verified artifacts)
+        run: |
+          pip install build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true

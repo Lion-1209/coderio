@@ -177,6 +177,38 @@ def mcp_remove_cmd(
         console.print(f"[green]{result.action.capitalize()}[/green]: {result.message}")
 
 
+@app.command("run")
+def run_cmd(
+    task: str = typer.Argument(..., help="Task text for a one-shot headless agent run."),
+    provider: str = typer.Option(None, "--provider", help="Override provider_id."),
+    model: str = typer.Option(None, "--model", help="Override model name."),
+    permission: str = typer.Option(
+        "full",
+        "--permission",
+        "-p",
+        help="Permission tier: full (default, headless can't answer prompts), plan, confirm, auto_edit.",
+    ),
+    session_id: str = typer.Option(None, "--session-id", help="Resume a prior session by id."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Print only the final result."),
+):
+    """One-shot headless agent run (CI / scripting / benchmarks).
+
+    Streams tokens to stdout by default; tool progress goes to stderr. Never
+    prompts interactively — untrusted repo config or missing credentials are
+    hard errors. The command blacklist still applies in full mode.
+    """
+    from coderio.cli.run_cmd import run_headless
+
+    run_headless(
+        task,
+        provider=provider,
+        model=model,
+        permission=permission,
+        session_id=session_id,
+        quiet=quiet,
+    )
+
+
 @app.command("config")
 def config_cmd():
     """Print current configuration."""

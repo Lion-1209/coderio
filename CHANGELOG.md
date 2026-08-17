@@ -6,7 +6,32 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-17
+
+### Added
+- **Headless mode: `coderio run "task"`** — one-shot non-interactive agent run
+  for CI, scripting, and benchmark harnesses. `--permission` (default `full` —
+  headless can't answer prompts), `--provider/--model` overrides,
+  `--session-id` to resume, `--quiet` for final-result-only output. Tokens
+  stream to stdout, tool progress to stderr. Hard-fails (never hangs) on
+  missing onboarding or untrusted repo config. The blacklist + four gates stay
+  active. New module `cli/run_cmd.py` (+9 tests).
+- **PyPI release pipeline**: release.yml now runs the test suite as a gate,
+  builds wheel + sdist (both install-verified in clean venvs), attaches both
+  to the GitHub Release, and publishes to PyPI via Trusted Publishing (OIDC,
+  no token; `attestations: true`). One-time setup for the repo owner: add a
+  pending publisher on pypi.org (project `coderio`, workflow `release.yml`,
+  environment `pypi`) and create the `pypi` environment.
+- **Packaging metadata**: `readme` now points to the fully rewritten English
+  README (PyPI page is English-first; GitHub keeps the Chinese README front);
+  removed the license classifier (PEP 639 conflict with the SPDX expression);
+  `hatchling>=1.26` floor; added Repository/Changelog/Documentation URLs;
+  Python 3.13 classifier; mcp/sandbox/skills keywords.
+- **README_en.md fully rewritten** (445 lines, synced with the Chinese
+  README): sandbox modes + filesystem 4-tuple, MCP (.mcp.json/ZCode
+  fields/CLI/permissions), repo trust confirmation, SSRF protection, headless
+  mode, uv-based dev setup, the honest security positioning. The old English
+  README was 13 days stale (0 mentions of sandbox/MCP vs 37 in Chinese).
 
 ### Security — 2026-08-14 v2 audit follow-ups (all verified)
 - **Repo-config first-use trust confirmation** (v2 audit's biggest remaining
