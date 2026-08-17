@@ -212,6 +212,11 @@ class HookRunner:
         env = dict(os.environ)
         env["CODERIO_PROJECT_DIR"] = self.project_dir
 
+        # POSIX: the hook MUST get its own process group (start_new_session) —
+        # kill_process_tree's POSIX branch kills via os.killpg, and without a
+        # separate session the child shares OUR group, so a hook timeout would
+        # SIGKILL the agent itself (caught by the Linux/macOS CI matrix after
+        # the Windows-only local run passed; bash.py:242 has the same guard).
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
@@ -219,6 +224,7 @@ class HookRunner:
             stderr=subprocess.PIPE,
             cwd=self.project_dir,
             env=env,
+            start_new_session=(sys.platform != "win32"),
         )
         try:
             stdout, stderr = proc.communicate(input=stdin_json.encode("utf-8"), timeout=spec.timeout)
