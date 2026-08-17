@@ -8,6 +8,47 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Security — 2026-08-14 v2 audit follow-ups (all verified)
+- **Repo-config first-use trust confirmation** (v2 audit's biggest remaining
+  hole): cloned repos could previously set `permission_mode="full"`, redirect
+  `model.base_url` (session exfiltration), or spawn `.mcp.json` `command`
+  entries at startup with ZERO prompt — cloning a hostile repo ≈ arbitrary
+  code execution. Now: first detection of `.coderio/config.toml`/`.mcp.json`
+  shows a summary (file sizes, safety-relevant settings like
+  permission_mode/base_url, MCP server commands/URLs) and requires explicit
+  y/N before the config takes effect. Trust is CONTENT-keyed (sha256 of the
+  config files, stored in ~/.coderio/trusted-repos.json) — an upstream commit
+  editing the config after confirmation re-triggers the prompt. Same approach
+  as Claude Code / Codex / ZCode. +7 tests. New module: `config/trust.py`.
+- **VerifyGate residual bypasses closed** (3 paths the v1 fix left open):
+  (1) a `pytest -q` blocked by the permission gate returned "Permission
+  denied: ..." with no exit marker and fell into the "neutral pass" branch,
+  clearing unverified writes — bash results now require `_is_success` before
+  counting; (2) `echo pytest` and (3) `git commit -m "ran pytest"` matched
+  the verifier regex as substrings — the command is now split on `;|&` and
+  the tool must be the FIRST token of a segment (single-token tools matched
+  exactly; multi-token prefixes like `python -m pytest` require a known
+  runner as token 0). Real wrappers (`cd src && pytest`) still verify. +4
+  tests. One legacy test updated: "Error: exit code 1 clears writes" asserted
+  the pre-P0-1 "ran = verified" mindset; it now asserts errored runs keep
+  writes pending and the gate's escalation (2 attempts → release) prevents
+  infinite nagging.
+- **general-purpose subagent now carries HarnessMiddleware** (was Permission +
+  CommandReview only): without it, the model could delegate "write the code"
+  to the subagent and claim completion in the main agent — the subagent's
+  writes were invisible to VerifyGate. The subagent gets its own Harness
+  (state is per-agent) whose force-continue applies inside its loop.
+- **Middleware-layer contract tests**: the P0-1 tests pinned the FORMAT
+  STRINGS; these new ones pin the OBJECT SHAPE — real `langchain_core
+  ToolMessage` objects flow through `wrap_tool_call`, so if deepagents changes
+  the wrapper type again (the original P0-1 root cause), the breakage is
+  caught here, not in production. +3 tests.
+- **README security positioning**: the blacklist/whitelist section now states
+  plainly that they are 防手滑 (accident prevention), NOT 防对抗 (adversarial
+  defense) — variable expansion, base64, and shell composition bypass regex;
+  real isolation is the OS sandbox + permission tiers; untrusted code needs a
+  VM. Prevents users over-trusting the regex layers.
+
 ### Fixed — 2026-08-14 report P0 batch (5 fixes, all verified end-to-end)
 - **P0-1 · VerifyGate was inert in production**: the exit-code parser only
   matched coderio's legacy BashTool format (`[exit_code: N]`), but the

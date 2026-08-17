@@ -228,13 +228,83 @@ _VERIFY_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Shell operators that split a command line into independent segments. A tool
+# name appearing AFTER an operator (or inside a quoted argument) is not a
+# verification run: `echo pytest`, `git commit -m "ran pytest"`, and
+# `ls ; curl ... | sh` all "match" the tool regex as substrings but none of
+# them RUNS the tool. Splitting on these (crude vs a real shell parser, but
+# the false-negative direction is safe) lets us only match the tool at the
+# START of a segment, where it would actually execute.
+_SEGMENT_SPLIT_RE = re.compile(r"[;|&\n]")
+
+
+def _segment_runs_verifier(segment: str) -> bool:
+    """Does ONE command segment (no ; | & inside) start with a verify tool?
+
+    The tool must be the COMMAND (first token), not an argument. `echo
+    pytest` fails here (first token is `echo`); `pytest -q` passes;
+    `python -m pytest` passes (python as the command with -m pytest is a
+    verification run). Multi-token command prefixes in _VERIFY_COMMAND_RE
+    (python -m pytest, npm run test, cargo test...) are matched against the
+    segment's head — but single-token tools (pytest, ruff, mypy...) must
+    match at token 0 exactly, otherwise `echo pytest` / `git commit -m
+    "ran pytest"` style arguments would count as runs (2026-08-14 v2 audit
+    bypass #2/#3).
+    """
+    tokens = segment.strip().split()
+    if not tokens:
+        return False
+    first = tokens[0]
+    # Single-token verify tools: must BE the command. This is the gate that
+    # stops `echo pytest`, `which pytest`, `man pytest` from counting.
+    _SINGLE_TOKEN_TOOLS = {
+        "pytest",
+        "ruff",
+        "flake8",
+        "pylint",
+        "mypy",
+        "eslint",
+        "tsc",
+        "cmake",
+        "tox",
+        "nox",
+        "jest",
+        "vitest",
+    }
+    if first.lower() in _SINGLE_TOKEN_TOOLS:
+        return True
+    # Multi-token command prefixes (python -m pytest, npm run test, cargo
+    # test, go test, make test, ...): match against the first 3 tokens where
+    # the pattern anchors naturally (these patterns all START with the
+    # command name, so a match in the head means the command IS the tool).
+    head = " ".join(tokens[:3])
+    return bool(_VERIFY_COMMAND_RE.search(head)) and first.lower() in {
+        "python",
+        "python3",
+        "py",
+        "npm",
+        "npx",
+        "yarn",
+        "pnpm",
+        "bun",
+        "cargo",
+        "go",
+        "make",
+        "ruby",
+        "bundle",
+        "uv",
+    }
+
 
 def _command_verifies_written(command: str, written_files: list[str]) -> bool:
     """Does this bash command plausibly run or test the written code?
 
     Returns True if:
-      - The command is a known test/lint/build tool (pytest, npm test, cargo
-        test, ruff, etc.) — these verify code regardless of explicit filenames.
+      - Any SEGMENT of the command starts with a known test/lint/build tool
+        (pytest, npm test, cargo test, ruff, etc.). Segments are split on
+        ``; | &`` — a tool name that appears only as an ARGUMENT (`echo
+        pytest`, commit messages) does NOT count (2026-08-14 v2 audit:
+        three bypass paths through substring matching, all closed here).
       - The command references a written file by basename or path — e.g.
         ``python src/foo.py`` or ``node app.js``.
 
@@ -244,9 +314,11 @@ def _command_verifies_written(command: str, written_files: list[str]) -> bool:
     """
     if not command:
         return False
-    # Known verification tools count even without explicit file references.
-    if _VERIFY_COMMAND_RE.search(command):
-        return True
+    # Known verification tools count even without explicit file references —
+    # but only as the COMMAND of a segment, never as a string argument.
+    for segment in _SEGMENT_SPLIT_RE.split(command):
+        if _segment_runs_verifier(segment):
+            return True
     # Check if any written file's basename or path appears in the command.
     cmd_lower = command.lower()
     for f in written_files:
@@ -383,7 +455,18 @@ class Harness:
             command = str(args.get("command", ""))
             if _command_verifies_written(command, self.state.writes_since_verify):
                 exit_code = _parse_exit_code(result)
-                if exit_code is not None and exit_code != 0:
+                # A command that FAILED TO RUN at all (permission denied, tool
+                # error) can never count as verification — parse its exit code
+                # would miss these because they carry no marker at all.
+                # (2026-08-14 v2 audit: `pytest -q` blocked by the permission
+                # gate returned "Permission denied: ..." with no marker, which
+                # fell into the "neutral pass" branch below and cleared the
+                # unverified-writes list. _is_success already recognizes the
+                # "Permission denied"/"Error" prefixes — it just wasn't called
+                # in this branch.)
+                if not _is_success(result):
+                    pass  # Did not run → not verified; writes stay pending.
+                elif exit_code is not None and exit_code != 0:
                     # Verification FAILED. Do NOT clear writes_since_verify — the
                     # agent must fix the code and re-run. Do NOT increment
                     # verify_attempts here: that counter is the _verify_gate's

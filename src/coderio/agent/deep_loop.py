@@ -334,7 +334,7 @@ def _build_research_subagent():
     }
 
 
-def _build_general_purpose_subagent(gate, command_policy):
+def _build_general_purpose_subagent(gate, command_policy, stream=None):
     """Return the general-purpose subagent spec with coderio's security middleware.
 
     SECURITY FIX (2026-08-14 report P0-2): deepagents auto-injects a
@@ -351,11 +351,23 @@ def _build_general_purpose_subagent(gate, command_policy):
     deepagents skips its auto-injection when a same-named spec exists — and
     inject coderio's middleware stack so every tool call inside the subagent
     goes through the same permission gate + command review as the main agent.
+
+    2026-08-14 v2 audit follow-up: also inject HarnessMiddleware — WITHOUT it,
+    the model could delegate "write the code" to this subagent and then claim
+    completion in the main agent; the subagent's writes were invisible to the
+    main VerifyGate. The subagent gets its OWN Harness instance (harness state
+    is per-agent, not shared — the main gate can't see subagent tool calls
+    anyway), whose force-continue applies inside the subagent's loop. This
+    makes the subagent itself refuse to say "done" with unverified writes.
     """
     from coderio.agent.command_review import CommandReviewMiddleware
+    from coderio.agent.harness_middleware import HarnessMiddleware
     from coderio.tools.command_policy import CommandPolicy
 
     middleware = []
+    # Harness first (same order as the main agent — see run_deep_agent): it
+    # observes every tool call the permission/command layers let through.
+    middleware.append(HarnessMiddleware(stream=stream))
     if gate is not None:
         from coderio.agent.permission_middleware import PermissionMiddleware
 
@@ -499,7 +511,7 @@ def run_deep_agent(
         "backend": backend,
         "subagents": [
             _build_research_subagent(),
-            _build_general_purpose_subagent(gate, command_policy),
+            _build_general_purpose_subagent(gate, command_policy, stream=stream),
         ],
     }
     if sp:

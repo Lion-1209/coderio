@@ -279,3 +279,76 @@ def test_after_model_sync_handles_empty_todo_list():
     state = {"messages": [AIMessage(content="done", tool_calls=[])], "todos": []}
     mw.after_model(state, None)
     assert mw.harness.todos.todos == []
+
+
+# --- MIDDLEWARE-LAYER CONTRACT tests (2026-08-14 v2 audit follow-up) ---
+# The test_harness.py CONTRACT tests pin the FORMAT STRINGS ([Command failed
+# with exit code N]) by calling h.observe("bash", ..., str) directly. But the
+# production path delivers a langchain ToolMessage OBJECT to wrap_tool_call —
+# if upstream changes the object shape such that _result_to_text can't extract
+# .content anymore, those string tests still pass while production breaks
+# (exactly how P0-1 stayed hidden). These tests pin the OBJECT SHAPE: a real
+# ToolMessage flows through wrap_tool_call and the harness must still parse
+# the exit code out of its content.
+
+
+def _toolmessage_result(content: str):
+    """A real langchain ToolMessage, as deepagents' filesystem middleware
+    returns from the execute tool (deepagents/middleware/filesystem.py:1759)."""
+    from langchain_core.messages import ToolMessage
+
+    return ToolMessage(content=content, tool_call_id="tc-contract-1", name="execute")
+
+
+def test_contract_toolmessage_failed_test_does_not_clear_writes():
+    """Real ToolMessage with a FAILED exit code → writes_since_verify stays.
+
+    This is the full production shape: execute returns ToolMessage (not
+    ExecuteResponse), middleware extracts content via _result_to_text, the
+    harness parses the exit marker from that text. If deepagents changes the
+    wrapper type again, this test breaks HERE instead of in production.
+    """
+    mw = HarnessMiddleware()
+    mw.wrap_tool_call(
+        _tool_call_request("write_file", {"path": "a.py", "content": "x"}),
+        lambda r: "Wrote 1 chars",
+    )
+    assert mw.harness.state.writes_since_verify == ["a.py"]
+
+    result = _toolmessage_result("1 failed, 1 passed\n[Command failed with exit code 1]")
+    mw.wrap_tool_call(_tool_call_request("execute", {"command": "pytest -q"}), lambda r: result)
+
+    assert mw.harness.state.writes_since_verify == ["a.py"], (
+        "a FAILED test delivered as a real ToolMessage must NOT clear unverified writes"
+    )
+
+
+def test_contract_toolmessage_passed_test_clears_writes():
+    """Real ToolMessage with exit 0 → writes cleared, verification counted."""
+    mw = HarnessMiddleware()
+    mw.wrap_tool_call(
+        _tool_call_request("write_file", {"path": "a.py", "content": "x"}),
+        lambda r: "Wrote 1 chars",
+    )
+    result = _toolmessage_result("2 passed\n[Command succeeded with exit code 0]")
+    mw.wrap_tool_call(_tool_call_request("execute", {"command": "pytest -q"}), lambda r: result)
+
+    assert mw.harness.state.writes_since_verify == [], (
+        "a PASSED test delivered as a real ToolMessage SHOULD clear unverified writes"
+    )
+
+
+def test_contract_toolmessage_permission_denied_does_not_clear_writes():
+    """Real ToolMessage whose content is a permission denial (no exit marker)
+    → must NOT count as verification (v2 audit bypass #1, object-shape form)."""
+    mw = HarnessMiddleware()
+    mw.wrap_tool_call(
+        _tool_call_request("write_file", {"path": "a.py", "content": "x"}),
+        lambda r: "Wrote 1 chars",
+    )
+    result = _toolmessage_result("Permission denied: tool 'execute' blocked in plan mode.")
+    mw.wrap_tool_call(_tool_call_request("execute", {"command": "pytest -q"}), lambda r: result)
+
+    assert mw.harness.state.writes_since_verify == ["a.py"], (
+        "permission-denied execute delivered as a real ToolMessage must NOT clear writes"
+    )

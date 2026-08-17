@@ -1260,6 +1260,42 @@ def run_tui(
             tui.run()
             return
 
+    # Repo-config trust confirmation (2026-08-14 v2 audit: cloned malicious
+    # repos could set permission_mode="full"/redirect base_url/spawn MCP
+    # commands with zero prompt). Must run BEFORE build_runtime — that call
+    # loads the repo config AND spawns .mcp.json servers.
+    from coderio.config.loader import _find_project_dir
+    from coderio.config.trust import (
+        existing_repo_configs,
+        is_repo_trusted,
+        mark_repo_trusted,
+        summarize_repo_configs,
+    )
+
+    user_dir = Path.home() / ".coderio"
+    project_dir = _find_project_dir(Path(search_from).resolve())
+    if existing_repo_configs(project_dir) and not is_repo_trusted(project_dir, user_dir):
+        import typer
+
+        typer.secho(
+            "This repository contains coderio configuration files that were\nnot previously trusted:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo()
+        typer.echo(summarize_repo_configs(project_dir))
+        typer.echo()
+        typer.secho(
+            "These can change permissions, redirect the model endpoint, or start\n"
+            "local processes (MCP servers). Only trust repositories you control\n"
+            "or have reviewed.",
+            fg=typer.colors.YELLOW,
+        )
+        answer = typer.prompt("Trust this repository's coderio config? [y/N]", default="N")
+        if answer.strip().lower() not in ("y", "yes"):
+            typer.secho("Not trusted — exiting. Re-run and confirm to use this repo's config.", fg=typer.colors.RED)
+            raise typer.Exit(1)
+        mark_repo_trusted(project_dir, user_dir)
+
     try:
         cfg, store, model, tools, gate, session, active, _rich_stream = build_runtime(
             search_from=search_from,

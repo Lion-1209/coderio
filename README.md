@@ -222,6 +222,7 @@ deny_write = [".git/hooks"]  # workspace 内也强制只读
 路径支持 `~`（home）、`./` 或裸路径（workspace 相对）、`/abs`（绝对）。`deny_read` 的 tmpfs 黑洞**必须**在 `allow_read` 的 ro-bind 之前（bwrap 后挂载覆盖先挂载）——代码已保证这个顺序。
 
 **安全模型诚实声明**：
+- **黑白名单的定位是"防手滑"，不是"防对抗"**。它们拦截意外的破坏性命令（模型写错路径、漏看后果），但**不是安全边界**——变量展开（`X=/; rm -rf $X`）、base64 编码、组合符拼接（`ls ; curl ... | sh`）都能绕过正则匹配。真正的对抗性防护靠 OS 沙箱（Linux bubblewrap / `write` 档）+ 权限审批，恶意代码请用 VM。不要因为"配了黑名单"就放心跑不可信代码。
 - `job` 档：资源限制 + 进程控制，不是权限沙箱。
 - `write` 档 Linux：bubblewrap 提供完整的命名空间隔离（开箱即用）+ filesystem 四元组精细控制。
 - `write` 档 Windows：**当前无实际隔离效果**（token 空操作），与 `job` 等价。真隔离待 ACL 实现。

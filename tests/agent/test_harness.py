@@ -67,13 +67,33 @@ def test_observe_bash_clears_writes_and_resets_attempts():
 
 
 def test_observe_failed_bash_still_counts_as_verification_attempt():
-    """A failing bash run means the agent DID try to run its code — we stop nagging.
-    This prevents the 'it errored, keep trying forever' loop."""
+    """A bash run that ERRORED must NOT count as verification — the code
+    doesn't work, so "done" would be a false completion claim.
+
+    BEHAVIOR CHANGE (2026-08-14 v2 audit, bypass #1): the old test asserted
+    that an "Error:"-prefixed result cleared writes_since_verify ("ran =
+    verified" mindset). That contradicted the gate's core philosophy (the
+    same one P0-1 fixed for exit-code-marked failures) and left a bypass:
+    a command blocked by the permission gate ("Permission denied: ...",
+    no exit marker) fell into the "neutral pass" branch and cleared the
+    unverified-writes list. Now _is_success(result) gates the branch —
+    commands that didn't run successfully don't verify anything.
+
+    The old test's UX concern (agent nags forever on a broken environment)
+    is handled by the gate's escalation: after _MAX_GATE_ATTEMPTS
+    interceptions it releases with a warning, so there is no infinite loop.
+    """
     h = _harness()
     h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
     h.observe("bash", {"command": "python a.py"}, "Error: exit code 1")
-    assert h.state.writes_since_verify == []
-    assert h.state.verify_attempts == 0
+    assert h.state.writes_since_verify == ["a.py"], "errored run must NOT clear unverified writes"
+    # And the gate still blocks completion...
+    cont, inject, _ = h.check_termination("done")
+    assert cont is True
+    # ...but releases after escalation (no infinite nagging).
+    h.check_termination("done")  # attempt 2
+    cont2, _, warn = h.check_termination("done")  # attempt 3 → release
+    assert cont2 is False and warn is not None
 
 
 def test_observe_disabled_is_noop():
@@ -226,6 +246,54 @@ def test_parse_exit_code_both_formats():
     assert _parse_exit_code("[Command failed with exit code 1]") == 1
     assert _parse_exit_code("[Command succeeded with exit code 0]") == 0
     assert _parse_exit_code("no markers here") is None
+
+
+# --- VerifyGate residual bypass closure (2026-08-14 v2 audit) ---
+# The v1 fix closed the main defect (exit-code format), but three secondary
+# bypasses remained — all verified closed by these tests.
+
+
+def test_verify_gate_permission_denied_not_verification():
+    """BYPASS #1: `pytest -q` blocked by the permission gate returns
+    "Permission denied: ..." with NO exit marker — the old code fell into
+    the "neutral pass" branch and cleared the unverified-writes list. A
+    command that didn't run verifies nothing."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "pytest -q"}, "Permission denied: tool execute blocked in plan mode.")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "permission-denied run must NOT count as verification"
+
+
+def test_verify_gate_echo_tool_name_not_verification():
+    """BYPASS #2: `echo pytest` mentions the tool but runs nothing. The old
+    substring regex matched 'pytest' anywhere in the command; now the tool
+    must be the first token of a segment."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "echo pytest"}, "pytest\n[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "echo pytest must NOT count as a verification run"
+
+
+def test_verify_gate_commit_message_mention_not_verification():
+    """BYPASS #3: `git commit -m "ran ruff and pytest"` mentions tools in a
+    string argument — not a run."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": 'git commit -m "ran ruff and pytest"'}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "commit message mentioning pytest must NOT count as verification"
+
+
+def test_verify_gate_segmented_real_verifier_still_counts():
+    """Segmented matching must not break REAL verification: `cd src && pytest -q`
+    (a common wrapper form) still verifies — the pytest segment starts the tool."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/a.py"}, "Wrote 10 chars")
+    h.observe("bash", {"command": "cd src && pytest -q"}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, "cd X && pytest (passed) IS a verification run"
 
 
 def test_verify_gate_passes_when_nothing_written():
