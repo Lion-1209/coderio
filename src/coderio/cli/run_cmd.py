@@ -166,6 +166,7 @@ def run_headless(
         network_allowed=cfg.tools.network_allowed,
         fs_config=cfg.tools.sandbox_fs,
         bash_shell=cfg.tools.bash_shell,
+        hooks=cfg.hooks,
     )
     if quiet:
         print(final)

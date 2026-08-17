@@ -438,6 +438,7 @@ def run_deep_agent(
     network_allowed: bool = True,
     fs_config=None,
     bash_shell: str = "",
+    hooks: list | None = None,
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -476,10 +477,52 @@ def run_deep_agent(
 
     neutralize_base_prompt()
 
+    # --- User hooks (agent/hooks.py): turn-level events fire here, tool-level
+    # events ride HooksMiddleware below. All fail-open except explicit exit 2.
+    from coderio.agent.hooks import HookRunner
+
+    project_dir = str(Path(workdir).resolve() if workdir else Path.cwd())
+    hook_runner = HookRunner(
+        hooks or [],
+        project_dir=project_dir,
+        session_id=session.id,
+        permission_mode=getattr(gate, "mode", "") if gate is not None else "",
+    )
+
+    # SessionStart (once per session id, lazy — covers resume): stdout injects
+    # context into THIS turn's user message.
+    if hook_runner.has_event("SessionStart") and session.id not in HookRunner._sessions_started:
+        HookRunner._sessions_started.add(session.id)
+        ss = hook_runner.fire("SessionStart", {"source": "startup", "model": getattr(model, "model_name", "")})
+        if ss.context:
+            user_input = f"{user_input}\n\n[hook context]\n{ss.context}"
+
+    # UserPromptSubmit: BEFORE session.append so a block leaves the session
+    # clean, and injected context lands in both the persisted message and the
+    # model input.
+    if hook_runner.has_event("UserPromptSubmit"):
+        prompt_text = user_input if isinstance(user_input, str) else str(user_input)
+        ups = hook_runner.fire("UserPromptSubmit", {"prompt": prompt_text})
+        if ups.blocked:
+            session.append(Message.user(prompt_text))
+            session.append(Message.assistant(f"Prompt rejected by hook: {ups.reason}"))
+            if hasattr(stream, "on_finish"):
+                stream.on_finish()
+            return f"Prompt rejected by hook: {ups.reason}"
+        if ups.context:
+            user_input = f"{prompt_text}\n\n[hook context]\n{ups.context}"
+
     session.append(Message.user(user_input))
 
     sp = _resolve_system_prompt(system_prompt, skill_store, active_skills)
-    middleware = [HarnessMiddleware(stream=stream, enabled=harness_enabled)]
+    # HooksMiddleware OUTERMOST: PreToolUse can deny before the permission
+    # prompt appears, and observes the exact args the rest of the chain sees.
+    middleware: list[Any] = []
+    if hook_runner.specs:
+        from coderio.agent.hooks import HooksMiddleware
+
+        middleware.append(HooksMiddleware(hook_runner))
+    middleware.append(HarnessMiddleware(stream=stream, enabled=harness_enabled))
     if gate is not None:
         middleware.append(PermissionMiddleware(gate))
     # Command-content review: always active (even in FULL mode). Blocks rm -rf /,
@@ -549,6 +592,15 @@ def run_deep_agent(
                 _db_conn.close()
             except Exception:  # noqa: S110
                 pass
+
+    # Stop event (notification-only v1): the harness owns force-continue, so a
+    # user Stop hook observes the turn end but cannot extend it. stdout is
+    # ignored; exit 2 is logged — blocking here would fight the harness gates.
+    if hook_runner.has_event("Stop"):
+        try:
+            hook_runner.fire("Stop", {"last_assistant_message": final_text[:2000]})
+        except Exception as e:  # noqa: BLE001 — never let a hook break turn completion
+            _log.warning("Stop hook failed (ignored): %s", e)
 
     if hasattr(stream, "on_finish"):
         stream.on_finish()

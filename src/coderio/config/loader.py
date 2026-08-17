@@ -229,7 +229,39 @@ def _from_dict(data: dict) -> Config:
         ),
         profiles=_parse_profiles(data),
         active_profile=_resolve_active_profile(data),
+        hooks=_parse_hooks(data),
     )
+
+
+def _parse_hooks(data: dict) -> list:
+    """Parse the [[hooks]] array-of-tables into HookSpec list.
+
+    Follows _parse_profiles' resilience: a malformed entry (missing event or
+    command, wrong types) is skipped with a warning, not a startup crash — a
+    bad hook config must not take the agent down. Unknown events are kept and
+    filtered later by HookRunner (keeps parsing decoupled from the event set).
+    """
+    from coderio.config.models import HookSpec
+
+    raw = data.get("hooks", [])
+    if not isinstance(raw, list):
+        return []
+    out: list[HookSpec] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        event = entry.get("event", "")
+        command = entry.get("command", "")
+        if not isinstance(event, str) or not event or not isinstance(command, str) or not command:
+            continue
+        matcher = entry.get("matcher", "")
+        timeout = entry.get("timeout", 60)
+        if not isinstance(matcher, str):
+            matcher = ""
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            timeout = 60
+        out.append(HookSpec(event=event, command=command, matcher=matcher, timeout=timeout))
+    return out
 
 
 def _apply_env(cfg: Config) -> Config:
@@ -244,7 +276,7 @@ def _apply_env(cfg: Config) -> Config:
     v = os.environ.get("CODERIO_BASH_SHELL")
     if v:
         tools = replace(tools, bash_shell=v)
-    # Preserve profiles/active_profile/context — env overrides only touch model/tools.
+    # Preserve profiles/active_profile/context/hooks — env overrides only touch model/tools.
     return Config(
         model=model,
         tools=tools,
@@ -254,6 +286,7 @@ def _apply_env(cfg: Config) -> Config:
         context=cfg.context,
         profiles=cfg.profiles,
         active_profile=cfg.active_profile,
+        hooks=cfg.hooks,
     )
 
 

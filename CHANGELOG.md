@@ -6,6 +6,30 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [Unreleased]
+
+### Added
+- **Hooks system (v1)**: user-configurable lifecycle hooks via `[[hooks]]`
+  array tables in config.toml. Five events — SessionStart (once per session,
+  resume included), UserPromptSubmit (reject or inject context), PreToolUse
+  (deny), PostToolUse (append feedback), Stop (notification-only). IO contract
+  follows the Claude Code / ZCode / Codex interop core: event JSON on stdin,
+  exit 0 = pass (stdout injects context for prompt/session events, 10k cap),
+  exit 2 = block with stderr as the reason, anything else = fail-open.
+  `$CODERIO_PROJECT_DIR` env var; Git Bash preferred on Windows; default
+  timeout 60s (timeout/crash fail-open — hooks are extensibility glue, not a
+  security boundary; hard policy stays with permissions + blacklist).
+  PreToolUse/PostToolUse ride a new HooksMiddleware inserted OUTERMOST (before
+  Harness/Permission/CommandReview) so a hook can deny before the permission
+  prompt appears and observes exactly the args the chain sees. Hooks in
+  repo-level config.toml automatically ride the existing repo-config trust
+  gate — no separate trust flow. Serial execution (first blocker's reason
+  wins; all hooks still run for their side effects). New module
+  `agent/hooks.py` (+20 tests incl. real-subprocess semantics and a `coderio
+  run` end-to-end). v1 non-goals documented: SessionEnd (no injection point),
+  Notification/SubagentStop/PreCompact, updatedInput rewriting, hook-allow
+  bypassing permission prompts, parallel execution.
+
 ## [0.4.0] — 2026-08-17
 
 ### Added

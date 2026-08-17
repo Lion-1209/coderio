@@ -1517,6 +1517,7 @@ def run_tui(
             network_allowed=rt["cfg"].tools.network_allowed,
             fs_config=rt["cfg"].tools.sandbox_fs,
             bash_shell=rt["cfg"].tools.bash_shell,
+            hooks=rt["cfg"].hooks,
         )
 
     def _load_session(sid: str) -> None:

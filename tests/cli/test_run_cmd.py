@@ -76,6 +76,8 @@ def _mock_runtime(monkeypatch, tmp_path, final_text="headless result"):
             workspace_root="",
         ),
         skills=SimpleNamespace(harness=True),
+        # Mirrors CoderioConfig.hooks (list[HookSpec]); no hooks configured.
+        hooks=[],
     )
 
     def _fake_build_runtime(**kwargs):

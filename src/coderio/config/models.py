@@ -114,6 +114,21 @@ class SandboxFsConfig:
 
 
 @dataclass
+class HookSpec:
+    """One ``[[hooks]]`` entry — a user shell command fired at a lifecycle point.
+
+    See agent/hooks.py for the IO contract (stdin JSON, exit 0/2 semantics)
+    and the event set. Hooks live in config.toml, so repo-level hooks ride the
+    existing repo-config trust gate (config/trust.py) — no separate trust flow.
+    """
+
+    event: str  # SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
+    command: str  # shell command; receives event JSON on stdin
+    matcher: str = ""  # regex on tool_name (tool events only); "" = all
+    timeout: int = 60  # seconds; timeout is fail-open, never bricks the turn
+
+
+@dataclass
 class SkillsConfig:
     auto_load: bool = True
     harness: bool = True
@@ -175,6 +190,8 @@ class Config:
     # so existing users with no profiles are unaffected.
     profiles: list = None  # type: ignore[assignment]
     active_profile: str = ""
+    # User hooks ([[hooks]] tables). Empty list = no hooks (default).
+    hooks: list = None  # type: ignore[assignment]
 
     def __post_init__(self):
         if self.model is None:
@@ -191,3 +208,5 @@ class Config:
             object.__setattr__(self, "context", ContextConfig())
         if self.profiles is None:
             object.__setattr__(self, "profiles", [])
+        if self.hooks is None:
+            object.__setattr__(self, "hooks", [])

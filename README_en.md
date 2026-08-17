@@ -238,6 +238,39 @@ Paths support `~` (home), `./` or bare (workspace-relative), `/abs` (absolute). 
 - Whitelist degradation: in CONFIRM/AUTO_EDIT modes, commands outside the whitelist **run but carry a `[whitelist]` annotation** in the result (so the model/user knows the command is outside the trusted set); PLAN hard-rejects; FULL allows silently.
 - For **fully untrusted code**, use a VM (Windows Sandbox / Docker) — do not rely on this sandbox.
 
+**Hooks** (user lifecycle hooks, v1):
+
+Register shell commands in config.toml via `[[hooks]]` array tables, fired at fixed points of the agent lifecycle. The config/IO contract follows the Claude Code / ZCode / Codex interop core — existing hook scripts port over as-is:
+
+```toml
+# Protect sensitive files: block writes to .env
+[[hooks]]
+event = "PreToolUse"                    # SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
+matcher = "write_file|edit_file"       # regex on tool name (tool events only); empty = all
+command = "python .hooks/protect.py"   # receives the event JSON on stdin; exit 2 = block
+timeout = 30                           # seconds, default 60
+
+# Auto-format after every file write
+[[hooks]]
+event = "PostToolUse"
+matcher = "write_file|edit_file"
+command = "jq -r .tool_input.file_path | xargs prettier --write"
+
+# Inject project conventions at session start
+[[hooks]]
+event = "SessionStart"
+command = "cat .hooks/conventions.txt"
+```
+
+**IO contract**:
+- **stdin**: one JSON object — common fields `session_id`/`cwd`/`permission_mode`/`hook_event_name` + event-specific ones (PreToolUse carries `tool_name`+`tool_input`; UserPromptSubmit carries `prompt`; PostToolUse carries `tool_response`)
+- **exit codes**: `0` = pass (UserPromptSubmit/SessionStart stdout injects context, 10k-char cap); `2` = **BLOCK** (stderr becomes the reason fed to the model); anything else = **fail-open** pass + warning
+- **environment**: `$CODERIO_PROJECT_DIR` always set; Git Bash preferred on Windows
+
+**Honest positioning**: hooks are an EXTENSIBILITY point, not a security boundary — timeout/crash/non-2 exits all fail-open (a broken hook must never brick the agent loop). Hard policy belongs to the permission gate + command blacklist. Repo-level hooks live in config.toml and ride the existing repo-config trust gate (cloning a hostile repo does not silently run its hooks).
+
+**v1 event set and non-goals**: SessionStart (once per session, resume included) / UserPromptSubmit (reject or inject) / PreToolUse (deny) / PostToolUse (append feedback) / Stop (notification-only — never fights the harness force-continue). Not in v1: SessionEnd (no injection point), Notification/SubagentStop/PreCompact, `updatedInput` rewriting, hook-allow skipping the permission prompt, parallel execution (v1 is serial; with multiple hooks the first blocker's reason wins but all hooks run).
+
 Supported providers:
 | provider_id | Description | Protocol |
 |---|---|---|

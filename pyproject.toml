@@ -166,6 +166,10 @@ select = ["E", "F", "W", "I", "S"]
 # S603 — the LocalShellBackend override runs model-generated bash commands;
 # executing them IS the tool's purpose (same rationale as tools/bash.py).
 "src/coderio/agent/deep_loop.py" = ["S602", "S603"]
+# Hooks: S603 — hook commands come from the user's TOML config (trusted
+# project settings, like skills_cmd.py's git clone), not arbitrary model
+# input. Executing them IS the hooks feature's purpose.
+"src/coderio/agent/hooks.py" = ["S603"]
 # Sandbox modules: S602/S603 — running arbitrary subprocess commands IS the
 # sandbox's entire purpose. The sandbox itself (bubblewrap namespace isolation
 # on Linux, Restricted Token + Job Object on Windows) is the security boundary,

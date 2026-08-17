@@ -238,6 +238,39 @@ deny_write = [".git/hooks"]  # workspace 内也强制只读
 - 白名单降级：CONFIRM/AUTO_EDIT 模式下白名单外的命令**会执行但 result 里会带 `[whitelist]` 标注**（让模型/用户知道该命令不在受信集合里）；PLAN 模式硬拒；FULL 模式放行不标注。
 - 对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker），不依赖本沙箱。
 
+**Hooks**（用户自定义生命周期钩子，v1）：
+
+在 config.toml 里用 `[[hooks]]` 数组表注册 shell 命令，在 agent 生命周期的固定点位执行。配置/IO 契约对齐 Claude Code / ZCode / Codex 的互操作核心，已有 hook 脚本可直接移植：
+
+```toml
+# 敏感文件保护：写 .env 前拦截
+[[hooks]]
+event = "PreToolUse"                    # SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
+matcher = "write_file|edit_file"       # 正则匹配工具名（仅工具事件）；空 = 全部
+command = "python .hooks/protect.py"   # stdin 收 JSON 事件；exit 2 = 阻断
+timeout = 30                           # 秒，默认 60
+
+# 每次写文件后自动格式化
+[[hooks]]
+event = "PostToolUse"
+matcher = "write_file|edit_file"
+command = "jq -r .tool_input.file_path | xargs prettier --write"
+
+# 会话开始注入项目约定
+[[hooks]]
+event = "SessionStart"
+command = "cat .hooks/conventions.txt"
+```
+
+**IO 契约**：
+- **stdin**：一行 JSON——公共字段 `session_id`/`cwd`/`permission_mode`/`hook_event_name` + 事件专属（PreToolUse 带 `tool_name`+`tool_input`；UserPromptSubmit 带 `prompt`；PostToolUse 带 `tool_response`）
+- **exit code**：`0` = 放行（UserPromptSubmit/SessionStart 的 stdout 注入上下文，上限 10k 字符）；`2` = **阻断**（stderr 作为理由喂给模型）；其他 = **fail-open** 放行 + 警告
+- **环境变量**：`$CODERIO_PROJECT_DIR` 恒可用；Windows 优先 Git Bash
+
+**诚实定位**：hooks 是**扩展点不是安全边界**——超时/崩溃/非 2 退出码都 fail-open（一个坏 hook 绝不能搞死 agent loop）。硬策略请用权限审批 + 命令黑名单。项目级 hooks 写在 config.toml 里，自动被仓库信任门覆盖（克隆恶意仓库不会静默执行其 hooks）。
+
+**v1 事件集与不做的事**：SessionStart（每 session 一次，含 resume）/ UserPromptSubmit（可拒绝可注入）/ PreToolUse（可 deny）/ PostToolUse（追加反馈）/ Stop（通知型，不与 harness 续跑冲突）。不做：SessionEnd（无注入点）、Notification/SubagentStop/PreCompact、`updatedInput` 参数改写、hook allow 跳过权限弹窗、并行执行（v1 串行，多 hook 第一个 blocker 生效但全部执行）。
+
 支持的 provider：
 | provider_id | 说明 | 协议 |
 |---|---|---|
