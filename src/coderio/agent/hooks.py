@@ -272,7 +272,12 @@ class HookRunner:
             env=env,
             start_new_session=(sys.platform != "win32"),
         )
-        effective_timeout = max(1, min(spec.timeout, int(remaining)))
+        # ceil, not int(): remaining ≈ budget-ε on the first hook, and int()
+        # truncation would cut a 2s budget to 1s (caught by the CI OS matrix —
+        # deterministic on POSIX, timing-jitter-lucky on Windows).
+        import math
+
+        effective_timeout = max(1, min(spec.timeout, math.ceil(remaining)))
         try:
             stdout, stderr = proc.communicate(input=stdin_json.encode("utf-8"), timeout=effective_timeout)
             return proc.returncode, stdout or b"", stderr or b"", False, effective_timeout
