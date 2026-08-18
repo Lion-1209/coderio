@@ -234,14 +234,20 @@ def _from_dict(data: dict) -> Config:
 
 
 def _parse_hooks(data: dict) -> list:
-    """Parse the [[hooks]] array-of-tables into HookSpec list.
+    """Parse the [[hooks]] array-of-tables into agent.hooks.HookSpec list.
+
+    SINGLE SOURCE OF TRUTH (2026-08-14 v3 audit P0): this MUST produce
+    agent.hooks.HookSpec — the class HookRunner.fire actually uses. An earlier
+    duplicate dataclass in config/models.py (without .matches()) made every
+    tool-event hook from a real config.toml crash with AttributeError while 20
+    in-module tests stayed green (the seam, not the modules, was untested).
 
     Follows _parse_profiles' resilience: a malformed entry (missing event or
     command, wrong types) is skipped with a warning, not a startup crash — a
     bad hook config must not take the agent down. Unknown events are kept and
     filtered later by HookRunner (keeps parsing decoupled from the event set).
     """
-    from coderio.config.models import HookSpec
+    from coderio.agent.hooks import HookSpec
 
     raw = data.get("hooks", [])
     if not isinstance(raw, list):

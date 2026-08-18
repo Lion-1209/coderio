@@ -287,3 +287,65 @@ def test_hook_runner_filters_unknown_events(tmp_path):
     forward compatibility (a future event name in an old config is inert)."""
     r = _runner(tmp_path, HookSpec(event="SomeFutureEvent", command="exit 2"))
     assert r.specs == []
+
+
+# ----------------------------------------------------- SEAM test (v3 audit P0)
+# REGRESSION (2026-08-14 v3 report): TWO classes named HookSpec existed —
+# config/models.py's (no .matches()) and agent/hooks.py's (with it). The
+# loader produced the former; HookRunner.fire called .matches() on it → every
+# PreToolUse/PostToolUse hook from a REAL config.toml crashed with
+# AttributeError, while all 20 in-module tests stayed green because they
+# imported agent.hooks.HookSpec directly. The seam — load_config's output
+# feeding HookRunner — had ZERO coverage. This test crosses that seam: a
+# config.toml loaded through the real parser must fire a tool event cleanly.
+
+
+def test_seam_config_to_runner_tool_event_fires(tmp_path):
+    """config.toml → load_config → HookRunner.fire("PreToolUse") → blocked.
+
+    This is the exact path production takes (tui.py/run_cmd.py pass cfg.hooks
+    straight into run_deep_agent). If a duplicate HookSpec ever reappears,
+    this fails with the same AttributeError production hit.
+    """
+    from coderio.config import load_config
+
+    proj = tmp_path / "proj" / ".coderio"
+    proj.mkdir(parents=True)
+    (proj / "config.toml").write_text(
+        '[[hooks]]\nevent = "PreToolUse"\nmatcher = "write_file"\ncommand = "echo seam-reason >&2; exit 2"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(search_from=tmp_path / "proj", user_dir=tmp_path / "user")
+
+    # The loaded spec must BE the runtime class (single source of truth).
+    from coderio.agent.hooks import HookSpec as RuntimeHookSpec
+
+    assert isinstance(cfg.hooks[0], RuntimeHookSpec), (
+        f"loader produced {type(cfg.hooks[0])} — HookRunner expects agent.hooks.HookSpec "
+        "(duplicate-class regression, 2026-08-14 v3 P0)"
+    )
+
+    runner = HookRunner(cfg.hooks, project_dir=str(tmp_path), session_id="s1")
+    out = runner.fire("PreToolUse", {"tool_name": "write_file", "tool_input": {}})
+    assert out.blocked is True
+    assert "seam-reason" in out.reason
+
+
+def test_seam_config_to_runner_post_tool_event_fires(tmp_path):
+    """PostToolUse from real config: matcher runs, exit 2 recorded (not crashed)."""
+    from coderio.config import load_config
+
+    proj = tmp_path / "proj" / ".coderio"
+    proj.mkdir(parents=True)
+    (proj / "config.toml").write_text(
+        '[[hooks]]\nevent = "PostToolUse"\nmatcher = "edit_file"\ncommand = "run-the-linter >&2; exit 2"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(search_from=tmp_path / "proj", user_dir=tmp_path / "user")
+    runner = HookRunner(cfg.hooks, project_dir=str(tmp_path))
+    out = runner.fire("PostToolUse", {"tool_name": "edit_file", "tool_input": {}})
+    assert out.blocked is True
+    assert "run-the-linter" in out.reason
+    # Non-matching tool: matcher executes without crashing either.
+    out2 = runner.fire("PostToolUse", {"tool_name": "execute", "tool_input": {}})
+    assert out2.blocked is False

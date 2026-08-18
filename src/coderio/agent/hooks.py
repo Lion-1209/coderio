@@ -128,12 +128,21 @@ class HookRunner:
         """
         tool_name = str(payload.get("tool_name", ""))
         outcome = HookOutcome()
-        for spec in self.specs:
-            if spec.event != event:
-                continue
-            if event in _TOOL_EVENTS and not spec.matches(tool_name):
-                continue
-            self._run_one(spec, event, payload, outcome)
+        try:
+            for spec in self.specs:
+                if spec.event != event:
+                    continue
+                if event in _TOOL_EVENTS and not spec.matches(tool_name):
+                    continue
+                self._run_one(spec, event, payload, outcome)
+        except Exception as e:  # noqa: BLE001 — a hook-layer bug must never break the turn
+            outcome.error += f"hook engine error (fail-open): {e}; "
+        # CONSUME the error (2026-08-14 v3 audit P1): a broken hook (missing
+        # script → exit 127, bad interpreter, etc.) must be visible to the
+        # user, not silently swallowed — the outcome.error field previously
+        # had zero consumers anywhere in the codebase.
+        if outcome.error:
+            _log.warning("hooks[%s]: %s", event, outcome.error.strip())
         return outcome
 
     # ------------------------------------------------------------------ execution

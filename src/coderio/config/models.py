@@ -114,21 +114,6 @@ class SandboxFsConfig:
 
 
 @dataclass
-class HookSpec:
-    """One ``[[hooks]]`` entry — a user shell command fired at a lifecycle point.
-
-    See agent/hooks.py for the IO contract (stdin JSON, exit 0/2 semantics)
-    and the event set. Hooks live in config.toml, so repo-level hooks ride the
-    existing repo-config trust gate (config/trust.py) — no separate trust flow.
-    """
-
-    event: str  # SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
-    command: str  # shell command; receives event JSON on stdin
-    matcher: str = ""  # regex on tool_name (tool events only); "" = all
-    timeout: int = 60  # seconds; timeout is fail-open, never bricks the turn
-
-
-@dataclass
 class SkillsConfig:
     auto_load: bool = True
     harness: bool = True

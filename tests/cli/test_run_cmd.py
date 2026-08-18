@@ -7,6 +7,8 @@ path with a fully mocked runtime, and HeadlessStream's quiet behavior.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from coderio.cli.app import app
@@ -36,7 +38,7 @@ def test_run_untrusted_repo_config_exits(tmp_path, monkeypatch):
     monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
     monkeypatch.setattr(
         "coderio.config.trust.existing_repo_configs",
-        lambda d: [d / ".coderio" / "config.toml"],
+        lambda d: [Path(d) / ".coderio" / "config.toml"],
     )
     monkeypatch.setattr("coderio.config.trust.is_repo_trusted", lambda d, u: False)
 

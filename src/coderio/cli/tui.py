@@ -1264,7 +1264,9 @@ def run_tui(
     # repos could set permission_mode="full"/redirect base_url/spawn MCP
     # commands with zero prompt). Must run BEFORE build_runtime — that call
     # loads the repo config AND spawns .mcp.json servers.
-    from coderio.config.loader import _find_project_dir
+    # Discovery is search_from-based (v3 audit P0): the trust scope walks up
+    # per-file exactly like the loaders, so launching from a subdirectory of
+    # a repo whose root only has .mcp.json no longer bypasses the gate.
     from coderio.config.trust import (
         existing_repo_configs,
         is_repo_trusted,
@@ -1273,8 +1275,7 @@ def run_tui(
     )
 
     user_dir = Path.home() / ".coderio"
-    project_dir = _find_project_dir(Path(search_from).resolve())
-    if existing_repo_configs(project_dir) and not is_repo_trusted(project_dir, user_dir):
+    if existing_repo_configs(search_from) and not is_repo_trusted(search_from, user_dir):
         import typer
 
         typer.secho(
@@ -1282,19 +1283,19 @@ def run_tui(
             fg=typer.colors.YELLOW,
         )
         typer.echo()
-        typer.echo(summarize_repo_configs(project_dir))
+        typer.echo(summarize_repo_configs(search_from))
         typer.echo()
         typer.secho(
             "These can change permissions, redirect the model endpoint, or start\n"
-            "local processes (MCP servers). Only trust repositories you control\n"
-            "or have reviewed.",
+            "local processes (MCP servers, hooks). Only trust repositories you\n"
+            "control or have reviewed.",
             fg=typer.colors.YELLOW,
         )
         answer = typer.prompt("Trust this repository's coderio config? [y/N]", default="N")
         if answer.strip().lower() not in ("y", "yes"):
             typer.secho("Not trusted — exiting. Re-run and confirm to use this repo's config.", fg=typer.colors.RED)
             raise typer.Exit(1)
-        mark_repo_trusted(project_dir, user_dir)
+        mark_repo_trusted(search_from, user_dir)
 
     try:
         cfg, store, model, tools, gate, session, active, _rich_stream = build_runtime(

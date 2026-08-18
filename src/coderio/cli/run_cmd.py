@@ -78,7 +78,6 @@ def run_headless(
     import typer
 
     from coderio.config.bootstrap import ensure_user_dirs
-    from coderio.config.loader import _find_project_dir
     from coderio.config.trust import existing_repo_configs, is_repo_trusted
 
     ensure_user_dirs()
@@ -101,11 +100,13 @@ def run_headless(
     # untrusted repo config is a hard error (prompting would hang headless
     # runs). The user confirms once via interactive `coderio`, then this
     # passes forever (until the repo config content changes).
+    # search_from-based discovery (v3 audit P0): walks up per-file like the
+    # loaders, so a repo whose root only has .mcp.json can't slip past by
+    # launching from a subdirectory.
     user_dir = Path.home() / ".coderio"
-    project_dir = _find_project_dir(Path(".").resolve())
-    if existing_repo_configs(project_dir) and not is_repo_trusted(project_dir, user_dir):
+    if existing_repo_configs(".") and not is_repo_trusted(".", user_dir):
         typer.secho(
-            f"This repository has untrusted coderio config ({project_dir}).\n"
+            "This repository has untrusted coderio config.\n"
             "Run interactive `coderio` once in this directory and confirm the "
             "config, then retry `coderio run`.",
             err=True,
@@ -168,5 +169,11 @@ def run_headless(
         bash_shell=cfg.tools.bash_shell,
         hooks=cfg.hooks,
     )
+    # Always print the final result (v3 audit P2): in non-quiet mode the token
+    # stream already showed it, but a non-streamed final message would be lost
+    # without this — and scripts parsing stdout need exactly one final line.
+    # --quiet relies on this print alone; non-quiet gets it after a separator.
     if quiet:
         print(final)
+    else:
+        print(f"\n{final}")
