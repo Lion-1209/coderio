@@ -50,6 +50,11 @@ _TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse"})
 
 DEFAULT_TIMEOUT = 60  # seconds; generous for linters, short enough not to brick a turn
 
+# Per-EVENT total budget (v3 audit P1: serial hooks × 60s each would hang every
+# tool call). Covers ALL matching hooks for one event fire; exhaustion skips
+# the rest (fail-open). Overridable per HookRunner for tests.
+DEFAULT_EVENT_BUDGET = 30.0
+
 # stdout beyond this is dropped rather than injected (context budget guard).
 _MAX_CONTEXT_CHARS = 10_000
 
@@ -108,12 +113,18 @@ class HookRunner:
     _sessions_started: set[str] = set()
 
     def __init__(
-        self, specs: list[HookSpec] | None, project_dir: str, session_id: str = "", permission_mode: str = ""
+        self,
+        specs: list[HookSpec] | None,
+        project_dir: str,
+        session_id: str = "",
+        permission_mode: str = "",
+        event_budget: float = DEFAULT_EVENT_BUDGET,
     ) -> None:
         self.specs = [s for s in (specs or []) if s.event in HOOK_EVENTS]
         self.project_dir = project_dir
         self.session_id = session_id
         self.permission_mode = permission_mode
+        self.event_budget = event_budget
 
     def has_event(self, event: str) -> bool:
         return any(s.event == event for s in self.specs)
@@ -125,16 +136,31 @@ class HookRunner:
         multi-hook semantics non-deterministic; determinism wins for a coding
         agent. First blocker wins; later hooks still run (their side effects
         are the point — e.g. logging — even when the event is already denied).
+
+        A per-EVENT budget (v3 audit P1: N hooks × 60s hanging on EVERY tool
+        call) caps the total time all matching hooks may take; when exhausted,
+        remaining hooks are skipped with an error note (fail-open — consistent
+        with the module's positioning: budget exhaustion never blocks).
         """
+        import time
+
         tool_name = str(payload.get("tool_name", ""))
         outcome = HookOutcome()
+        deadline = time.monotonic() + self.event_budget
         try:
             for spec in self.specs:
                 if spec.event != event:
                     continue
                 if event in _TOOL_EVENTS and not spec.matches(tool_name):
                     continue
-                self._run_one(spec, event, payload, outcome)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    skipped = sum(1 for s in self.specs[len(self.specs) :] if s.event == event) or "remaining"
+                    outcome.error += (
+                        f"event budget ({self.event_budget}s) exhausted — {skipped} hook(s) skipped (fail-open); "
+                    )
+                    break
+                self._run_one(spec, event, payload, outcome, remaining)
         except Exception as e:  # noqa: BLE001 — a hook-layer bug must never break the turn
             outcome.error += f"hook engine error (fail-open): {e}; "
         # CONSUME the error (2026-08-14 v3 audit P1): a broken hook (missing
@@ -147,7 +173,14 @@ class HookRunner:
 
     # ------------------------------------------------------------------ execution
 
-    def _run_one(self, spec: HookSpec, event: str, payload: dict[str, Any], outcome: HookOutcome) -> None:
+    def _run_one(
+        self,
+        spec: HookSpec,
+        event: str,
+        payload: dict[str, Any],
+        outcome: HookOutcome,
+        remaining: float,
+    ) -> None:
         stdin_json = json.dumps(
             {
                 "session_id": self.session_id,
@@ -159,13 +192,13 @@ class HookRunner:
             default=str,
         )
         try:
-            exit_code, stdout, stderr, timed_out = self._spawn(spec, stdin_json)
+            exit_code, stdout, stderr, timed_out, effective_timeout = self._spawn(spec, stdin_json, remaining)
         except Exception as e:  # noqa: BLE001 — a broken hook must never crash the agent
             outcome.error += f"hook {spec.command!r} failed to run: {e} (fail-open); "
             return
 
         if timed_out:
-            outcome.error += f"hook {spec.command!r} timed out after {spec.timeout}s (fail-open); "
+            outcome.error += f"hook {spec.command!r} timed out after {effective_timeout}s (fail-open); "
             return
 
         # New names, not reusing stdout/stderr: mypy pins a variable's type to
@@ -196,12 +229,16 @@ class HookRunner:
             else:
                 outcome.context += ("\n" if outcome.context else "") + text
 
-    def _spawn(self, spec: HookSpec, stdin_json: str) -> tuple[int, bytes, bytes, bool]:
-        """Run the hook command with JSON on stdin. Returns (exit_code, stdout, stderr, timed_out).
+    def _spawn(self, spec: HookSpec, stdin_json: str, remaining: float) -> tuple[int, bytes, bytes, bool, int]:
+        """Run the hook command with JSON on stdin.
+
+        Returns (exit_code, stdout, stderr, timed_out, effective_timeout).
+        effective_timeout = min(spec.timeout, event-budget remaining) — the
+        per-event budget tightens each hook so one slow hook can't starve the
+        rest of the turn (v3 audit P1).
 
         On Windows prefers Git Bash (via detect_shell, same as the bash tool)
-        so POSIX-style commands behave; POSIX uses /bin/sh. Timeout kills the
-        whole process tree (kill_process_tree) so piped children don't linger.
+        so POSIX-style commands behave; POSIX uses /bin/sh.
         """
         import os
 
@@ -235,16 +272,24 @@ class HookRunner:
             env=env,
             start_new_session=(sys.platform != "win32"),
         )
+        effective_timeout = max(1, min(spec.timeout, int(remaining)))
         try:
-            stdout, stderr = proc.communicate(input=stdin_json.encode("utf-8"), timeout=spec.timeout)
-            return proc.returncode, stdout or b"", stderr or b"", False
+            stdout, stderr = proc.communicate(input=stdin_json.encode("utf-8"), timeout=effective_timeout)
+            return proc.returncode, stdout or b"", stderr or b"", False, effective_timeout
         except subprocess.TimeoutExpired:
             kill_process_tree(proc)
+            # One-second grace, then abandon (v3 audit P1: the old 10s drain
+            # waited out pipe EOF that never comes when a pre-kill grandchild
+            # holds the write end on Windows — a timeout=2 hook took 12s). The
+            # output of a TIMED-OUT hook is never consumed anyway (hardcoded
+            # empty return), so there is nothing to wait for. Known limitation:
+            # kill_process_tree may miss Windows grandchildren forked before
+            # the job assignment; they leak but can no longer stall the turn.
             try:
-                proc.communicate(timeout=10)
-            except Exception:  # noqa: S110 — the kill already ran; drain best-effort
+                proc.communicate(timeout=1)
+            except Exception:  # noqa: S110 — grace expired; the kill already ran
                 pass
-            return 124, b"", b"", True
+            return 124, b"", b"", True, effective_timeout
 
 
 class HooksMiddleware(AgentMiddleware):

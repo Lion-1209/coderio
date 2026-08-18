@@ -269,7 +269,15 @@ command = "cat .hooks/conventions.txt"
 
 **Honest positioning**: hooks are an EXTENSIBILITY point, not a security boundary — timeout/crash/non-2 exits all fail-open (a broken hook must never brick the agent loop). Hard policy belongs to the permission gate + command blacklist. Repo-level hooks live in config.toml and ride the existing repo-config trust gate (cloning a hostile repo does not silently run its hooks).
 
-**v1 event set and non-goals**: SessionStart (once per session, resume included) / UserPromptSubmit (reject or inject) / PreToolUse (deny) / PostToolUse (append feedback) / Stop (notification-only — never fights the harness force-continue). Not in v1: SessionEnd (no injection point), Notification/SubagentStop/PreCompact, `updatedInput` rewriting, hook-allow skipping the permission prompt, parallel execution (v1 is serial; with multiple hooks the first blocker's reason wins but all hooks run).
+**Execution semantics**:
+- **Timeouts**: 60s per hook by default (`timeout` configurable); **30s per-event total budget** — when all matching hooks together exceed it, the rest are skipped (fail-open); one slow hook can't eat the whole turn
+- **Serial execution**: multiple hooks run in config order; the first blocker's reason wins, but every hook still runs (side effects preserved)
+- **Environment inheritance**: hooks inherit the full environment (including API keys) — only configure hook commands you trust
+- **Subagents are covered too**: research / general-purpose subagents both carry HooksMiddleware — `task()` delegation cannot bypass PreToolUse
+- **Merge semantics**: user-level `[[hooks]]` + project-level `[[hooks]]` **append** (user first — under first-blocker-wins, the user's protective hook's reason takes priority); a repo's config never drops the user's protections
+- Windows grandchild leak on timeout is a known limitation (the turn is no longer hostage; the root fix awaits the CREATE_SUSPENDED approach)
+
+**v1 event set and non-goals**: SessionStart (once per session, resume included) / UserPromptSubmit (reject or inject) / PreToolUse (deny) / PostToolUse (append feedback) / Stop (notification-only — never fights the harness force-continue). Not in v1: SessionEnd (no injection point), Notification/SubagentStop/PreCompact, `updatedInput` rewriting, hook-allow skipping the permission prompt.
 
 Supported providers:
 | provider_id | Description | Protocol |

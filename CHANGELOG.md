@@ -69,6 +69,33 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — hooks completion (2026-08-14 v3 audit P1/P2 items)
+- **Timeout latency (v3 P1: timeout=2 hook took 12s)**: the post-kill pipe
+  drain waited 10s for an EOF that never comes on Windows (a pre-kill
+  grandchild holds the write end) — and the drained output was never consumed
+  anyway (hardcoded empty return). Now a 1s grace then abandon: a timeout=2
+  hook returns in ~3s. Windows grandchild leak documented as a known
+  limitation (the turn is no longer hostage; root fix = CREATE_SUSPENDED +
+  pre-assigned Job + stdin pipe through _create_process_with_token). Latency
+  regression test added (`elapsed < timeout + 2`), mutation-verified.
+- **Per-event budget (v3 P1: N hooks × 60s on every tool call)**: fire() now
+  enforces a 30s total budget per event (overridable on HookRunner for
+  tests). Each hook's timeout tightens to min(spec.timeout, budget
+  remaining); exhaustion skips the remaining hooks with an error note
+  (fail-open, consistent with the module's positioning).
+- **Subagents bypassed hooks (v3 #12)**: research and general-purpose
+  subagents both carry HooksMiddleware now (outermost, same order as the main
+  agent) — task() delegation can no longer sidestep PreToolUse/PostToolUse.
+  No middleware overhead when no hooks are configured.
+- **Repo [[hooks]] silently dropped user hooks (v3 P2)**: _merge replaces
+  lists wholesale, so a repo's hooks config wiped the user's protective
+  hooks. Hooks now APPEND across layers — user hooks first (first-blocker-
+  wins: the user's deny reason is what the model sees). The first and only
+  list-merge in the loader; every other key keeps replace semantics.
+- +7 tests (latency guard, budget skip/tighten, subagent middleware stacks ×3,
+  merge order). Mutation check: reintroducing the 10s drain turns the latency
+  test red (10.1s ≥ 4s bound) — the guard actually guards.
+
 ## [0.4.0] — 2026-08-17
 
 ### Added

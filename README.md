@@ -269,7 +269,15 @@ command = "cat .hooks/conventions.txt"
 
 **诚实定位**：hooks 是**扩展点不是安全边界**——超时/崩溃/非 2 退出码都 fail-open（一个坏 hook 绝不能搞死 agent loop）。硬策略请用权限审批 + 命令黑名单。项目级 hooks 写在 config.toml 里，自动被仓库信任门覆盖（克隆恶意仓库不会静默执行其 hooks）。
 
-**v1 事件集与不做的事**：SessionStart（每 session 一次，含 resume）/ UserPromptSubmit（可拒绝可注入）/ PreToolUse（可 deny）/ PostToolUse（追加反馈）/ Stop（通知型，不与 harness 续跑冲突）。不做：SessionEnd（无注入点）、Notification/SubagentStop/PreCompact、`updatedInput` 参数改写、hook allow 跳过权限弹窗、并行执行（v1 串行，多 hook 第一个 blocker 生效但全部执行）。
+**执行语义**：
+- **超时**：每个 hook 默认 60s（`timeout` 可配）；**单事件总预算 30s**——同事件所有 hook 合计超预算后，剩余 hook 跳过（fail-open），一个慢 hook 吃不光整个 turn
+- **串行执行**：多 hook 按配置顺序串行，第一个 blocker 的理由生效，但所有 hook 都会执行（副作用保留）
+- **环境继承**：hook 继承完整环境变量（含 API key）——只配置你信任的 hook 命令
+- **子 agent 同样受约束**：research / general-purpose 子 agent 都挂 HooksMiddleware，`task()` 委派无法绕过 PreToolUse
+- **合并语义**：用户级 `[[hooks]]` + 项目级 `[[hooks]]` **追加合并**（用户在前——首个 blocker 的优先理由来自用户的防护 hook），项目配置不会剔除用户防护
+- Windows 孙进程泄漏为已知 limitation（超时后 turn 不受挟持；根治待 CREATE_SUSPENDED 方案）
+
+**v1 事件集与不做的事**：SessionStart（每 session 一次，含 resume）/ UserPromptSubmit（可拒绝可注入）/ PreToolUse（可 deny）/ PostToolUse（追加反馈）/ Stop（通知型，不与 harness 续跑冲突）。不做：SessionEnd（无注入点）、Notification/SubagentStop/PreCompact、`updatedInput` 参数改写、hook allow 跳过权限弹窗。
 
 支持的 provider：
 | provider_id | 说明 | 协议 |

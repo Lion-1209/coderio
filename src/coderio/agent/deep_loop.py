@@ -298,14 +298,23 @@ def _build_extra_tools(tools, skill_store, active_skills):
     return extra
 
 
-def _build_research_subagent():
+def _build_research_subagent(hook_runner=None):
     """Return the research subagent spec (read-only, physically isolated).
 
     Tool exclusion uses the compat layer (_deepagents_compat) so that a
     deepagents API change degrades gracefully instead of crashing.
+
+    HooksMiddleware (2026-08-14 v3 audit #12): without it, ``task()``-delegated
+    work bypassed the user's PreToolUse/PostToolUse hooks entirely. The runner
+    is shared with the main agent (stateless across fire() calls).
     """
     from coderio.agent._deepagents_compat import make_research_subagent_middleware
 
+    middleware = make_research_subagent_middleware()
+    if hook_runner is not None and hook_runner.specs:
+        from coderio.agent.hooks import HooksMiddleware
+
+        middleware.insert(0, HooksMiddleware(hook_runner))
     return {
         "name": "research",
         "description": (
@@ -330,11 +339,11 @@ def _build_research_subagent():
             "- The calling agent only sees your final message, not your "
             "intermediate tool calls — make sure your answer is complete."
         ),
-        "middleware": make_research_subagent_middleware(),
+        "middleware": middleware,
     }
 
 
-def _build_general_purpose_subagent(gate, command_policy, stream=None):
+def _build_general_purpose_subagent(gate, command_policy, stream=None, hook_runner=None):
     """Return the general-purpose subagent spec with coderio's security middleware.
 
     SECURITY FIX (2026-08-14 report P0-2): deepagents auto-injects a
@@ -359,13 +368,23 @@ def _build_general_purpose_subagent(gate, command_policy, stream=None):
     is per-agent, not shared — the main gate can't see subagent tool calls
     anyway), whose force-continue applies inside the subagent's loop. This
     makes the subagent itself refuse to say "done" with unverified writes.
+
+    2026-08-14 v3 audit #12: also inject HooksMiddleware (outermost, same as
+    the main agent) — without it, task()-delegated work bypassed the user's
+    PreToolUse/PostToolUse hooks. The runner is shared (stateless fire()).
     """
     from coderio.agent.command_review import CommandReviewMiddleware
     from coderio.agent.harness_middleware import HarnessMiddleware
     from coderio.tools.command_policy import CommandPolicy
 
     middleware = []
-    # Harness first (same order as the main agent — see run_deep_agent): it
+    # Hooks OUTERMOST (same order as the main agent): a hook deny happens
+    # before any other layer — including this subagent's permission prompts.
+    if hook_runner is not None and hook_runner.specs:
+        from coderio.agent.hooks import HooksMiddleware
+
+        middleware.append(HooksMiddleware(hook_runner))
+    # Harness next (same order as the main agent — see run_deep_agent): it
     # observes every tool call the permission/command layers let through.
     middleware.append(HarnessMiddleware(stream=stream))
     if gate is not None:
@@ -553,8 +572,8 @@ def run_deep_agent(
         "middleware": middleware,
         "backend": backend,
         "subagents": [
-            _build_research_subagent(),
-            _build_general_purpose_subagent(gate, command_policy, stream=stream),
+            _build_research_subagent(hook_runner),
+            _build_general_purpose_subagent(gate, command_policy, stream=stream, hook_runner=hook_runner),
         ],
     }
     if sp:

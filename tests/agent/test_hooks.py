@@ -349,3 +349,119 @@ def test_seam_config_to_runner_post_tool_event_fires(tmp_path):
     # Non-matching tool: matcher executes without crashing either.
     out2 = runner.fire("PostToolUse", {"tool_name": "execute", "tool_input": {}})
     assert out2.blocked is False
+
+
+# ----------------------------------------------------- timeout latency guard (v3 P1)
+
+
+def test_timeout_returns_promptly(tmp_path):
+    """REGRESSION GUARD (v3 audit: a timeout=2 hook took 12s wall-clock). The
+    old code drained pipes for 10s after the kill — waiting for an EOF that
+    never comes when a pre-kill Windows grandchild holds the write end. The
+    drain is now a 1s grace; total latency must stay near the timeout itself."""
+    import time
+
+    r = _runner(tmp_path, HookSpec(event="PreToolUse", command="sleep 10", timeout=2))
+    start = time.time()
+    out = r.fire("PreToolUse", {"tool_name": "x", "tool_input": {}})
+    elapsed = time.time() - start
+    assert out.blocked is False and "timed out" in out.error
+    assert elapsed < 4, f"timeout=2 hook took {elapsed:.1f}s — the slow-drain regression is back (v3 measured 12s)"
+
+
+# ----------------------------------------------------- per-event budget (v3 P1)
+
+
+def test_event_budget_skips_remaining_hooks(tmp_path):
+    """The per-event budget caps ALL matching hooks: when the first hook
+    consumes the budget, the rest are skipped with an error note (fail-open)."""
+    r = HookRunner(
+        [
+            HookSpec(event="PreToolUse", command="sleep 5", timeout=30),
+            HookSpec(event="PreToolUse", command="exit 2"),
+        ],
+        project_dir=str(tmp_path),
+        event_budget=2,
+    )
+    out = r.fire("PreToolUse", {"tool_name": "x", "tool_input": {}})
+    assert "budget" in out.error, "budget exhaustion must be surfaced"
+    # fail-open: budget exhaustion never blocks
+    assert out.blocked is False
+
+
+def test_budget_tightens_single_hook_timeout(tmp_path):
+    """A hook's own timeout is min(spec.timeout, budget-remaining) — one slow
+    hook can't outlive the event budget even with a generous per-hook timeout."""
+    import time
+
+    r = HookRunner(
+        [HookSpec(event="PreToolUse", command="sleep 30", timeout=60)],
+        project_dir=str(tmp_path),
+        event_budget=2,
+    )
+    start = time.time()
+    out = r.fire("PreToolUse", {"tool_name": "x", "tool_input": {}})
+    elapsed = time.time() - start
+    assert "timed out after 2s" in out.error, f"budget should tighten timeout to 2s: {out.error}"
+    assert elapsed < 5
+
+
+# ----------------------------------------------------- subagent hooks (v3 #12)
+
+
+def test_general_purpose_subagent_carries_hooks_middleware(tmp_path):
+    """task()-delegation must not bypass user hooks: the general-purpose
+    subagent carries HooksMiddleware OUTERMOST (same order as the main agent)."""
+    from coderio.agent.deep_loop import _build_general_purpose_subagent
+
+    runner = _runner(tmp_path, HookSpec(event="PreToolUse", command="exit 0"))
+    spec = _build_general_purpose_subagent(None, None, hook_runner=runner)
+    mw = [type(m).__name__ for m in spec["middleware"]]
+    assert "HooksMiddleware" in mw, f"subagent must carry hooks: {mw}"
+    assert mw[0] == "HooksMiddleware", "hooks must be OUTERMOST (deny before permission prompts)"
+
+
+def test_research_subagent_carries_hooks_middleware(tmp_path):
+    """The read-only research subagent also carries HooksMiddleware (inserted
+    before the tool whitelist)."""
+    from coderio.agent.deep_loop import _build_research_subagent
+
+    runner = _runner(tmp_path, HookSpec(event="PreToolUse", command="exit 0"))
+    spec = _build_research_subagent(hook_runner=runner)
+    mw = [type(m).__name__ for m in spec["middleware"]]
+    assert "HooksMiddleware" in mw
+    assert mw[0] == "HooksMiddleware"
+
+
+def test_subagents_skip_hooks_middleware_when_no_specs(tmp_path):
+    """No configured hooks → no middleware overhead on subagents."""
+    from coderio.agent.deep_loop import _build_general_purpose_subagent
+
+    empty = _runner(tmp_path)  # no specs
+    spec = _build_general_purpose_subagent(None, None, hook_runner=empty)
+    mw = [type(m).__name__ for m in spec["middleware"]]
+    assert "HooksMiddleware" not in mw
+
+
+# ----------------------------------------------------- user+project hooks merge (v3 P2)
+
+
+def test_user_and_project_hooks_append_user_first(tmp_path):
+    """REGRESSION GUARD (v3 P2): _merge replaces lists, so a repo's [[hooks]]
+    silently DROPPED the user's protective hooks. Hooks append instead — user
+    hooks FIRST (first-blocker-wins: the user's deny reason is what the model
+    sees when both block)."""
+    from coderio.config import load_config
+
+    user = tmp_path / "user" / "config.toml"
+    user.parent.mkdir(parents=True)
+    user.write_text("[[hooks]]\nevent = 'UserPromptSubmit'\ncommand = 'echo user-hook'\n", encoding="utf-8")
+    proj = tmp_path / "proj" / ".coderio" / "config.toml"
+    proj.parent.mkdir(parents=True)
+    proj.write_text("[[hooks]]\nevent = 'UserPromptSubmit'\ncommand = 'echo repo-hook'\n", encoding="utf-8")
+
+    cfg = load_config(search_from=tmp_path / "proj", user_dir=tmp_path / "user")
+    commands = [h.command for h in cfg.hooks]
+    assert commands == ["echo user-hook", "echo repo-hook"], (
+        f"both layers must survive, user first (first-blocker-wins priority); got {commands}"
+    )

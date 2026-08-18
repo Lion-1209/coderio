@@ -304,9 +304,16 @@ def load_config(search_from: Path | str = ".", user_dir: Path | str | None = Non
     search_from = Path(search_from)
     if user_dir is None:
         user_dir = _default_user_dir()
-    data = _merge(
-        _read_toml(Path(user_dir) / "config.toml"),
-        _read_toml(_find_project_dir(search_from) / ".coderio" / "config.toml"),
-    )
+    user_data = _read_toml(Path(user_dir) / "config.toml")
+    proj_data = _read_toml(_find_project_dir(search_from) / ".coderio" / "config.toml")
+    data = _merge(user_data, proj_data)
+    # hooks APPEND instead of overwrite (v3 audit P2). _merge replaces lists
+    # wholesale, so a repo's [[hooks]] silently DROPPED the user's protective
+    # hooks. Hooks are the one key where user config must survive a repo's
+    # override: fire() is first-blocker-wins, so the user's hooks go FIRST —
+    # their deny reason is the one the model sees. (Only list-merge in the
+    # loader; every other key keeps _merge's replace semantics.)
+    if isinstance(proj_data.get("hooks"), list) or isinstance(user_data.get("hooks"), list):
+        data["hooks"] = (user_data.get("hooks") or []) + (proj_data.get("hooks") or [])
     cfg = _from_dict(data)
     return _apply_env(cfg)
