@@ -6,6 +6,42 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [Unreleased]
+
+### Security — v3 audit short-term batch (#7/#8/#9/#11/#14, all runtime-verified)
+- **#7 · headless default permission full → plan**: a headless entry that
+  silently allowed everything was a zero-confirmation door. `coderio run` now
+  defaults to read-only plan; full requires the explicit
+  `--dangerously-skip-permissions` flag (Claude Code's name for the same
+  escape hatch). confirm/auto_edit fail fast without a TTY (the gate is lazy,
+  so input() would otherwise EOFError mid-execution); invalid --permission
+  values are rejected up front.
+- **#8 · project-layer skills join the trust gate**: a repo shipping ONLY
+  `.coderio/skills` previously loaded them with zero confirmation — yet skills
+  enter the system prompt and may carry tools.py that exec's on activation.
+  Skills now participate in discovery + content fingerprint (per-file hash;
+  any skill edit re-triggers the prompt), and the confirmation summary marks
+  skills carrying tools.py with "⚠ executes code". tools.py load failures are
+  logged, no longer silent.
+- **#9 · trust store hardening**: the store gets owner-only permissions
+  (POSIX 0600 / Windows icacls, reusing the credentials helper); a corrupt
+  store is left untouched instead of being reset (the old reset destroyed
+  every other repo's trust entries); `SandboxFsConfig.deny_write` now
+  defaults to `["~/.coderio"]` so sandboxed commands can't rewrite the
+  config/credentials/trust store (explicit `deny_write = []` opts out;
+  Linux bwrap only — Windows sandbox is a no-op today).
+- **#11 · research subagent execution-time enforcement**: PermissionMiddleware
+  + CommandReviewMiddleware now ride the research subagent (the tool
+  whitelist filters what the model SEES; these gate what actually RUNS).
+  Failover direction reversed: a whitelist that cannot be constructed — or
+  fails at runtime — degrades to a DENY-ALL middleware (zero tools), not to
+  the old no-middleware state that inherited every tool including
+  write/execute.
+- **#14 · headless wall-clock timeout + exit codes**: `--timeout <seconds>`
+  (thread+join; SIGALRM doesn't exist on Windows) exits 124 on expiry;
+  agent execution failures exit 2 (distinct from config errors' 1); success
+  0. Documented in README for CI use.
+
 ## [0.4.1] — 2026-08-17
 
 ### Added

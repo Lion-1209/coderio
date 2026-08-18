@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,9 +60,12 @@ class Skill:
                     carried = getattr(module, "TOOLS", None)
                     if isinstance(carried, list):
                         loaded = carried
-            except Exception:
-                # A broken tools.py must NOT crash the agent — silently carry
-                # no tools. The skill's prompt body still loads normally.
+            except Exception as e:  # noqa: BLE001
+                # A broken tools.py must NOT crash the agent — carry no tools.
+                # Logged, not silent (v3 audit #8): the user configured this
+                # skill expecting its tools; an invisible load failure looks
+                # like the model "ignoring" the skill.
+                _log.warning("skill %r: tools.py failed to load: %s", self.name, e)
                 loaded = []
 
         self._tools = loaded

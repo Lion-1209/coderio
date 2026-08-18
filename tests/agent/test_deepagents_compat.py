@@ -199,3 +199,83 @@ def test_get_state_todos_empty_list_is_truthy_enough():
     from coderio.agent._deepagents_compat import get_state_todos
 
     assert get_state_todos({"todos": []}) == []
+
+
+# --- v3 #11: deny-all fallback + research permission middleware ---
+
+
+def test_whitelist_construction_failure_degrades_to_deny_all(monkeypatch):
+    """REGRESSION (v3 #11): whitelist-construction failure used to return []
+    (NO middleware — the research subagent inherited EVERY tool including
+    write/execute). Now it degrades to a deny-all middleware."""
+    from coderio.agent import _deepagents_compat as compat
+
+    def _boom(**kwargs):
+        raise RuntimeError("API changed")
+
+    monkeypatch.setattr(compat, "_ToolWhitelistMiddleware", _boom)
+    mw = compat.make_research_subagent_middleware()
+    assert len(mw) == 1
+    assert type(mw[0]).__name__ == "_DenyAllToolsMiddleware"
+
+
+def test_deny_all_middleware_overrides_to_empty_tools():
+    """_DenyAllToolsMiddleware strips every tool from the request."""
+    from coderio.agent._deepagents_compat import _DenyAllToolsMiddleware
+
+    class _Req:
+        tools = [1, 2, 3]
+
+        def override(self, **kw):
+            if "tools" in kw:
+                self.tools = kw["tools"]
+            return self
+
+    mw = _DenyAllToolsMiddleware()
+    seen = {}
+
+    def handler(req):
+        seen["tools"] = req.tools
+        return "ok"
+
+    assert mw.wrap_model_call(_Req(), handler) == "ok"
+    assert seen["tools"] == []
+
+
+def test_whitelist_runtime_error_degrades_to_no_tools():
+    """A runtime failure inside wrap_model_call (e.g. _tool_name exploding on
+    a weird tool object) degrades to an EMPTY tool set, not fail-open."""
+    from coderio.agent._deepagents_compat import _ToolWhitelistMiddleware
+
+    class _EvilTool:
+        # no .name, not a dict — makes _tool_name raise
+        pass
+
+    class _Req:
+        tools = [_EvilTool()]
+
+        def override(self, **kw):
+            self.tools = kw.get("tools", self.tools)
+            return self
+
+    mw = _ToolWhitelistMiddleware(allowed=frozenset({"read_file"}))
+    seen = {}
+
+    def handler(req):
+        seen["tools"] = req.tools
+        return "ok"
+
+    mw.wrap_model_call(_Req(), handler)
+    assert seen["tools"] == [], "runtime whitelist failure must degrade to NO tools"
+
+
+def test_research_subagent_carries_permission_and_review():
+    """v3 #11: research now carries PermissionMiddleware + CommandReviewMiddleware
+    (execution-time enforcement under the visibility whitelist)."""
+    from coderio.agent.deep_loop import _build_research_subagent
+    from coderio.tools.permission import PermissionGate
+
+    spec = _build_research_subagent(gate=PermissionGate("plan"), command_policy=None)
+    mw = [type(m).__name__ for m in spec["middleware"]]
+    assert "PermissionMiddleware" in mw, mw
+    assert "CommandReviewMiddleware" in mw, mw

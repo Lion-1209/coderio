@@ -130,14 +130,19 @@ def _read_sandbox_fs(data, default: SandboxFsConfig | None) -> SandboxFsConfig |
     Returns the `default` unchanged when the subtable is empty/missing, so
     users who don't configure filesystem isolation get None (bubblewrap uses
     its built-in workspace-only layout).
+
+    Per-key fallbacks come from SandboxFsConfig()'s FIELD DEFAULTS (caught in
+    self-test: passing [] here bypassed the deny_write default, so a table
+    that omitted deny_write silently lost the ~/.coderio protection).
     """
     if not isinstance(data, dict) or not data:
         return default
+    base = default if default is not None else SandboxFsConfig()
     return SandboxFsConfig(
-        allow_write=_read_fs_list(data, "allow_write", default.allow_write if default else []),
-        deny_write=_read_fs_list(data, "deny_write", default.deny_write if default else []),
-        deny_read=_read_fs_list(data, "deny_read", default.deny_read if default else []),
-        allow_read=_read_fs_list(data, "allow_read", default.allow_read if default else []),
+        allow_write=_read_fs_list(data, "allow_write", base.allow_write),
+        deny_write=_read_fs_list(data, "deny_write", base.deny_write),
+        deny_read=_read_fs_list(data, "deny_read", base.deny_read),
+        allow_read=_read_fs_list(data, "allow_read", base.allow_read),
     )
 
 

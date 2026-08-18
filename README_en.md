@@ -36,7 +36,7 @@ Core philosophy: **skills are the playbook, the harness is the discipline, tools
 - **SSRF-protected web_fetch**: scheme allowlist (http/https only), private/loopback/link-local IP blocking (incl. cloud metadata endpoints), per-hop redirect validation, and a 1 MB response cap.
 - **Multi-layer OS sandbox** (Linux real isolation): `sandbox_mode = "job" | "write"` — Job Object resource limits on Windows; bubblewrap namespace isolation on Linux (read-only root, read-write workspace, optional network cutoff, Claude-Code-compatible filesystem 4-tuple `allow_write`/`deny_write`/`deny_read`/`allow_read`).
 - **MCP support**: connect external MCP servers via `.mcp.json` (Claude Code-compatible format); stdio and HTTP transports; project-level config overrides user-level. `coderio mcp` CLI manages entries; MCP tools are gated by the permission system like built-in tools.
-- **Repo-config trust confirmation**: first time a repository's `.coderio/config.toml` or `.mcp.json` is seen, coderio shows what it contains (permission mode, base_url, MCP commands) and requires explicit confirmation — content-hashed, so upstream edits re-trigger the prompt. Cloning a hostile repo no longer means silent arbitrary code execution.
+- **Repo-config trust confirmation**: first time a repository's `.coderio/config.toml`, `.mcp.json`, **or project-layer skills** (with tools.py markers) is seen, coderio shows what it contains (permission mode, base_url, hook/MCP commands) and requires explicit confirmation — content-hashed, so upstream edits re-trigger the prompt. Cloning a hostile repo no longer means silent arbitrary code execution.
 - **Multiple providers + named profiles**: Zhipu GLM / StepFun coding plans (Anthropic protocol) + OpenAI-compatible endpoints; multiple profiles with runtime `/profile` switching.
 - **Headless mode**: `coderio run "task"` for one-shot, non-interactive runs (CI, scripting, benchmark harnesses).
 
@@ -306,9 +306,13 @@ coderio
 coderio --provider bigmodel_coding_plan --model glm-5.2
 
 # Headless one-shot run (CI / scripting / benchmarks)
-coderio run "write a hello-world script and test it"
-coderio run "fix the failing test in tests/foo.py" --quiet        # final result only
+coderio run "write a hello-world script and test it"              # default: plan (read-only)
+coderio run "fix the failing test in tests/foo.py" --quiet         # final result only
 coderio run "continue" --session-id <id>                           # resume a session
+coderio run "run any command" --dangerously-skip-permissions       # full access (explicit opt-in)
+coderio run "task" --timeout 600                                   # wall-clock timeout (recommended for CI)
+
+# headless exit codes: 0 success / 1 config error / 2 agent failure / 124 timeout
 
 # Manage skills (install pulls from GitHub; needs git on PATH)
 coderio skills list

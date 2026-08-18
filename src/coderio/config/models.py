@@ -108,7 +108,13 @@ class SandboxFsConfig:
     """
 
     allow_write: list[str] = field(default_factory=list)
-    deny_write: list[str] = field(default_factory=list)
+    # Default protects ~/.coderio (config + credentials + TRUST STORE) from
+    # writes by sandboxed commands (v3 audit #9: a sandboxed agent writing its
+    # own trust store could pre-trust hostile repos). An EXPLICIT
+    # ``deny_write = []`` in config.toml overrides this; users who genuinely
+    # need sandboxed writes there can opt out. Linux bwrap only — Windows
+    # sandbox is a no-op today (documented in win_sandbox.py).
+    deny_write: list[str] = field(default_factory=lambda: ["~/.coderio"])
     deny_read: list[str] = field(default_factory=list)
     allow_read: list[str] = field(default_factory=list)
 

@@ -108,17 +108,51 @@ def test_run_happy_path_prints_final_text(tmp_path, monkeypatch):
     assert captured["run_kwargs"]["stream"].quiet is True
 
 
-def test_run_permission_defaults_to_full(tmp_path, monkeypatch):
-    """build_runtime receives mode_override=full (headless default)."""
+def test_run_permission_defaults_to_plan(tmp_path, monkeypatch):
+    """v3 audit #7: headless default is PLAN (read-only) — a headless entry
+    that silently allowed everything was a zero-confirmation door. full now
+    requires --dangerously-skip-permissions."""
     captured = _mock_runtime(monkeypatch, tmp_path)
-    runner.invoke(app, ["run", "task"])
+    result = runner.invoke(app, ["run", "task"])
+    assert result.exit_code == 0, result.output
+    assert captured["build_kwargs"]["mode_override"] == "plan"
+
+
+def test_run_dangerously_skip_enables_full(tmp_path, monkeypatch):
+    """--dangerously-skip-permissions is the explicit opt-in for full mode."""
+    captured = _mock_runtime(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["run", "task", "--dangerously-skip-permissions"])
+    assert result.exit_code == 0, result.output
     assert captured["build_kwargs"]["mode_override"] == "full"
 
 
+def test_run_invalid_permission_rejected_early(tmp_path, monkeypatch):
+    """Invalid --permission fails fast with exit 1 (config error), not later
+    inside build_gate."""
+    result = runner.invoke(app, ["run", "task", "--permission", "bogus"])
+    assert result.exit_code == 1
+    assert "Invalid --permission" in result.output
+
+
+def test_run_confirm_without_tty_rejected(tmp_path, monkeypatch):
+    """confirm/auto_edit need a TTY; under CliRunner's piped stdin they must
+    fail fast instead of hanging on input() mid-execution."""
+    monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
+    monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
+    import sys as _sys
+    from unittest.mock import patch as _patch
+
+    with _patch.object(_sys.stdin, "isatty", return_value=False):
+        result = runner.invoke(app, ["run", "task", "--permission", "confirm"])
+    assert result.exit_code == 1
+    assert "TTY" in result.output
+
+
 def test_run_permission_override_passed_through(tmp_path, monkeypatch):
-    """--permission plan reaches build_runtime (plan never prompts)."""
+    """--permission plan reaches build_runtime explicitly too."""
     captured = _mock_runtime(monkeypatch, tmp_path)
-    runner.invoke(app, ["run", "task", "--permission", "plan"])
+    result = runner.invoke(app, ["run", "task", "--permission", "plan"])
+    assert result.exit_code == 0
     assert captured["build_kwargs"]["mode_override"] == "plan"
 
 
@@ -154,3 +188,48 @@ def test_headless_stream_tool_progress_to_stderr(capsys):
     out = capsys.readouterr()
     assert "execute" in out.err and "pytest" in out.err
     assert out.out == ""  # stdout is for model tokens only
+
+
+# --- v3 #14: wall-clock timeout + exit codes ---
+
+
+def test_run_timeout_exits_124(tmp_path, monkeypatch):
+    """--timeout kills the wait and exits 124 (agent thread daemonized)."""
+    import time
+
+    def _slow_runtime(**kwargs):
+        time.sleep(3)
+        return _mock_runtime(monkeypatch, tmp_path)[0]  # never reached
+
+    captured = _mock_runtime(monkeypatch, tmp_path)
+
+    def _slow_deep_agent(**kwargs):
+        time.sleep(5)
+        return "late"
+
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _slow_deep_agent)
+    start = time.time()
+    result = runner.invoke(app, ["run", "task", "--timeout", "1"])
+    elapsed = time.time() - start
+    assert result.exit_code == 124, result.output
+    assert elapsed < 4, f"timeout=1 should return promptly, took {elapsed:.1f}s"
+    assert "Timed out" in result.output
+
+
+def test_run_agent_failure_exits_2(tmp_path, monkeypatch):
+    """Agent execution exceptions map to exit 2 (distinct from config=1)."""
+
+    def _boom(**kwargs):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _boom)
+    result = runner.invoke(app, ["run", "task"])
+    assert result.exit_code == 2, result.output
+    assert "Agent execution failed" in result.output
+
+
+def test_run_success_exits_0(tmp_path, monkeypatch):
+    captured = _mock_runtime(monkeypatch, tmp_path, final_text="DONE-OK")
+    result = runner.invoke(app, ["run", "task", "--quiet"])
+    assert result.exit_code == 0
+    assert "DONE-OK" in result.output

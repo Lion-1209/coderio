@@ -36,7 +36,7 @@
 - **命令审查层**：shell（execute）命令不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、shutdown 等破坏性命令（即使 FULL 模式也挡），用户可在 config.toml 追加 `blocked_commands`。这不是真 OS 沙箱（混淆命令可绕过正则），但能挡住绝大多数意外破坏。`network_allowed = false` 可完全禁用 web 工具（离线模式）
 - **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
 - **MCP 支持**：通过 `.mcp.json`（与 Claude Code 格式兼容）接入外部 MCP 服务器，自动加载它们的工具。支持 stdio（本地进程）和 HTTP（远程）两种传输。项目级 `.mcp.json` 覆盖用户级同名服务器
-- **仓库配置信任确认**：首次在某仓库检测到 `.coderio/config.toml` 或 `.mcp.json` 时，展示其内容（权限模式、base_url、MCP 命令）并要求显式确认——按内容 hash 记忆，上游改配置会重新触发确认。克隆恶意仓库不再等于静默任意代码执行
+- **仓库配置信任确认**：首次在某仓库检测到 `.coderio/config.toml`、`.mcp.json` **或项目级 skills**（含 tools.py 标注）时，展示其内容（权限模式、base_url、hook/MCP 命令）并要求显式确认——按内容 hash 记忆，上游改配置会重新触发确认。克隆恶意仓库不再等于静默任意代码执行
 - **web_fetch SSRF 防护**：scheme 白名单（仅 http/https）+ 私网/环回/链路本地 IP 拦截（含云元数据端点）+ 逐跳重定向校验 + 1MB 响应上限
 - **headless 模式**：`coderio run "任务"` 单次无交互运行（CI / 脚本 / benchmark 接入）
 
@@ -306,9 +306,13 @@ coderio
 coderio --provider bigmodel_coding_plan --model glm-5.2
 
 # headless 单次运行（CI / 脚本 / benchmark 接入）
-coderio run "写一个 hello-world 脚本并测试"
-coderio run "修复 tests/foo.py 里失败的测试" --quiet        # 只输出最终结果
-coderio run "继续" --session-id <id>                        # 续跑会话
+coderio run "写一个 hello-world 脚本并测试"                     # 默认 plan（只读）
+coderio run "修复 tests/foo.py 里失败的测试" --quiet            # 只输出最终结果
+coderio run "继续" --session-id <id>                            # 续跑会话
+coderio run "跑任意命令" --dangerously-skip-permissions         # full 权限（显式选择加入）
+coderio run "任务" --timeout 600                                # 墙钟超时（CI 建议）
+
+# headless 退出码：0 成功 / 1 配置错误 / 2 agent 执行失败 / 124 超时
 
 # 管理 skill（install 从 GitHub 拉取，需要 git 在 PATH）
 coderio skills list

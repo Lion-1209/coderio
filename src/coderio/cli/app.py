@@ -183,19 +183,32 @@ def run_cmd(
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
     permission: str = typer.Option(
-        "full",
+        "plan",
         "--permission",
         "-p",
-        help="Permission tier: full (default, headless can't answer prompts), plan, confirm, auto_edit.",
+        help="Permission tier: plan (default, read-only), confirm/auto_edit, full (--dangerously-skip-permissions).",
     ),
     session_id: str = typer.Option(None, "--session-id", help="Resume a prior session by id."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Print only the final result."),
+    skip_permissions: bool = typer.Option(
+        False,
+        "--dangerously-skip-permissions",
+        help="Run with full permissions (no prompts). Explicit opt-in — headless default is read-only plan mode.",
+    ),
+    timeout: int = typer.Option(
+        0,
+        "--timeout",
+        help="Wall-clock limit in seconds (0 = unlimited). On timeout: exit 124. Recommended for CI.",
+    ),
 ):
     """One-shot headless agent run (CI / scripting / benchmarks).
 
     Streams tokens to stdout by default; tool progress goes to stderr. Never
     prompts interactively — untrusted repo config or missing credentials are
-    hard errors. The command blacklist still applies in full mode.
+    hard errors. Default permission is plan (read-only); use
+    --dangerously-skip-permissions for full access. Exit codes: 0 success,
+    1 config error, 2 agent failure, 124 timeout. The command blacklist
+    still applies in every mode.
     """
     from coderio.cli.run_cmd import run_headless
 
@@ -206,6 +219,8 @@ def run_cmd(
         permission=permission,
         session_id=session_id,
         quiet=quiet,
+        skip_permissions=skip_permissions,
+        timeout=timeout,
     )
 
 

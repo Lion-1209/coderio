@@ -66,13 +66,19 @@ def run_headless(
     *,
     provider: str | None = None,
     model: str | None = None,
-    permission: str = "full",
+    permission: str = "plan",
     session_id: str | None = None,
     quiet: bool = False,
+    skip_permissions: bool = False,
+    timeout: int = 0,
 ) -> None:
     """Entry point behind ``coderio run``. Prints the final agent reply to
-    stdout (or errors to stderr + exit 1). Always returns None — failures
-    raise SystemExit via typer, handled by the CLI wrapper."""
+    stdout (or errors to stderr + the documented exit code).
+
+    Exit codes: 0 success / 1 config or environment error / 2 agent execution
+    failure / 124 wall-clock timeout.
+    """
+    import sys
     from pathlib import Path
 
     import typer
@@ -81,6 +87,32 @@ def run_headless(
     from coderio.config.trust import existing_repo_configs, is_repo_trusted
 
     ensure_user_dirs()
+
+    # Permission validation + safety gates (v3 audit #7): default is PLAN —
+    # a headless entry that silently allowed everything was a zero-
+    # confirmation door. full requires the explicit --dangerously-skip-
+    # permissions flag (Claude Code's name for the same escape hatch), and
+    # confirm/auto_edit need a TTY (the gate is lazy, so input() would
+    # otherwise EOFError mid-execution or hang forever without one).
+    if skip_permissions:
+        permission = "full"
+    from coderio.tools.permission import PermissionMode
+
+    try:
+        PermissionMode.normalize(permission)
+    except ValueError as e:
+        typer.secho(f"Invalid --permission {permission!r}: {e}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(1)
+    if permission in ("confirm", "auto_edit") and not sys.stdin.isatty():
+        typer.secho(
+            f"--permission {permission!r} needs an interactive TTY to answer prompts; "
+            "use plan (default), full via --dangerously-skip-permissions, or the "
+            "interactive TUI instead.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(1)
+
     creds_path = Path.home() / ".coderio" / "credentials"
 
     # Interactive onboarding would hang forever without a TTY — fail loudly.
@@ -151,24 +183,60 @@ def run_headless(
         whitelist_mode=cfg.tools.whitelist_mode,
         allowed_commands=cfg.tools.allowed_commands,
     )
-    final = run_deep_agent(
-        user_input=task,
-        model=chat_model,
-        session=session,
-        stream=HeadlessStream(quiet=quiet),
-        gate=gate,
-        skill_store=store,
-        active_skills=active,
-        tools=tools,
-        workdir=cfg.tools.workspace_root or None,
-        harness_enabled=cfg.skills.harness,
-        command_policy=cmd_policy,
-        sandbox_mode=cfg.tools.sandbox_mode,
-        network_allowed=cfg.tools.network_allowed,
-        fs_config=cfg.tools.sandbox_fs,
-        bash_shell=cfg.tools.bash_shell,
-        hooks=cfg.hooks,
-    )
+
+    def _execute() -> str:
+        return run_deep_agent(
+            user_input=task,
+            model=chat_model,
+            session=session,
+            stream=HeadlessStream(quiet=quiet),
+            gate=gate,
+            skill_store=store,
+            active_skills=active,
+            tools=tools,
+            workdir=cfg.tools.workspace_root or None,
+            harness_enabled=cfg.skills.harness,
+            command_policy=cmd_policy,
+            sandbox_mode=cfg.tools.sandbox_mode,
+            network_allowed=cfg.tools.network_allowed,
+            fs_config=cfg.tools.sandbox_fs,
+            bash_shell=cfg.tools.bash_shell,
+            hooks=cfg.hooks,
+        )
+
+    # Wall-clock timeout (v3 audit #14): SIGALRM doesn't exist on Windows, so
+    # thread + join is the only portable mechanism. The agent thread is a
+    # daemon — on timeout we return 124 and let the process exit reap it
+    # (mid-flight subprocesses die with the parent on POSIX process groups /
+    # Windows job objects where wired; this is CI-safety, not precise cancel).
+    import threading
+
+    result: dict = {}
+
+    def _worker() -> None:
+        try:
+            result["final"] = _execute()
+        except BaseException as e:  # noqa: BLE001 — captured, re-raised below
+            result["error"] = e
+
+    t = threading.Thread(target=_worker, daemon=True, name="coderio-run")
+    t.start()
+    t.join(timeout=timeout if timeout > 0 else None)
+    if t.is_alive():
+        typer.secho(
+            f"Timed out after {timeout}s (--timeout). Partial output above; exit 124.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(124)
+    if "error" in result:
+        # mypy [misc]: `e` was bound by the worker's except clause; rebinding an
+        # exception variable outside except is flagged, so alias it here.
+        err = result["error"]
+        typer.secho(f"Agent execution failed: {err}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2)
+
+    final = result["final"]
     # Always print the final result (v3 audit P2): in non-quiet mode the token
     # stream already showed it, but a non-streamed final message would be lost
     # without this — and scripts parsing stdout need exactly one final line.

@@ -61,11 +61,14 @@ def discover_repo_configs(search_from: Path | str) -> tuple[Path, list[Path]]:
       - config.toml via the config loader's upward walk (``_find_project_dir``,
         which stops at the user's home),
       - ``.mcp.json`` via mcp_loader's independent upward walk
-        (``_find_mcp_config``).
+        (``_find_mcp_config``),
+      - ``.coderio/skills/`` directory (v3 audit #8: project-layer skills enter
+        the system prompt on load and may carry ``tools.py`` that is exec'd on
+        activation — a repo shipping ONLY skills previously loaded with zero
+        confirmation).
 
     Trust scope ⊇ load scope: whatever the loaders will find and apply, this
-    finds too — including the "only .mcp.json at root, launched from a
-    subdirectory" case that previously slipped through.
+    finds too.
     """
     from coderio.config.loader import _find_project_dir
     from coderio.mcp_loader import _find_mcp_config
@@ -82,6 +85,12 @@ def discover_repo_configs(search_from: Path | str) -> tuple[Path, list[Path]]:
     if mcp is not None:
         configs.append(mcp)
 
+    # Project-layer skills: loaded by repl.build_runtime from the config
+    # loader's project dir — same anchor, same discovery.
+    skills_dir = proj / ".coderio" / "skills"
+    if skills_dir.is_dir() and any(skills_dir.iterdir()):
+        configs.append(skills_dir)
+
     # Store key root: the config.toml dir when present (the loader's anchor),
     # else the .mcp.json dir. Same launch point ⇒ same discovered set ⇒ same key.
     if config_toml.is_file():
@@ -94,16 +103,23 @@ def discover_repo_configs(search_from: Path | str) -> tuple[Path, list[Path]]:
 
 
 def _repo_fingerprint(configs: list[Path]) -> str:
-    """Hash the CONTENT of every discovered repo config file.
+    """Hash the CONTENT of every discovered repo config file/dir.
 
     Content-keyed trust: editing the config after confirmation re-triggers the
     prompt — a malicious upstream commit can't ride on a previously-granted
-    trust.
+    trust. Directories (the skills layer) hash every contained file's
+    relpath + content, sorted for determinism.
     """
     h = hashlib.sha256()
     for p in configs:
         h.update(str(p).encode("utf-8"))
-        h.update(p.read_bytes())
+        if p.is_dir():
+            for f in sorted(p.rglob("*")):
+                if f.is_file():
+                    h.update(f.relative_to(p).as_posix().encode("utf-8"))
+                    h.update(f.read_bytes())
+        else:
+            h.update(p.read_bytes())
     return h.hexdigest()
 
 
@@ -145,26 +161,56 @@ def mark_repo_trusted(search_from: Path | str, user_dir: Path | str) -> None:
     if not configs:
         return
     store = _trust_store(user_dir)
+    entries: dict = {}
+    if store.is_file():
+        try:
+            loaded = json.loads(store.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                entries = loaded
+            # v3 audit #9: a corrupt store (non-dict JSON) previously reset to
+            # {} and OVERWROTE every other repo's trust entries. Now: keep
+            # parsing failures OUT of the write path — if the existing file is
+            # unparseable, skip the write entirely (the repo stays untrusted,
+            # the prompt reappears; other entries can't be lost by us).
+            elif loaded is not None:
+                _log.warning(
+                    "trust store %s has unexpected shape (%s); leaving it untouched",
+                    store,
+                    type(loaded).__name__,
+                )
+                return
+        except json.JSONDecodeError:
+            _log.warning("trust store %s is corrupt; leaving it untouched (this repo stays untrusted)", store)
+            return
     try:
-        entries: dict = {}
-        if store.is_file():
-            entries = json.loads(store.read_text(encoding="utf-8"))
-            if not isinstance(entries, dict):
-                entries = {}
         entries[str(root)] = _repo_fingerprint(configs)
         store.parent.mkdir(parents=True, exist_ok=True)
         store.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-    except (json.JSONDecodeError, OSError) as e:
+        _restrict_store_permissions(store)
+    except OSError as e:
         _log.warning("could not persist repo trust for %s: %s", root, e)
+
+
+def _restrict_store_permissions(store: Path) -> None:
+    """Tighten the trust store to owner-only (0600 / icacls), reusing the
+    credentials module's cross-platform helper. The store maps repo paths to
+    trust decisions — writable-by-others would let a local process
+    pre-trust repos. Best-effort: failures log, never raise (v3 audit #9)."""
+    try:
+        from coderio.cli.credentials import _restrict_permissions
+
+        _restrict_permissions(store)
+    except Exception as e:  # noqa: BLE001 — hardening is best-effort
+        _log.warning("could not restrict trust-store permissions: %s", e)
 
 
 def summarize_repo_configs(search_from: Path | str) -> str:
     """Build the human-readable summary shown in the confirmation prompt.
 
     Lists each discovered file and its safety-relevant content — permission
-    mode, base_url, HOOK COMMANDS, MCP server commands/args — so nothing
-    dangerous hides behind a bare filename. Paths are shown relative to the
-    repo root when possible.
+    mode, base_url, HOOK COMMANDS, MCP server commands/args, and skill
+    entries (with ⚠ on skills carrying tools.py — those execute code on
+    activation) — so nothing dangerous hides behind a bare filename.
     """
     root, configs = discover_repo_configs(search_from)
     lines = []
@@ -173,6 +219,13 @@ def summarize_repo_configs(search_from: Path | str) -> str:
             rel = path.relative_to(root).as_posix()
         except ValueError:
             rel = str(path)
+        if path.is_dir():
+            # Skills layer: list each skill; mark the ones that execute code.
+            lines.append(f"{rel}/ (project skills)")
+            for skill_dir in sorted(p for p in path.iterdir() if p.is_dir()):
+                marker = " ⚠ executes code (tools.py)" if (skill_dir / "tools.py").is_file() else ""
+                lines.append(f"  skill {skill_dir.name!r}{marker}")
+            continue
         lines.append(f"{rel} ({path.stat().st_size} bytes)")
         try:
             text = path.read_text(encoding="utf-8")

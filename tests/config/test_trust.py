@@ -156,3 +156,82 @@ def test_summary_shows_mcp_args_and_env_keys(tmp_path):
     assert "db.js" in summary
     assert "DB_PASSWORD" in summary
     assert "x" not in summary.split("env:")[1] if "env:" in summary else True  # values not leaked
+
+
+# --- v3 #8: project skills in trust scope ---
+
+
+def test_skills_only_repo_requires_trust(tmp_path):
+    """REGRESSION (v3 #8): a repo shipping ONLY .coderio/skills previously
+    loaded them with zero confirmation (skills enter the system prompt and
+    may carry tools.py that exec's on activation)."""
+    repo = tmp_path / "skills-repo"
+    (repo / ".coderio" / "skills" / "evil-skill").mkdir(parents=True)
+    (repo / ".coderio" / "skills" / "evil-skill" / "SKILL.md").write_text("# evil", encoding="utf-8")
+
+    assert is_repo_trusted(repo, tmp_path / "user") is False, "skills-only repo must trigger the gate"
+
+
+def test_skills_content_change_invalidates_trust(tmp_path):
+    """Skill file edits change the fingerprint → re-confirmation."""
+    repo = tmp_path / "repo"
+    skill = repo / ".coderio" / "skills" / "s1"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("v1", encoding="utf-8")
+    mark_repo_trusted(repo, tmp_path / "user")
+    assert is_repo_trusted(repo, tmp_path / "user") is True
+
+    (skill / "SKILL.md").write_text("v2 malicious", encoding="utf-8")
+    assert is_repo_trusted(repo, tmp_path / "user") is False, "skill edit must re-trigger"
+
+
+def test_summary_marks_tools_py_skills(tmp_path):
+    """Skills carrying tools.py are flagged in the summary (they execute code)."""
+    repo = tmp_path / "repo"
+    plain = repo / ".coderio" / "skills" / "plain"
+    armed = repo / ".coderio" / "skills" / "armed"
+    plain.mkdir(parents=True)
+    armed.mkdir(parents=True)
+    (plain / "SKILL.md").write_text("x", encoding="utf-8")
+    (armed / "SKILL.md").write_text("x", encoding="utf-8")
+    (armed / "tools.py").write_text("TOOLS = []", encoding="utf-8")
+
+    summary = summarize_repo_configs(repo)
+    assert "armed" in summary and "executes code" in summary
+    assert "plain" in summary and "executes code" not in summary.split("plain")[1].split("\n")[0]
+
+
+# --- v3 #9: trust store hardening ---
+
+
+def test_corrupt_store_not_reset_by_mark(tmp_path):
+    """A corrupt store must NOT be overwritten by mark_repo_trusted — the old
+    reset-to-{} behavior destroyed every other repo's trust entries."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".mcp.json").write_text("{}", encoding="utf-8")
+    user = tmp_path / "user"
+    user.mkdir()
+    store = user / "trusted-repos.json"
+    store.write_text("THIS IS NOT JSON {{{", encoding="utf-8")
+
+    mark_repo_trusted(repo, user)
+    assert store.read_text(encoding="utf-8") == "THIS IS NOT JSON {{{", (
+        "corrupt store must be left untouched (other entries can't be lost)"
+    )
+
+
+def test_trust_store_permissions_tightened(tmp_path):
+    """mark_repo_trusted restricts the store to owner-only (POSIX 0600)."""
+    import os
+    import sys
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".mcp.json").write_text("{}", encoding="utf-8")
+    user = tmp_path / "user"
+    mark_repo_trusted(repo, user)
+    store = user / "trusted-repos.json"
+    assert store.is_file()
+    if sys.platform != "win32":
+        assert (os.stat(store).st_mode & 0o777) == 0o600, oct(os.stat(store).st_mode)

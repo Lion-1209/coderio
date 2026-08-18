@@ -97,22 +97,48 @@ class _ToolWhitelistMiddleware(AgentMiddleware):
 
     Wraps the same ModelRequest.override + filter mechanism as
     ``_ToolExclusionMiddleware`` but inverts the predicate.
+
+    Runtime failures degrade to an EMPTY tool set (deny-all), never to the
+    unfiltered original — a broken research subagent is preferable to a
+    research subagent that can suddenly see write/execute tools (v3 audit #11
+    reversed the old fail-open direction).
     """
 
     def __init__(self, *, allowed: frozenset[str]) -> None:
         self._allowed = allowed
 
     def wrap_model_call(self, request, handler):
-        if self._allowed:
+        try:
             filtered = [t for t in request.tools if _tool_name(t) in self._allowed]
-            request = request.override(tools=filtered)
-        return handler(request)
+            return handler(request.override(tools=filtered))
+        except Exception as e:  # noqa: BLE001 — degrade to deny-all, never fail-open
+            _log.warning("tool whitelist failed at runtime (degrading to NO tools): %s", e)
+            return handler(request.override(tools=[]))
 
     async def awrap_model_call(self, request, handler):
-        if self._allowed:
+        try:
             filtered = [t for t in request.tools if _tool_name(t) in self._allowed]
-            request = request.override(tools=filtered)
-        return await handler(request)
+            return await handler(request.override(tools=filtered))
+        except Exception as e:  # noqa: BLE001 — degrade to deny-all, never fail-open
+            _log.warning("tool whitelist failed at runtime (degrading to NO tools): %s", e)
+            return await handler(request.override(tools=[]))
+
+
+class _DenyAllToolsMiddleware(AgentMiddleware):
+    """Last-resort middleware: the model sees ZERO tools.
+
+    Returned when the whitelist middleware itself cannot be constructed — the
+    research subagent becomes useless but stays harmless (v3 audit #11: the
+    old fallback was an EMPTY middleware list, i.e. the subagent inherited
+    EVERY tool including write/execute — fail-open in the most dangerous
+    direction).
+    """
+
+    def wrap_model_call(self, request, handler):
+        return handler(request.override(tools=[]))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(request.override(tools=[]))
 
 
 def make_research_subagent_middleware():
@@ -126,8 +152,8 @@ def make_research_subagent_middleware():
 
     Returns a list with a _ToolWhitelistMiddleware. If the deepagents
     AgentMiddleware base class API is unavailable (very old or very new
-    version), returns an empty list — the subagent will inherit all tools
-    (less safe, but won't crash).
+    version), falls back to _DenyAllToolsMiddleware — the subagent sees no
+    tools rather than all of them (fail-closed; v3 audit #11).
     """
     # Read-only tools the research subagent is allowed to use. Add new tools
     # here ONLY after confirming they're safe for a read-only agent.
@@ -135,5 +161,8 @@ def make_research_subagent_middleware():
     try:
         return [_ToolWhitelistMiddleware(allowed=allowed)]
     except Exception as e:  # noqa: BLE001 — AgentMiddleware API may differ
-        _log.warning("Could not build _ToolWhitelistMiddleware: %s", e)
-        return []
+        _log.warning("Could not build _ToolWhitelistMiddleware (deny-all fallback): %s", e)
+        try:
+            return [_DenyAllToolsMiddleware()]
+        except Exception:  # noqa: BLE001 — even the fallback construction failed
+            return []
