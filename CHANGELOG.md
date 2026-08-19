@@ -6,7 +6,7 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
-## [Unreleased]
+## [0.4.2] — 2026-08-18
 
 ### Security — v3 audit short-term batch (#7/#8/#9/#11/#14, all runtime-verified)
 - **#7 · headless default permission full → plan**: a headless entry that
@@ -41,6 +41,70 @@ All notable changes to coderio are documented here. The format follows
   (thread+join; SIGALRM doesn't exist on Windows) exits 124 on expiry;
   agent execution failures exit 2 (distinct from config errors' 1); success
   0. Documented in README for CI use.
+
+### Fixed — hooks completion (2026-08-14 v3 audit P1/P2 items)
+- **Timeout latency (v3 P1: timeout=2 hook took 12s)**: the post-kill pipe
+  drain waited 10s for an EOF that never comes on Windows (a pre-kill
+  grandchild holds the write end) — and the drained output was never consumed
+  anyway (hardcoded empty return). Now a 1s grace then abandon: a timeout=2
+  hook returns in ~3s. Windows grandchild leak documented as a known
+  limitation (the turn is no longer hostage; root fix = CREATE_SUSPENDED +
+  pre-assigned Job + stdin pipe through _create_process_with_token). Latency
+  regression test added (`elapsed < timeout + 2`), mutation-verified.
+- **Per-event budget (v3 P1: N hooks × 60s on every tool call)**: fire() now
+  enforces a 30s total budget per event (overridable on HookRunner for
+  tests). Each hook's timeout tightens to min(spec.timeout, budget
+  remaining); exhaustion skips the remaining hooks with an error note
+  (fail-open, consistent with the module's positioning).
+- **Subagents bypassed hooks (v3 #12)**: research and general-purpose
+  subagents both carry HooksMiddleware now (outermost, same order as the main
+  agent) — task() delegation can no longer sidestep PreToolUse/PostToolUse.
+  No middleware overhead when no hooks are configured.
+- **Repo [[hooks]] silently dropped user hooks (v3 P2)**: _merge replaces
+  lists wholesale, so a repo's hooks config wiped the user's protective
+  hooks. Hooks now APPEND across layers — user hooks first (first-blocker-
+  wins: the user's deny reason is what the model sees). The first and only
+  list-merge in the loader; every other key keeps replace semantics.
+- +7 tests (latency guard, budget skip/tighten, subagent middleware stacks ×3,
+  merge order). Mutation check: reintroducing the 10s drain turns the latency
+  test red (10.1s ≥ 4s bound) — the guard actually guards.
+
+### Fixed — 2026-08-18 self-audit (3 bugs + 3 warnings, all runtime-verified)
+- **BUG A · `--permission full` had no flag gate (claim vs code mismatch)**:
+  the 0.4.1 commit message and CHANGELOG claimed "full requires
+  --dangerously-skip-permissions" — no such gate existed; `--permission full`
+  alone ran with full access (verified end-to-end by an audit agent that
+  unintentionally ran three real model turns through it). The gate is real
+  now: full without the flag exits 1. +2 tests (negative and positive sides).
+  Fourth seam-class failure in project history (v1: deepagents↔coderio; v3:
+  config↔runtime, trust↔mcp_loader; this: message↔code) — new rule in the
+  audit report: every behavior claim in a commit message must have a
+  corresponding verified command output before release.
+- **BUG B · Windows NUL bypassed the confirm-mode TTY check**: `</dev/null`
+  (the classic CI idiom) makes `sys.stdin.isatty()` return True on Windows
+  (MSVCRT treats character devices as ttys) — the check passed, then
+  `input()` read NUL, EOFError'd, and crashed the agent mid-execution.
+  confirm/auto_edit are no longer valid headless values AT ALL (rejected
+  unconditionally); the interactive TUI is the only prompting surface.
+- **BUG C · the deny_write default was dead config for most users**:
+  SandboxFsConfig's `deny_write=["~/.coderio"]` default only applied when the
+  `[tools.sandbox_filesystem]` table EXISTED — users without the table got
+  fs_config=None, and bwrap's built-in layout had no deny_write, so sandboxed
+  commands could write ~/.coderio (config/credentials/TRUST STORE). The
+  sandbox runner now constructs the default config when fs_config is None;
+  explicit user configs (including `deny_write = []`) pass through unchanged.
+- **hooks budget skip-count was dead code**: `self.specs[len(self.specs):]`
+  is always the empty slice, so the "N hook(s) skipped" message always
+  printed "remaining" — the count never appeared (and no test asserted it).
+  Fixed with enumerate-indexed slicing (verified: 4 hooks skipped →
+  "4 hook(s) skipped").
+- **trust store `null` slipped the corruption guard**: JSON `null` parsed to
+  None and bypassed the `is not None` shape check, getting overwritten. All
+  non-dict JSON (including null) now leaves the store untouched.
+- **nested typer.Exit produced a misleading second error line**: typer.Exit
+  is a RuntimeError subclass, so the session-load failure's clean exit was
+  re-caught by "Runtime setup failed" and printed twice. Nested exits now
+  pass through with their original code and message.
 
 ## [0.4.1] — 2026-08-17
 
@@ -102,35 +166,6 @@ All notable changes to coderio are documented here. The format follows
 - **P2 · headless run could lose the final answer**: non-quiet mode relied
   solely on the token stream; a non-streamed final message vanished. The
   final result is now always printed (after a separator in non-quiet mode).
-
-## [Unreleased]
-
-### Fixed — hooks completion (2026-08-14 v3 audit P1/P2 items)
-- **Timeout latency (v3 P1: timeout=2 hook took 12s)**: the post-kill pipe
-  drain waited 10s for an EOF that never comes on Windows (a pre-kill
-  grandchild holds the write end) — and the drained output was never consumed
-  anyway (hardcoded empty return). Now a 1s grace then abandon: a timeout=2
-  hook returns in ~3s. Windows grandchild leak documented as a known
-  limitation (the turn is no longer hostage; root fix = CREATE_SUSPENDED +
-  pre-assigned Job + stdin pipe through _create_process_with_token). Latency
-  regression test added (`elapsed < timeout + 2`), mutation-verified.
-- **Per-event budget (v3 P1: N hooks × 60s on every tool call)**: fire() now
-  enforces a 30s total budget per event (overridable on HookRunner for
-  tests). Each hook's timeout tightens to min(spec.timeout, budget
-  remaining); exhaustion skips the remaining hooks with an error note
-  (fail-open, consistent with the module's positioning).
-- **Subagents bypassed hooks (v3 #12)**: research and general-purpose
-  subagents both carry HooksMiddleware now (outermost, same order as the main
-  agent) — task() delegation can no longer sidestep PreToolUse/PostToolUse.
-  No middleware overhead when no hooks are configured.
-- **Repo [[hooks]] silently dropped user hooks (v3 P2)**: _merge replaces
-  lists wholesale, so a repo's hooks config wiped the user's protective
-  hooks. Hooks now APPEND across layers — user hooks first (first-blocker-
-  wins: the user's deny reason is what the model sees). The first and only
-  list-merge in the loader; every other key keeps replace semantics.
-- +7 tests (latency guard, budget skip/tighten, subagent middleware stacks ×3,
-  merge order). Mutation check: reintroducing the 10s drain turns the latency
-  test red (10.1s ≥ 4s bound) — the guard actually guards.
 
 ## [0.4.0] — 2026-08-17
 

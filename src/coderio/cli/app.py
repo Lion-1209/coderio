@@ -186,7 +186,7 @@ def run_cmd(
         "plan",
         "--permission",
         "-p",
-        help="Permission tier: plan (default, read-only), confirm/auto_edit, full (--dangerously-skip-permissions).",
+        help="Permission tier: plan (default, read-only) or full (needs --dangerously-skip-permissions).",
     ),
     session_id: str = typer.Option(None, "--session-id", help="Resume a prior session by id."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Print only the final result."),

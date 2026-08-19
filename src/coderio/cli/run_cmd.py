@@ -8,12 +8,13 @@ give a task string, get the final result).
 Design rules:
 - NEVER block on interactive prompts. Onboarding missing → error exit.
   Untrusted repo config → error exit (run interactive ``coderio`` once to
-  confirm). Permission mode defaults to ``full`` because there is no TTY to
-  answer confirm prompts; users who want a stricter tier pass
-  ``--permission plan`` (plan never prompts — it just denies).
-- Default permission is FULL but the command blacklist still applies
-  (CommandReviewMiddleware is independent of the permission gate —
-  ``rm -rf /`` stays blocked), and the harness four gates stay active.
+  confirm). Permission defaults to read-only PLAN; full access requires the
+  explicit ``--dangerously-skip-permissions`` flag. Any value that resolves
+  to full (including the legacy ``auto`` alias) is gated the same way;
+  confirm/auto_edit are not valid headless values at all.
+- The command blacklist still applies in every mode (CommandReviewMiddleware
+  is independent of the permission gate — ``rm -rf /`` stays blocked), and
+  the harness four gates stay active.
 - Streams tokens to stdout so long tasks show progress; ``--quiet`` silences
   everything except the final result.
 """
@@ -78,7 +79,6 @@ def run_headless(
     Exit codes: 0 success / 1 config or environment error / 2 agent execution
     failure / 124 wall-clock timeout.
     """
-    import sys
     from pathlib import Path
 
     import typer
@@ -88,26 +88,36 @@ def run_headless(
 
     ensure_user_dirs()
 
-    # Permission validation + safety gates (v3 audit #7): default is PLAN —
-    # a headless entry that silently allowed everything was a zero-
-    # confirmation door. full requires the explicit --dangerously-skip-
-    # permissions flag (Claude Code's name for the same escape hatch), and
-    # confirm/auto_edit need a TTY (the gate is lazy, so input() would
-    # otherwise EOFError mid-execution or hang forever without one).
+    # Permission validation + safety gates (v3 audit #7, hardened 2026-08-18
+    # self-audit BUG A/B + third-party audit): default is PLAN. The gates
+    # check the NORMALIZED mode, not the literal string — the first BUG A fix
+    # compared == "full" and the legacy alias "auto" (normalize() maps it to
+    # FULL) sailed through. Any mode that RESOLVES to full requires
+    # --dangerously-skip-permissions; confirm/auto_edit (and anything else
+    # that prompts) are not valid headless values at all.
     if skip_permissions:
         permission = "full"
     from coderio.tools.permission import PermissionMode
 
     try:
-        PermissionMode.normalize(permission)
+        normalized = PermissionMode.normalize(permission)
     except ValueError as e:
         typer.secho(f"Invalid --permission {permission!r}: {e}", err=True, fg=typer.colors.RED)
         raise typer.Exit(1)
-    if permission in ("confirm", "auto_edit") and not sys.stdin.isatty():
+    if normalized is PermissionMode.FULL and not skip_permissions:
         typer.secho(
-            f"--permission {permission!r} needs an interactive TTY to answer prompts; "
-            "use plan (default), full via --dangerously-skip-permissions, or the "
-            "interactive TUI instead.",
+            f"--permission {permission!r} resolves to full and requires "
+            "--dangerously-skip-permissions. Headless runs are read-only (plan) "
+            "by default; full access is an explicit opt-in.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(1)
+    if permission in ("confirm", "auto_edit"):
+        typer.secho(
+            f"--permission {permission!r} is not available in headless mode "
+            "(prompts need an interactive TTY). Use plan (default), full via "
+            "--dangerously-skip-permissions, or the interactive TUI.",
             err=True,
             fg=typer.colors.RED,
         )
@@ -169,6 +179,12 @@ def run_headless(
             session=session,
         )
     except SystemExit:
+        raise
+    except typer.Exit:
+        # typer.Exit is a RuntimeError subclass (click's Exit) — nested exits
+        # (e.g. session-load failure) already printed their message; swallowing
+        # them here printed a misleading "Runtime setup failed: 1" second line
+        # (2026-08-18 self-audit ⚠️). Pass through with the original code.
         raise
     except Exception as e:  # noqa: BLE001 — config/model errors → clean exit
         typer.secho(f"Runtime setup failed: {e}", err=True, fg=typer.colors.RED)

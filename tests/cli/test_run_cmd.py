@@ -134,18 +134,36 @@ def test_run_invalid_permission_rejected_early(tmp_path, monkeypatch):
     assert "Invalid --permission" in result.output
 
 
-def test_run_confirm_without_tty_rejected(tmp_path, monkeypatch):
-    """confirm/auto_edit need a TTY; under CliRunner's piped stdin they must
-    fail fast instead of hanging on input() mid-execution."""
+def test_run_confirm_rejected_unconditionally(tmp_path, monkeypatch):
+    """confirm/auto_edit are NOT valid headless values at all (BUG B fix:
+    Windows NUL made isatty() True, bypassing the old TTY check and crashing
+    mid-execution on EOFError). Now rejected unconditionally."""
+    for perm in ("confirm", "auto_edit"):
+        result = runner.invoke(app, ["run", "task", "--permission", perm])
+        assert result.exit_code == 1, f"{perm}: {result.output}"
+        assert "not available in headless" in result.output
+
+
+def test_run_full_requires_skip_flag(tmp_path, monkeypatch):
+    """REGRESSION GUARD (self-audit 2026-08-18 BUG A): a prior commit CLAIMED
+    full requires --dangerously-skip-permissions but no gate existed —
+    --permission full alone ran with full access. The gate is real now, and
+    (third-party audit) it checks the NORMALIZED mode, so the legacy "auto"
+    alias — which normalize() maps to FULL — is gated identically."""
+    for value in ("full", "auto"):
+        result = runner.invoke(app, ["run", "task", "--permission", value])
+        assert result.exit_code == 1, f"{value} without flag must be rejected: {result.output}"
+        assert "requires" in result.output and "--dangerously-skip-permissions" in result.output
+
+
+def test_run_auto_with_skip_flag_passes(tmp_path, monkeypatch):
+    """The legacy alias with the flag resolves to full legitimately."""
     monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
     monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
-    import sys as _sys
-    from unittest.mock import patch as _patch
-
-    with _patch.object(_sys.stdin, "isatty", return_value=False):
-        result = runner.invoke(app, ["run", "task", "--permission", "confirm"])
-    assert result.exit_code == 1
-    assert "TTY" in result.output
+    captured = _mock_runtime(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["run", "task", "--permission", "auto", "--dangerously-skip-permissions"])
+    assert result.exit_code == 0, result.output
+    assert captured["build_kwargs"]["mode_override"] == "full"
 
 
 def test_run_permission_override_passed_through(tmp_path, monkeypatch):
@@ -233,3 +251,13 @@ def test_run_success_exits_0(tmp_path, monkeypatch):
     result = runner.invoke(app, ["run", "task", "--quiet"])
     assert result.exit_code == 0
     assert "DONE-OK" in result.output
+
+
+def test_run_full_with_skip_flag_passes_gate(tmp_path, monkeypatch):
+    """BUG A guard, positive side: --dangerously-skip-permissions + full works."""
+    monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
+    monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
+    captured = _mock_runtime(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["run", "task", "--permission", "full", "--dangerously-skip-permissions"])
+    assert result.exit_code == 0, result.output
+    assert captured["build_kwargs"]["mode_override"] == "full"

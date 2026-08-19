@@ -75,6 +75,17 @@ def run_with_sandbox(
             from coderio.tools.linux_sandbox import bwrap_available, run_bwrap
 
             if bwrap_available():
+                # fs_config=None leaves bwrap's built-in layout with NO
+                # deny_write — meaning sandboxed commands could write
+                # ~/.coderio (config/credentials/TRUST STORE). The field
+                # default on SandboxFsConfig only applies when the config
+                # TABLE exists; for everyone else, construct it here
+                # (2026-08-18 self-audit BUG C). Explicit user configs
+                # (including deny_write=[]) pass through unchanged.
+                if fs_config is None:
+                    from coderio.config.models import SandboxFsConfig
+
+                    fs_config = SandboxFsConfig()
                 return run_bwrap(
                     command,
                     cwd,

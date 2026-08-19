@@ -167,12 +167,13 @@ def mark_repo_trusted(search_from: Path | str, user_dir: Path | str) -> None:
             loaded = json.loads(store.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 entries = loaded
-            # v3 audit #9: a corrupt store (non-dict JSON) previously reset to
-            # {} and OVERWROTE every other repo's trust entries. Now: keep
-            # parsing failures OUT of the write path — if the existing file is
-            # unparseable, skip the write entirely (the repo stays untrusted,
-            # the prompt reappears; other entries can't be lost by us).
-            elif loaded is not None:
+            else:
+                # v3 audit #9 + 2026-08-18 self-audit: a corrupt store (any
+                # non-dict JSON — lists, strings, numbers, AND null; null
+                # previously slipped through an `is not None` guard)
+                # previously reset to {} and OVERWROTE every other repo's
+                # trust entries. Skip the write entirely (the repo stays
+                # untrusted; other entries can't be lost by us).
                 _log.warning(
                     "trust store %s has unexpected shape (%s); leaving it untouched",
                     store,

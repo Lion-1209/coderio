@@ -148,16 +148,26 @@ class HookRunner:
         outcome = HookOutcome()
         deadline = time.monotonic() + self.event_budget
         try:
-            for spec in self.specs:
+            for i, spec in enumerate(self.specs):
                 if spec.event != event:
                     continue
                 if event in _TOOL_EVENTS and not spec.matches(tool_name):
                     continue
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    skipped = sum(1 for s in self.specs[len(self.specs) :] if s.event == event) or "remaining"
+                    # Count the matching hooks NOT yet reached (self-audit
+                    # 2026-08-18: the old slice self.specs[len(self.specs):]
+                    # was always empty — the count never appeared). Filter by
+                    # matcher too: a same-event hook whose matcher wouldn't
+                    # have run anyway is not "skipped" (third-party audit
+                    # caught the overcount).
+                    pending = [
+                        s
+                        for s in self.specs[i:]
+                        if s.event == event and (event not in _TOOL_EVENTS or s.matches(tool_name))
+                    ]
                     outcome.error += (
-                        f"event budget ({self.event_budget}s) exhausted — {skipped} hook(s) skipped (fail-open); "
+                        f"event budget ({self.event_budget}s) exhausted — {len(pending)} hook(s) skipped (fail-open); "
                     )
                     break
                 self._run_one(spec, event, payload, outcome, remaining)
