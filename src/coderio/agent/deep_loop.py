@@ -298,7 +298,7 @@ def _build_extra_tools(tools, skill_store, active_skills):
     return extra
 
 
-def _build_research_subagent(gate=None, command_policy=None, hook_runner=None):
+def _build_research_subagent(command_policy=None, hook_runner=None):
     """Return the research subagent spec (read-only, physically isolated).
 
     Tool exclusion uses the compat layer (_deepagents_compat) so that a
@@ -308,11 +308,12 @@ def _build_research_subagent(gate=None, command_policy=None, hook_runner=None):
     work bypassed the user's PreToolUse/PostToolUse hooks entirely. The runner
     is shared with the main agent (stateless across fire() calls).
 
-    Permission + CommandReview (v3 audit #11): execution-time enforcement on
-    top of the model-visibility whitelist — the whitelist filters what the
-    model SEES, these middlewares gate what actually RUNS. Belt and braces:
-    a whitelist bug or a future tool name collision can no longer turn the
-    "read-only" subagent into a writing one.
+    Permission + CommandReview: execution-time enforcement on top of the
+    model-visibility whitelist. The whitelist filters what the model SEES,
+    these middlewares gate what actually RUNS. This subagent uses its own
+    hardcoded PLAN gate so it can never be upgraded to write access via the
+    caller's permission mode (an FULL/auto caller must not turn the "read-only"
+    subagent into a writing one).
     """
     from coderio.agent._deepagents_compat import make_research_subagent_middleware
 
@@ -321,15 +322,15 @@ def _build_research_subagent(gate=None, command_policy=None, hook_runner=None):
         from coderio.agent.hooks import HooksMiddleware
 
         middleware.insert(0, HooksMiddleware(hook_runner))
-    if gate is not None:
-        from coderio.agent.permission_middleware import PermissionMiddleware
+    from coderio.agent.permission_middleware import PermissionMiddleware
+    from coderio.tools.permission import PermissionGate, PermissionMode
 
-        middleware.append(PermissionMiddleware(gate))
+    middleware.append(PermissionMiddleware(PermissionGate(PermissionMode.PLAN)))
     from coderio.agent.command_review import CommandReviewMiddleware
     from coderio.tools.command_policy import CommandPolicy
 
     policy = command_policy or CommandPolicy.default()
-    middleware.append(CommandReviewMiddleware(policy, gate=gate))
+    middleware.append(CommandReviewMiddleware(policy))
     return {
         "name": "research",
         "description": (
@@ -587,7 +588,7 @@ def run_deep_agent(
         "middleware": middleware,
         "backend": backend,
         "subagents": [
-            _build_research_subagent(gate=gate, command_policy=command_policy, hook_runner=hook_runner),
+            _build_research_subagent(command_policy=command_policy, hook_runner=hook_runner),
             _build_general_purpose_subagent(gate, command_policy, stream=stream, hook_runner=hook_runner),
         ],
     }

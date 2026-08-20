@@ -273,9 +273,12 @@ def test_research_subagent_carries_permission_and_review():
     """v3 #11: research now carries PermissionMiddleware + CommandReviewMiddleware
     (execution-time enforcement under the visibility whitelist)."""
     from coderio.agent.deep_loop import _build_research_subagent
-    from coderio.tools.permission import PermissionGate
 
-    spec = _build_research_subagent(gate=PermissionGate("plan"), command_policy=None)
+    spec = _build_research_subagent(command_policy=None)
     mw = [type(m).__name__ for m in spec["middleware"]]
     assert "PermissionMiddleware" in mw, mw
     assert "CommandReviewMiddleware" in mw, mw
+    # The research subagent must use its own hardcoded PLAN gate, not the
+    # caller's — a FULL-mode caller must not be able to upgrade it.
+    perm = next(m for m in spec["middleware"] if type(m).__name__ == "PermissionMiddleware")
+    assert perm.gate.mode == "plan", f"research subagent must always be PLAN, got {perm.gate.mode}"

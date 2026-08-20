@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
 from coderio.agent.prompts import ActiveSkills
 from coderio.cli.stream import RichStream
-from coderio.config import Config, load_config
+from coderio.config import load_config
+from coderio.config.loader import _find_project_dir
 from coderio.llm import build_chat_model
 from coderio.session.store import Session
 from coderio.skills.store import SkillStore, load_skill_store
@@ -18,6 +19,9 @@ from coderio.tools.permission import (
     PermissionMode,
     RichPromptPermissionGate,
 )
+
+if TYPE_CHECKING:
+    from coderio.config import Config
 
 BUNDLED_SKILLS = Path(__file__).resolve().parents[1] / "skills"
 
@@ -100,6 +104,7 @@ def build_runtime(
     model_override: str | None = None,
     provider_override: str | None = None,
 ):
+    search_from = Path(search_from).resolve()
     cfg = load_config(search_from=search_from)
 
     if mode_override:
@@ -118,10 +123,11 @@ def build_runtime(
         cfg = _replace(cfg, model=_replace(cfg.model, provider_id=provider_override))
 
     if cfg.skills.auto_load:
+        _proj = _find_project_dir(search_from)
         store = load_skill_store(
             BUNDLED_SKILLS,
             Path.home() / ".coderio" / "skills",
-            Path(search_from) / ".coderio" / "skills",
+            _proj / ".coderio" / "skills",
         )
     else:
         store = SkillStore()
