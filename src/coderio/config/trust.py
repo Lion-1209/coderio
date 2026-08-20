@@ -243,24 +243,52 @@ def summarize_repo_configs(search_from: Path | str) -> str:
                 with open(path, "rb") as _f:
                     data = tomllib.load(_f)
             except Exception:
-                data = {}
-            hooks = data.get("hooks", [])
-            if hooks:
-                lines.append("  [[hooks]]")
-                for h in hooks:
-                    h = h or {}
-                    cmd = h.get("command")
-                    if cmd:
-                        lines.append(f"    command = {cmd!r}")
-                    ev = h.get("event")
-                    if ev:
-                        lines.append(f"    event = {ev!r}")
-            # Echo every line mentioning a sensitive key (non-hook keys).
-            for ln in text.splitlines():
-                s = ln.strip()
-                if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
-                    if not s.startswith("[[hooks]]") and not s.startswith("command =") and not s.startswith("event ="):
+                data = None
+            if data is None:
+                # Unparseable TOML: the loader will refuse this config later
+                # (fail-closed — hooks never run), but the user should SEE
+                # that, not a bare byte count. The raw-grep fallback below
+                # echoes all sensitive-looking lines INCLUDING command lines
+                # (third-party review: the old fallback excluded them on the
+                # assumption the structural path had already shown them —
+                # but on parse failure that path printed nothing, hiding the
+                # hooks entirely).
+                lines.append("  <unparseable config.toml — the loader will reject this file>")
+                for ln in text.splitlines():
+                    s = ln.strip()
+                    if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
                         lines.append(f"  {s}")
+            else:
+                hooks = data.get("hooks", [])
+                if isinstance(hooks, list) and hooks:
+                    lines.append("  [[hooks]]")
+                    for h in hooks:
+                        # Shape guard (third-party review): `hooks = [1]` or
+                        # `hooks = "junk"` previously crashed here (h.get on
+                        # non-dict) — taking down coderio at the trust prompt
+                        # before the loader's tolerant _parse_hooks could
+                        # simply skip the malformed entry.
+                        if not isinstance(h, dict):
+                            continue
+                        cmd = h.get("command")
+                        if cmd:
+                            lines.append(f"    command = {cmd!r}")
+                        ev = h.get("event")
+                        if ev:
+                            lines.append(f"    event = {ev!r}")
+                # Echo every line mentioning a sensitive key (non-hook keys).
+                # Also skips the top-level `hooks = [...]` inline form — the
+                # structural block above already rendered each hook's command.
+                for ln in text.splitlines():
+                    s = ln.strip()
+                    if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
+                        if (
+                            not s.startswith("[[hooks]]")
+                            and not s.startswith("command =")
+                            and not s.startswith("event =")
+                            and not s.startswith("hooks =")
+                        ):
+                            lines.append(f"  {s}")
         else:  # .mcp.json — list servers (they spawn/connect at startup)
             try:
                 servers = json.loads(text).get("mcpServers", {})
