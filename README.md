@@ -2,486 +2,102 @@
 
 **中文** | [English](README_en.md)
 
-> 一个技能驱动的编程 agent——结构化 harness 约束、可折叠思考的 TUI、deepagents 引擎。基于 langchain + langgraph + deepagents + Lion-Skills，Windows 优先，跨平台。
+> 写了代码没跑过测试就说"完成"？coderio 的 harness 会拦住它。
+> 一个**原生支持智谱 GLM / 阶跃 StepFun Coding Plan** 的本地 coding agent——四级权限、多层沙箱、MCP、生命周期 hooks、交互式 TUI。
 
-## 为什么做这个项目
+![demo](demo.gif)
 
-一开始只是想花掉阶跃送的 token，顺便走一遍 langchain 全技术栈搭 agent 的流程。框架搭出来之后觉得单纯的 REPL + CLI 不太酷，就开始折腾 TUI 了——目前 TUI 的效果我自己还挺满意的。
-
-不过整体框架并没有细细调优，所以目前只是一个工作之余搓出来的 demo。开源的目的不是做一个产品，而是希望给那些用 langchain 技术栈的人做一点小参考：deepagents 引擎怎么接、harness 怎么做结构约束、TUI 怎么做流式渲染——这些代码都在，能跑，欢迎拿去玩。
-
-> 关于名字：**coderio = code + rio**（不是 coder + io 哦）。我的英文名是 Lion，本来想叫 codelion，但感觉怪怪的，所以就叫 coderio 了。
-
----
-
-**coderio** 是一个技能驱动的编程 agent。它的"骨架"是 [Lion-Skills](https://github.com/Lion-1209/Lion-Skills) 套件（clarify→spec→task→execute→verify→commit 工作流），coderio 给它配上真正能干活的工具、一个强制遵循工作流的 **harness 状态控制层**，以及交互式 Textual TUI。参照对象是 claude code / codex / zcode。
-
-核心理念：**skill 是操作手册，harness 是执行纪律，工具是手**。三者分层，互不替代。
-
----
-
-## 特性
-
-- **harness 四道门硬约束**：agent 写了代码但没运行验证就想说"完成"时，harness 拦截终止、强制续跑——不是提示词软规则，是系统级结构控制（基于工具调用 ground truth）。VerifyGate 解析 bash exit_code，测试失败不再当"验证通过"；**智能跳过非代码文件**（写 .md/.json/.yaml 文档不强制 pytest）；GroundingGate 只在 CODE 模式生效（分析/问答场景不拦截文件名提及）；CompletionGate 检查未完成 todo
-- **显式状态机**：实时推导执行阶段（探索→规划→实现→验证→完成），状态栏显示任务阶段 + 模型活动双轴；每轮的 phase 时间线持久化到 session，可回放调试
-- **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具，含只读 research 子 agent）、文件系统后端、持久化检查点（SqliteSaver）；**完全替换 deepagents 默认 prompt**，coderio 的 system prompt 独占，无冲突
-- **持久化检查点**：graph state 跨 turn 持久化到 sqlite，只需传新消息（不重传完整历史）；SummarizationMiddleware 的累积状态正确保持
-- **上下文自动压缩**：deepagents 的 SummarizationMiddleware 在接近上下文窗口 60% 时自动触发（可通过 `[context].trigger_ratio` 配置）——旧消息 offload 到文件 + LLM 摘要，保留近期上下文
-- **意图分类**：自动区分 CODE / QA / ANALYZE 三种意图，编码任务走工作流，问答直接答（中英双语信号词）
-- **渐进式披露**：skill 正文按需加载，系统提示词 ~2K tokens 而非全量堆砌
-- **交互式 TUI**：Textual 终端 UI，思考折叠（Ctrl+O）、流式输出、工具调用状态栏（动画 spinner + 步骤 + 任务阶段 + 计时器 + **turn token 计数**）、slash 命令自动补全、**可折叠 TODO 面板**（实时进度 ✓/→/○）、**纵向权限确认菜单**（↑↓ + Enter，zcode/codex 风格）、**会话管理**（`/resume` 恢复 + Del 删除）、**权限/配置可视化选择器**（`/mode` `/profile`）、**文件修改可视化**、**任务中断**（Esc / ⏹ 按钮）、**错误恢复**
-- **deepagents 引擎**：基于 [deepagents](https://github.com/langchain-ai/deepagents) 的生产引擎，内置上下文管理（offload + 摘要）、子 agent（task 工具）、文件系统后端；coderio 的 harness 四道门 + 四级权限作为 middleware 保留
-- **工具错误韧性**：工具调用失败变成 tool result 回灌给模型自我修正，不中断 turn；bash 工具超时杀整个进程树（Windows Job Object）
-- **文件路径隔离**：deepagents 后端 `virtual_mode` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内，agent 看到的 `/foo.py` 实际映射到 `{workdir}/foo.py`
-- **命令审查层**：shell（execute）命令不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、shutdown 等破坏性命令（即使 FULL 模式也挡），用户可在 config.toml 追加 `blocked_commands`。这不是真 OS 沙箱（混淆命令可绕过正则），但能挡住绝大多数意外破坏。`network_allowed = false` 可完全禁用 web 工具（离线模式）
-- **多 provider + 命名 profile**：智谱 GLM / 阶跃 StepFun 的 coding plan（Anthropic 协议）+ OpenAI 兼容；支持多套配置 profile，`/profile` 运行时切换
-- **MCP 支持**：通过 `.mcp.json`（与 Claude Code 格式兼容）接入外部 MCP 服务器，自动加载它们的工具。支持 stdio（本地进程）和 HTTP（远程）两种传输。项目级 `.mcp.json` 覆盖用户级同名服务器
-- **仓库配置信任确认**：首次在某仓库检测到 `.coderio/config.toml`、`.mcp.json` **或项目级 skills**（含 tools.py 标注）时，展示其内容（权限模式、base_url、hook/MCP 命令）并要求显式确认——按内容 hash 记忆，上游改配置会重新触发确认。克隆恶意仓库不再等于静默任意代码执行
-- **web_fetch SSRF 防护**：scheme 白名单（仅 http/https）+ 私网/环回/链路本地 IP 拦截（含云元数据端点）+ 逐跳重定向校验 + 1MB 响应上限
-- **headless 模式**：`coderio run "任务"` 单次无交互运行（CI / 脚本 / benchmark 接入）
-
----
-
-## 快速开始
-
-### 安装
-
-**方式一：pip 安装（推荐）**
+## 安装
 
 ```bash
 pip install coderio
+coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key、自动探测上下文窗口）
 ```
 
-**方式二：从 GitHub 安装**
+要求：Python 3.11+；Windows 需 Git Bash。支持 Linux / macOS。
 
-```bash
-pip install "coderio @ git+https://github.com/Lion-1209/coderio.git"
-```
+## 为什么是 coderio
 
-装完直接 `coderio` 启动。
+市面上 coding agent 的共同软肋：**模型说"我做完了"，你就得信**。coderio 把这句话变成了结构约束——
 
-**方式三：下载 Release wheel（离线/内网）**
+### 四道门：agent 骗不了你
 
-到 [Releases 页面](https://github.com/Lion-1209/coderio/releases) 下载最新的 `coderio-*.whl`，然后：
+| 门 | 行为 |
+|---|---|
+| **VerifyGate** | 写了代码没跑验证就想结束 → 拦截、强制续跑。解析真实 exit code，**测试失败不算验证通过** |
+| **CompletionGate** | TODO 没清完就宣布完成 → 拦截 |
+| **GroundingGate** | 引用从未读过的文件下结论 → 拦截 |
+| **PlanGate** | 没 TODO 就动手写码 → 软提醒 |
 
-```bash
-pip install coderio-0.4.0-py3-none-any.whl
-```
+不是提示词软规则，是基于工具调用 ground truth 的系统级控制。Claude Code / Codex 都没有这个。
 
-**方式四：从源码安装（开发者，推荐 uv）**
+### 原生支持中文 Coding Plan
 
-```bash
-git clone https://github.com/Lion-1209/coderio.git
-cd coderio
+智谱 **GLM Coding Plan** 和阶跃 **StepFun Step Plan** 开箱即用（Anthropic 协议直连）——你的订阅额度跑本地 agent，不需要转发、不需要中间层。同时支持 OpenAI / Anthropic / Ollama / 任意 OpenAI 兼容端点，多 profile 一键切换。
 
-# 用 uv（推荐——与 CI 一致，依赖锁定在 uv.lock）
-uv sync --extra dev          # 创建 .venv 并按 uv.lock 精确安装
-uv run pytest -q             # 通过 uv run 执行命令
+### 多层安全，诚实声明
 
-# 或传统 pip（不读锁文件，解析最新兼容版本）
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]"    # Windows (Git Bash)
-.venv/bin/python -m pip install -e ".[dev]"            # Linux / macOS
-```
+- 四级权限（plan 只读 / confirm 逐项确认 / auto_edit / full）
+- 命令黑名单 + 白名单（防手滑）；Linux bubblewrap OS 级沙箱（防越界写）
+- 仓库配置首次信任确认（防克隆恶意仓库）；web_fetch SSRF 防护
+- 黑白名单是**防手滑不是防对抗**——对抗性防护靠沙箱 + 权限，恶意代码请用 VM
 
-要求：Python 3.11+，Windows 上需安装 Git Bash（shell 工具依赖）。
+## 特性一览
 
-**依赖管理**：CI 用 `uv sync --frozen` 按 [uv.lock](uv.lock) 精确安装（可复现）；Dependabot 每周提依赖升级 PR 时会同时更新 pyproject.toml 和 uv.lock。改依赖后本地跑 `uv lock` 重新生成并提交两者。
+- **交互式 TUI**：流式输出、思考折叠（Ctrl+O）、可折叠 TODO 面板、纵向权限菜单、任务中断（Esc）、slash 命令补全、会话管理
+- **headless 模式**：`coderio run "任务"` 单次运行（CI / 脚本 / benchmark），退出码分级
+- **MCP 支持**：`.mcp.json`（Claude Code 兼容格式）接入外部工具，`coderio mcp` 命令行管理
+- **生命周期 hooks**：`[[hooks]]` 在 PreToolUse / PostToolUse / UserPromptSubmit 等事件执行你的命令（exit 2 = 阻断），IO 契约与 Claude Code 兼容
+- **skills 三层加载**：bundled + 用户 + 项目层，渐进披露省上下文
+- **上下文治理**：自动压缩（60% 窗口触发）、大块 offload、sqlite 检查点跨轮持久化
+- **子 agent**：research（只读，双重强制）+ general-purpose（继承主 agent 全部安全层）
+- **工程纪律**：850+ 测试、80% 覆盖率、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
 
-**MCP 支持**（可选）：安装 MCP extra 后可接入外部 MCP 服务器工具：
-```bash
-uv sync --extra dev --extra mcp    # 或 pip install -e ".[mcp]"
-```
-不安装也不影响 coderio 正常使用——`.mcp.json` 配置会被静默忽略。
+<details>
+<summary><b>配置示例</b>（点击展开）</summary>
 
-### 配置
-
-首次运行会触发 onboarding 向导（选 provider、选模型、填 API key），配置自动写入 `~/.coderio/config.toml` 和 `~/.coderio/credentials`。向导验证 key 时会自动探测模型的上下文窗口大小并持久化，压缩阈值精确匹配实际模型。也可手动配置：
-
-```bash
+```toml
 # ~/.coderio/config.toml
 [model]
-provider_id = "bigmodel_coding_plan"   # 智谱/阶跃/OpenAI/Anthropic/Ollama/自定义
+provider_id = "bigmodel_coding_plan"   # 智谱/阶跃 coding plan，或 openai/anthropic/ollama/自定义
 default = "glm-5.2"
-context_limit = 128000                  # （可选）onboarding 自动探测写入，0 = 用下面的默认值
-max_output_tokens = 16384               # （可选）单次回复最大 token 数，默认 16384
 
 [tools]
-permission_mode = "auto"                # confirm | plan | auto_edit | full
-workspace_root = ""                     # shell 后端的 CWD（空=用启动目录）；文件路径隔离由 deepagents virtual_mode 处理
-blocked_commands = []                   # 追加到内置黑名单（正则），如 ["git push --force", "npm publish"]
-network_allowed = true                  # false = 禁用 web_fetch/web_search + Linux sandbox 断网（--unshare-net）
-whitelist_mode = false                  # true = 未知命令降级 confirm（见下方"沙箱"）
-allowed_commands = []                   # 追加到内置白名单，如 ["docker", "kubectl"]
-sandbox_mode = "off"                    # off | job | write（见下方"沙箱"）
-auto_allow_if_sandboxed = false         # sandbox 开启时，execute 自动放行不弹审批（Claude Code "autoAllowBashIfSandboxed"）
+permission_mode = "confirm"            # plan | confirm | auto_edit | full
+sandbox_mode = "off"                   # off | job（资源限制）| write（Linux 文件写隔离）
 
-# 可选：sandbox 文件系统隔离（Linux bubblewrap 专用，Windows 暂不生效）
-[tools.sandbox_filesystem]
-allow_write = []                        # 额外可写路径（workspace 总是可写），如 ["/tmp/build", "~/.cache"]
-deny_write = []                         # 禁写路径（即使 workspace 内也挡），如 [".git/hooks"]
-deny_read = []                          # 禁读路径，如 ["~/.ssh", "~/.aws/credentials", "~/.gnupg"]
-allow_read = []                         # 在 deny_read 内打洞，如 ["~/.ssh/known_hosts"]
-
-[context]
-enabled = true                          # 长会话自动压缩（默认开）
-trigger_ratio = 0.6                     # 达到上下文窗口 60% 时触发
-keep_recent = 8                         # 保留最近 N 条消息不压缩
-model_context_limit = 200000            # fallback：当 profile 未探测到 context_limit 时用
-```
-
-**MCP 配置**（`.mcp.json`，与 Claude Code 格式兼容）：
-
-在项目根目录放 `.mcp.json`（项目级）或 `~/.coderio/mcp.json`（用户级），coderio 启动时自动加载配置的 MCP 服务器及其工具：
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    },
-    "github": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": { "Authorization": "Bearer ghp_xxx" }
-    }
-  }
-}
-```
-
-- **stdio 服务器**：`{command, args, env?, cwd?, timeoutMs?, enabled?}` — 启动本地子进程（如 npx 运行的 server-filesystem）
-- **HTTP 服务器**：`{type: "http", url, headers?, timeoutMs?, enabled?}` — 连接远程 MCP 端点（如 GitHub MCP）
-- **SSE 服务器**：`{type: "sse", url, headers?, timeoutMs?, enabled?}` — SSE 传输
-- **type 推断**：省略 `type` 时，有 `command` 推 stdio，有 `url` 推 http
-- 工具名自动加服务器名前缀（如 `filesystem_read_file`），不会与内置工具冲突
-- 连接失败的服务器会跳过（log warning），不阻塞启动
-- 需要先安装 MCP extra：`pip install -e ".[mcp]"`
-
-可选字段（与 ZCode 兼容）：
-- `enabled: false` — 临时禁用某个服务器而不删配置
-- `cwd` — stdio 子进程工作目录（Windows 上 npx/node 常需要）
-- `timeoutMs` — 请求超时毫秒数（默认不限制），转发给 adapter 为 `timeout`（秒）
-- 旧字段别名自动迁移：`enable`→`enabled`、`environment`→`env`、`http_headers`→`headers`、`type:"remote"`→`http`
-
-**命令行管理**（`coderio mcp`）：
-
-```bash
-# 添加 stdio 服务器到项目 .mcp.json
-coderio mcp add filesystem --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg /tmp
-
-# 添加 HTTP 服务器到用户配置
-coderio mcp add github --type http --url https://api.githubcopilot.com/mcp/ --scope user
-
-# 列出所有已配置的服务器（project + user）
-coderio mcp list
-
-# 移除一个服务器
-coderio mcp remove filesystem
-```
-
-**MCP 工具权限**：MCP 工具名含 `write`/`create`/`delete`/`execute`/`run`/`fetch`/`request` 等关键词时，会被权限系统按 destructive 工具处理（PLAN 模式拒绝、CONFIRM 模式询问、FULL 模式放行）——与内置工具一致。只读 MCP 工具（`read`/`get`/`list`/`query`）在所有模式都放行。
-
-**沙箱与命令安全**（多层防御）：
-
-coderio 对 shell 命令（`execute` 工具）有多层安全防线，从轻到重：
-
-| 层 | 机制 | 配置 | 强度 |
-|---|---|---|---|
-| 1. 黑名单 | 正则匹配破坏性命令（`rm -rf /`、`mkfs`、fork bomb 等），即使 FULL 模式也挡 | `[tools].blocked_commands` 追加 | 防 grep，可被 base64/变量绕过 |
-| 2. 白名单 | 未知命令（不在内置 ~60 个开发命令里）降级 confirm | `[tools].whitelist_mode = true` | 比 grep 强（未知命令会问），仍可绕过 |
-| 3. OS 沙箱 | 内核级隔离，进程**物理上**没有越权写入的权限 | `[tools].sandbox_mode` | 真正的安全边界 |
-
-`sandbox_mode` 三档：
-
-- **`off`**（默认）：不开 OS 沙箱，只用黑名单+白名单。现有行为，不影响兼容性。
-- **`job`**：Windows Job Object / POSIX 进程组 + 资源限制（进程数上限防 fork bomb）+ 可靠进程树杀（修复 `subprocess.run` timeout 杀不干净孙进程导致 TUI 挂起的老问题）。无文件隔离，但解决资源滥用。
-- **`write`**：文件写隔离。
-  - **Linux**：✅ **真隔离**——`bubblewrap`（`bwrap`），Claude Code Linux 版同款。根目录只读挂载，workspace 读写挂载，`network_allowed=false` 时 `--unshare-net` 断网。需要 `apt install bubblewrap`。
-  - **Windows**：⚠️ **当前等价于 `job` 档**。代码里有 `CreateRestrictedToken` + `CreateProcessAsUserW` 的完整管道，但在非 admin 用户上 token 是空操作（实测：原 token 与 restricted token 都是 Medium 完整性，写权限完全相同）。要实现真隔离需要 per-directory ACL（~500 行），是后续工作。**Windows 用户目前没有 OS 级写隔离**——用 `job` 档即可，`write` 档不会提供额外保护。
-
-```toml
-# 推荐：开发时用 job（防 fork bomb + 可靠清理）
-# Linux 用户如果需要真隔离：sandbox_mode = "write"（需装 bubblewrap）
-sandbox_mode = "job"
-whitelist_mode = true
-allowed_commands = ["docker", "kubectl"]  # 白名单外的命令会触发 confirm
-
-# 进阶：sandbox 开启后，shell 命令自动放行（减少审批打扰）
-# 这是 Claude Code 的 "autoAllowBashIfSandboxed" 设计——sandbox 提供真隔离边界，
-# 每个命令都弹审批就成了噪音。黑名单（rm -rf /）仍生效。
-auto_allow_if_sandboxed = true
-```
-
-**sandbox 开启时的审批联动**（Claude Code "autoAllowBashIfSandboxed" 设计）：
-- 默认（`auto_allow_if_sandboxed = false`）：sandbox 开了仍弹每个 execute 审批（向后兼容）
-- 设为 `true`：sandbox 开启时 execute 自动放行——sandbox 提供真隔离边界，审批是噪音
-- **黑名单永远生效**：`rm -rf /` 即使在 sandbox + auto_allow 下也挡（CommandReviewMiddleware 独立于 permission gate）
-- **PLAN mode 不受影响**：PLAN 永远是 read-only，sandbox 不改变这个语义
-
-**Linux filesystem 四元组隔离**（`[tools.sandbox_filesystem]`，bubblewrap 专用）：
-```toml
-[tools.sandbox_filesystem]
-# 防沙箱内进程偷密钥（prompt injection 后 cat ~/.ssh 的真实威胁）
-deny_read = ["~/.ssh", "~/.aws/credentials", "~/.gnupg"]
-allow_read = ["~/.ssh/known_hosts"]  # 在 deny_read 里打洞（仍允许 SSH 连接验证）
-allow_write = ["/tmp/build", "~/.cache"]  # 额外可写路径
-deny_write = [".git/hooks"]  # workspace 内也强制只读
-```
-路径支持 `~`（home）、`./` 或裸路径（workspace 相对）、`/abs`（绝对）。`deny_read` 的 tmpfs 黑洞**必须**在 `allow_read` 的 ro-bind 之前（bwrap 后挂载覆盖先挂载）——代码已保证这个顺序。
-
-**安全模型诚实声明**：
-- **黑白名单的定位是"防手滑"，不是"防对抗"**。它们拦截意外的破坏性命令（模型写错路径、漏看后果），但**不是安全边界**——变量展开（`X=/; rm -rf $X`）、base64 编码、组合符拼接（`ls ; curl ... | sh`）都能绕过正则匹配。真正的对抗性防护靠 OS 沙箱（Linux bubblewrap / `write` 档）+ 权限审批，恶意代码请用 VM。不要因为"配了黑名单"就放心跑不可信代码。
-- `job` 档：资源限制 + 进程控制，不是权限沙箱。
-- `write` 档 Linux：bubblewrap 提供完整的命名空间隔离（开箱即用）+ filesystem 四元组精细控制。
-- `write` 档 Windows：**当前无实际隔离效果**（token 空操作），与 `job` 等价。真隔离待 ACL 实现。
-- 白名单降级：CONFIRM/AUTO_EDIT 模式下白名单外的命令**会执行但 result 里会带 `[whitelist]` 标注**（让模型/用户知道该命令不在受信集合里）；PLAN 模式硬拒；FULL 模式放行不标注。
-- 对于**完全不可信的代码**，仍建议用 VM（Windows Sandbox / Docker），不依赖本沙箱。
-
-**Hooks**（用户自定义生命周期钩子，v1）：
-
-在 config.toml 里用 `[[hooks]]` 数组表注册 shell 命令，在 agent 生命周期的固定点位执行。配置/IO 契约对齐 Claude Code / ZCode / Codex 的互操作核心，已有 hook 脚本可直接移植：
-
-```toml
-# 敏感文件保护：写 .env 前拦截
+# 生命周期 hooks（Claude Code 兼容契约）
 [[hooks]]
-event = "PreToolUse"                    # SessionStart | UserPromptSubmit | PreToolUse | PostToolUse | Stop
-matcher = "write_file|edit_file"       # 正则匹配工具名（仅工具事件）；空 = 全部
-command = "python .hooks/protect.py"   # stdin 收 JSON 事件；exit 2 = 阻断
-timeout = 30                           # 秒，默认 60
-
-# 每次写文件后自动格式化
-[[hooks]]
-event = "PostToolUse"
+event = "PreToolUse"
 matcher = "write_file|edit_file"
-command = "jq -r .tool_input.file_path | xargs prettier --write"
-
-# 会话开始注入项目约定
-[[hooks]]
-event = "SessionStart"
-command = "cat .hooks/conventions.txt"
+command = "python .hooks/protect.py"   # stdin 收 JSON；exit 2 = 阻断
 ```
 
-**IO 契约**：
-- **stdin**：一行 JSON——公共字段 `session_id`/`cwd`/`permission_mode`/`hook_event_name` + 事件专属（PreToolUse 带 `tool_name`+`tool_input`；UserPromptSubmit 带 `prompt`；PostToolUse 带 `tool_response`）
-- **exit code**：`0` = 放行（UserPromptSubmit/SessionStart 的 stdout 注入上下文，上限 10k 字符）；`2` = **阻断**（stderr 作为理由喂给模型）；其他 = **fail-open** 放行 + 警告
-- **环境变量**：`$CODERIO_PROJECT_DIR` 恒可用；Windows 优先 Git Bash
+MCP、沙箱四元组、更多配置见 [docs/coderio-architecture.md](docs/coderio-architecture.md)。
 
-**诚实定位**：hooks 是**扩展点不是安全边界**——超时/崩溃/非 2 退出码都 fail-open（一个坏 hook 绝不能搞死 agent loop）。硬策略请用权限审批 + 命令黑名单。项目级 hooks 写在 config.toml 里，自动被仓库信任门覆盖（克隆恶意仓库不会静默执行其 hooks）。
+</details>
 
-**执行语义**：
-- **超时**：每个 hook 默认 60s（`timeout` 可配）；**单事件总预算 30s**——同事件所有 hook 合计超预算后，剩余 hook 跳过（fail-open），一个慢 hook 吃不光整个 turn
-- **串行执行**：多 hook 按配置顺序串行，第一个 blocker 的理由生效，但所有 hook 都会执行（副作用保留）
-- **环境继承**：hook 继承完整环境变量（含 API key）——只配置你信任的 hook 命令
-- **子 agent 同样受约束**：research / general-purpose 子 agent 都挂 HooksMiddleware，`task()` 委派无法绕过 PreToolUse
-- **合并语义**：用户级 `[[hooks]]` + 项目级 `[[hooks]]` **追加合并**（用户在前——首个 blocker 的优先理由来自用户的防护 hook），项目配置不会剔除用户防护
-- Windows 孙进程泄漏为已知 limitation（超时后 turn 不受挟持；根治待 CREATE_SUSPENDED 方案）
-
-**v1 事件集与不做的事**：SessionStart（每 session 一次，含 resume）/ UserPromptSubmit（可拒绝可注入）/ PreToolUse（可 deny）/ PostToolUse（追加反馈）/ Stop（通知型，不与 harness 续跑冲突）。不做：SessionEnd（无注入点）、Notification/SubagentStop/PreCompact、`updatedInput` 参数改写、hook allow 跳过权限弹窗。
-
-支持的 provider：
-| provider_id | 说明 | 协议 |
-|---|---|---|
-| `bigmodel_coding_plan` | 智谱 GLM Coding Plan | Anthropic |
-| `stepfun_coding_plan` | 阶跃 StepFun Step Plan | Anthropic |
-| `bigmodel_api` / `stepfun_api` | 智谱/阶跃 API Key 直连 | Anthropic / OpenAI |
-| `openai` | OpenAI 直连 | OpenAI |
-| `anthropic` | Anthropic Claude 直连 | Anthropic |
-| `ollama` | 本地 Ollama（无需 key） | OpenAI |
-| `openai_custom` | 任意 OpenAI 兼容端点 | OpenAI |
-
-API key 存在 `~/.coderio/credentials`（POSIX 0600 / Windows icacls 保护）。
-
-### 运行
+## 常用命令
 
 ```bash
-# 交互式 TUI（Ctrl+O 展开思考、可滚动历史、/ 命令自动补全）
-coderio
-# 或直接（Windows）
-.venv/Scripts/python.exe -m coderio.cli.app
-# （Linux / macOS）
-.venv/bin/python -m coderio.cli.app
-
-# 指定 provider/model
-coderio --provider bigmodel_coding_plan --model glm-5.2
-
-# headless 单次运行（CI / 脚本 / benchmark 接入）
-coderio run "写一个 hello-world 脚本并测试"                     # 默认 plan（只读）
-coderio run "修复 tests/foo.py 里失败的测试" --quiet            # 只输出最终结果
-coderio run "继续" --session-id <id>                            # 续跑会话
-coderio run "跑任意命令" --dangerously-skip-permissions         # full 权限（显式选择加入）
-coderio run "任务" --timeout 600                                # 墙钟超时（CI 建议）
-
-# headless 退出码：0 成功 / 1 配置错误 / 2 agent 执行失败 / 124 超时
-
-# 管理 skill（install 从 GitHub 拉取，需要 git 在 PATH）
-coderio skills list
-coderio skills install
+coderio                                              # 交互式 TUI
+coderio run "修复失败的测试" --quiet                   # headless 单次
+coderio run "任务" --dangerously-skip-permissions    # full 权限（显式选择）
+coderio mcp add github --type http --url ...          # 管理 MCP
+coderio skills install                               # 安装 skill 套件
 ```
 
----
-
-## TUI 命令
-
-进入 TUI 后，输入 `/` 触发命令自动补全：
-
-| 命令 | 作用 |
-|------|------|
-| `/help` | 显示所有命令 |
-| `/exit` `/quit` | 退出 |
-| `/config` | 查看当前配置（provider/model/mode） |
-| `/mode` | 切换权限模式（无参数弹出可视化选择器：confirm/plan/auto） |
-| `/model <name>` | 运行时切模型 |
-| `/setup` | 重新配置 provider/model（onboarding 向导，自动探测 context window） |
-| `/profile` | 切换已保存的配置 profile（可视化选择器） |
-| `/skills` | 列出 skill（★ = 已激活） |
-| `/cost` | 查看本次会话 token 用量 |
-| `/clear` | 重置上下文（新会话） |
-| `/sessions` | 列出最近会话 |
-| `/resume` | 恢复历史会话（↑↓ 选择、Enter 恢复、输入过滤） |
-| `/think` | 展开最近一轮的思考内容 |
-
-**快捷键**：
-
-| 按键 | 作用 |
-|------|------|
-| `Ctrl+O` | 展开/收起最近一轮的思考 |
-| `Esc` / `⏹ 中断` | 中断当前正在执行的 agent 任务（不退出 TUI） |
-| `↑↓` + `Enter` | 命令菜单导航（输入 `/` 时弹出） |
-
-直接输入自然语言即可对话或下达编码任务。
-
----
-
-## 架构
-
-分层单体，依赖单向向下：
-
-```
-CLI 层 (cli/)          Typer app + Textual TUI + slash 命令
-  │
-Agent 层 (agent/)      deepagents 引擎 + harness/permission middleware + 提示词构建
-  │
-能力层                  tools/ · skills/ · llm/ · session/ · config/
-```
-
-### 引擎：deepagents + coderio middleware
-
-coderio 用 deepagents 作为主引擎（上下文管理、子 agent、文件系统后端），在其上叠加两个 middleware：
-
-| middleware | 作用 |
-|---|---|
-| **HarnessMiddleware** | coderio 的四道门硬约束（验证/完成/grounding/plan），deepagents 本身不强制验证 |
-| **PermissionMiddleware** | 四级权限（plan/confirm/auto_edit/full）—— 控制哪些工具可执行 |
-
-deepagents 的默认 BASE_AGENT_PROMPT 被清空——coderio 的 system prompt 独占，避免两套指令冲突。
-
-**子 agent**：内置 research 子 agent（只读，物理隔离不能写不能执行）+ general-purpose（全工具）。主 agent 通过 task 工具按需委派，上下文隔离。
-
-旧的 ReAct 引擎已移除——deepagents 是唯一引擎。
-
-### harness 四道门（核心）
-
-| 门 | 强度 | 机制 |
-|----|------|------|
-| **VerifyGate** | 硬，逐级升级 | 写了代码没跑 bash 就声明"完成"→ 拦截、注入强制续跑；解析 bash exit_code，**测试失败（非 0）不算验证通过**；**写文档/配置文件（.md/.json/.yaml）不触发验证**；2 次后放行 + 红色警告 |
-| **CompletionGate** | 硬 | 有未完成 todo 就声明"完成"→ 拦截 |
-| **GroundingGate** | 硬（仅 CODE 模式） | 写代码后引用了从未 read_file 的文件就声明"完成"→ 拦截；**ANALYZE 模式（纯读）跳过**——分析里提到文件名是正常行为（基于 105 session 审计：98.2% 误判率，从未拦住真正的虚假引用） |
-| **PlanGate** | 软提醒 | 没 todo 就写代码 → 工具结果追加 nudge |
-
-### 上下文治理
-
-deepagents 的 SummarizationMiddleware 自动管理上下文：
-
-| 机制 | 触发 | 行为 |
-|------|------|------|
-| **offload** | 工具输入/输出 >2万 token | 大块内容自动存盘 + 留指针，不占上下文 |
-| **summarize** | token 数达到窗口的 60%（可配置 `trigger_ratio`） | 旧消息 LLM 摘要 + 原文 offload 到 `/conversation_history/` |
-| **checkpoint** | 每次 turn 结束 | graph state 持久化到 sqlite，下次只传新消息 |
-
-### 显式状态机
-
-agent 执行阶段实时推导并显示在状态栏（`步骤3 · [实现] 思考中 · 12.4s`）：
-
-```
-探索（read_file/grep）→ 规划（首次 write 无 todo）→ 实现（write + todo）
-  → 验证（bash pytest）→ 完成
-```
-
-每轮的 phase 时间线持久化到 session jsonl（`kind="phase_timeline"`），可回放调试，但对模型不可见（不会污染上下文）。
-
-详细架构设计见 [`docs/coderio-architecture.md`](docs/coderio-architecture.md)。
-
----
-
-## 测试
-
-```bash
-# 全量单元测试（~15s）
-# Windows (Git Bash):
-.venv/Scripts/python.exe -m pytest -q
-# Linux / macOS:
-.venv/bin/python -m pytest -q
-
-# 按模块
-.venv/Scripts/python.exe -m pytest tests/agent/ -v    # Windows
-.venv/bin/python -m pytest tests/agent/ -v            # Linux / macOS
-
-# Live 验证（连真实模型端点，需设置 ANTHROPIC_API_KEY）
-# harness 四道门真实模型验证：
-ANTHROPIC_API_KEY=<key> .venv/Scripts/python.exe scripts/verify_harness_live.py   # Windows
-ANTHROPIC_API_KEY=<key> .venv/bin/python scripts/verify_harness_live.py           # Linux / macOS
-# deepagents 引擎集成验证：
-ANTHROPIC_API_KEY=<key> .venv/Scripts/python.exe scripts/verify_deepagent_live.py # Windows
-```
-
-三层测试设计：单元测试（逻辑）+ Live 验证（真实集成）+ 手动体验测试。
-
----
-
-## 技术栈
-
-| 依赖 | 用途 |
-|------|------|
-| langchain >=0.3 | agent 基础 |
-| langgraph >=0.2 | 状态图编排 |
-| langchain-anthropic >=0.2 | 智谱/阶跃端点接入（Anthropic 协议） |
-| textual >=0.40 | 交互式 TUI |
-| rich >=13 | 终端渲染 |
-| typer >=0.12 | CLI 框架 |
-| deepagents >=0.6 | 生产引擎（上下文管理、子 agent、文件系统后端） |
-
----
-
-## 项目结构
-
-```
-src/coderio/
-├── agent/          # deepagents 引擎、harness/permission middleware、提示词、流式协议
-├── cli/            # Typer app、Textual TUI、slash 命令、凭证/onboarding
-├── tools/          # 工具集 + 权限门 + langchain 适配
-├── skills/         # SkillStore 三层加载 + Lion-Skills 0.3.0（bundled）
-├── config/         # 三层 TOML 配置合并
-├── session/        # jsonl 会话存储 + resume
-└── llm/            # 模型工厂（provider 注册表）
-```
-
-Lion-Skills 作为 bundled skill 随包分发（`src/coderio/skills/lion-skills/`），无需单独安装。
-
----
+TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、/profile 切配置、/think 展开思考）。
 
 ## 已知限制
 
-- **Windows 编码**：shell 输出在 GBK locale 下有内置兼容方案（`_WinLocalShellBackend` 用 bytes + errors='replace' 解码）
+- Windows 写沙箱当前等价于 job 档（真隔离待 ACL，文档如实标注）
+- 黑白名单为防手滑设计（正则可被混淆绕过），对抗性场景用沙箱 / VM
 
----
+## 起源
 
-## 贡献
+业余项目，开源目的：给想自己搭 coding agent 的开发者一份能跑的参考。名字是 **code + rio**（作者英文名 Lion，本想叫 codelion）。
 
-欢迎贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+## 贡献与 License
 
----
-
-## License
-
-MIT（见 [LICENSE](LICENSE)）。Bundled Lion-Skills 同为 MIT（见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）。
+欢迎 issue / PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。MIT License。
