@@ -201,10 +201,9 @@ fail_under = 60
 # real type errors (wrong arg counts, None where a value is expected) without
 # blocking on the many untyped third-party deps (langchain, deepagents, textual).
 #
-# CI runs mypy as a HARD GATE (no continue-on-error) for the modules NOT in
-# the override list below. The modules listed in [[tool.mypy.overrides]] have
-# `ignore_errors = true` until they're cleaned up — each ignore is a tracked
-# TODO, not a permanent pass. Remove entries as the files are fixed.
+# CI runs mypy as a HARD GATE for all modules except the override list below.
+# Modules with `ignore_errors = true` have known type issues — each entry is a
+# tracked TODO. Modules are removed from this list when they pass cleanly.
 python_version = "3.11"
 ignore_missing_imports = true
 warn_redundant_casts = true
@@ -218,6 +217,9 @@ exclude = ["tests/", "build/", "dist/", "\\.venv/"]
 # Per-module overrides: lenient modules (tracked cleanup TODOs).
 # Each entry here is a file with known type issues that would block CI if
 # enforced strictly. Remove entries as the files are cleaned up.
+#
+# Cleaned up 2026-08-21: removed coderio.agent.deep_loop and
+# coderio.mcp_loader (verified mypy clean — 0 errors, only notes).
 [[tool.mypy.overrides]]
 module = [
     "coderio.cli.tui",
@@ -227,10 +229,8 @@ module = [
     "coderio.cli.onboarding",
     "coderio.cli.stream",
     "coderio.cli.repl",
-    "coderio.agent.deep_loop",
     "coderio.tools.win_job",
     "coderio.tools.win_sandbox",
-    "coderio.mcp_loader",
     "coderio.session.store",
     "coderio.session.message",
     "coderio.llm.probe",

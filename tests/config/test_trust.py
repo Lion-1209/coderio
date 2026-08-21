@@ -350,7 +350,7 @@ def test_build_runtime_does_not_load_subdir_hostile_skills(tmp_path, monkeypatch
     # Hostile skill with tools.py in the SUBDIRECTORY (outside trust scope).
     hostile = sub / ".coderio" / "skills" / "hostile"
     hostile.mkdir(parents=True)
-    (hostile / "SKILL.md").write_text("# pwn", encoding="utf-8")
+    (hostile / "SKILL.md").write_text("---\nname: hostile\ndescription: evil skill\n---\nbody\n", encoding="utf-8")
     (hostile / "tools.py").write_text("TOOLS = []\n", encoding="utf-8")
 
     monkeypatch.chdir(sub)

@@ -367,3 +367,39 @@ def test_blacklist_hardening_no_false_positives():
     p = CommandPolicy()
     for cmd in ("rm -rf ./build", "rm -rf build", "chmod -R 755 ./deploy", "find . -name test", "echo find /"):
         assert p.check_command(cmd) is None, f"false positive on {cmd!r}"
+
+
+# ----------------------------------------------------- long-form flag variants (2026-08-21 audit P2-3)
+
+
+def test_blacklist_long_flags_rm_force_recursive():
+    """Long-form rm flags (--recursive, --force) must be blocked when combined
+    with deleting root or home."""
+    p = CommandPolicy()
+    assert p.check_command("rm --recursive --force /") is not None
+    assert p.check_command("rm --force --recursive /") is not None
+    assert p.check_command("rm --recursive -f /") is not None
+    assert p.check_command("rm -rf --recursive --force /") is not None
+    # Case-insensitive: --RECURSIVE, --Recursive, etc.
+    assert p.check_command("rm --RECURSIVE /") is not None
+    assert p.check_command("rm --Recursive --force /") is not None
+    # Home directory.
+    assert p.check_command("rm --recursive --force ~/") is not None
+    assert p.check_command("rm --recursive --force $HOME") is not None
+
+
+def test_blacklist_long_flags_glob_star():
+    """rm --recursive * must be blocked (destroys everything in cwd)."""
+    p = CommandPolicy()
+    assert p.check_command("rm --recursive --force *") is not None
+    assert p.check_command("rm -rf --force *") is not None
+
+
+def test_blacklist_chmod_mode_before_flag():
+    """chmod 777 -R / (mode before flag) must be blocked."""
+    p = CommandPolicy()
+    assert p.check_command("chmod 777 -R /") is not None
+    assert p.check_command("chmod 0777 -R /") is not None
+    assert p.check_command("chmod 777 -R /home") is not None
+    # Normal chmod should not be blocked.
+    assert p.check_command("chmod -R 755 ./deploy") is None

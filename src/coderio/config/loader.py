@@ -37,21 +37,20 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
-def _find_project_dir(search_from: Path) -> Path:
+def _find_project_dir(search_from: Path | str) -> Path:
     """Walk upward from search_from looking for a project's .coderio/config.toml.
 
-    Never ascends into the user's home directory (the home ~/.coderio is the USER
-    layer, handled separately), so a temp dir nested under home won't accidentally
-    pick up the real user config as if it were a project config.
+    Accepts str or Path. Never ascends into the user's home directory (the home
+    ~/.coderio is the USER layer, handled separately).
     """
-    cur = search_from.resolve()
+    cur = Path(search_from).resolve()
     home = Path(os.path.expanduser("~")).resolve()
     for parent in [cur, *cur.parents]:
         if parent == home:
             break
         if (parent / ".coderio" / "config.toml").is_file():
             return parent
-    return search_from.resolve()
+    return cur
 
 
 def _default_user_dir() -> Path:

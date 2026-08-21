@@ -411,3 +411,102 @@ def test_win_shell_backend_job_mode_delegates_to_sandbox(tmp_path):
     assert getattr(backend, "_sandbox_mode", "off") == "job"
     result = backend.execute("echo job-mode-works")
     assert "job-mode-works" in (getattr(result, "output", "") or "")
+
+
+# ----------------------------------------------------- sandbox_runner: subprocess fallback (mocked POSIX)
+
+
+def test_run_with_sandbox_write_none_fs_config_auto_constructs_default(tmp_path):
+    """REGRESSION GUARD (BUG C, 2026-08-18): when fs_config is None and mode
+    is 'write', run_with_sandbox MUST auto-construct a SandboxFsConfig with
+    the default deny_write=['~/.coderio']. Before the fix, fs_config=None
+    meant bwrap got NO deny_write, so sandboxed commands could write the
+    trust store. We mock the POSIX path on Windows to verify the construction."""
+    from unittest.mock import patch
+
+    from coderio.config.models import SandboxFsConfig
+
+    captured_fs = {}
+
+    def _fake_run_bwrap(command, cwd, **kwargs):
+        captured_fs["fs_config"] = kwargs.get("fs_config")
+        return (0, "ok")
+
+    with patch.object(sandbox_runner.sys, "platform", "linux"):
+        with patch("coderio.tools.linux_sandbox.bwrap_available", return_value=True):
+            with patch("coderio.tools.linux_sandbox.run_bwrap", side_effect=_fake_run_bwrap):
+                sandbox_runner.run_with_sandbox("echo test", str(tmp_path), mode="write", fs_config=None)
+
+    fs = captured_fs.get("fs_config")
+    assert fs is not None, "fs_config=None must be auto-constructed"
+    assert isinstance(fs, SandboxFsConfig), f"expected SandboxFsConfig, got {type(fs)}"
+    assert "~/.coderio" in fs.deny_write, (
+        f"auto-constructed SandboxFsConfig must have default deny_write, got {fs.deny_write}"
+    )
+
+
+def test_run_with_sandbox_write_explicit_fs_config_not_overridden(tmp_path):
+    """An explicit fs_config (even deny_write=[]) must pass through unchanged."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    captured_fs = {}
+
+    def _fake_run_bwrap(command, cwd, **kwargs):
+        captured_fs["fs_config"] = kwargs.get("fs_config")
+        return (0, "ok")
+
+    explicit = SimpleNamespace(allow_write=[], deny_write=[], deny_read=[], allow_read=[])
+    with patch.object(sandbox_runner.sys, "platform", "linux"):
+        with patch("coderio.tools.linux_sandbox.bwrap_available", return_value=True):
+            with patch("coderio.tools.linux_sandbox.run_bwrap", side_effect=_fake_run_bwrap):
+                sandbox_runner.run_with_sandbox("echo test", str(tmp_path), mode="write", fs_config=explicit)
+
+    assert captured_fs["fs_config"] is explicit, "explicit fs_config must not be replaced"
+
+
+def test_run_with_sandbox_plain_subprocess_timeout_returns_124():
+    """POSIX plain subprocess (mode='job' fallback) must return exit 124 on timeout."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX plain subprocess test requires non-Windows platform")
+    code, output = sandbox_runner.run_with_sandbox("sleep 10", ".", mode="job", timeout=2)
+    assert code == 124, f"timeout should return 124, got {code}: {output}"
+
+
+def test_run_with_sandbox_plain_subprocess_truncates_output():
+    """Output exceeding max_output_bytes is truncated with a message."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX plain subprocess test requires non-Windows platform")
+    # Generate ~500 bytes, cap at 100.
+    code, output = sandbox_runner.run_with_sandbox(
+        "python3 -c \"print('X'*500)\"", ".", mode="job", max_output_bytes=100
+    )
+    assert code == 0, f"command should succeed, got {code}: {output}"
+    assert "truncated" in output.lower(), f"output should be truncated, got {len(output)} bytes"
+    assert len(output) <= 200, f"truncated output should be small, got {len(output)} bytes"
+
+
+def test_run_with_sandbox_plain_subprocess_stderr_in_output():
+    """stderr from the command must appear in the combined output."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX plain subprocess test requires non-Windows platform")
+    code, output = sandbox_runner.run_with_sandbox(
+        "python3 -c \"import sys; sys.stderr.write('ERRSTREAM')\"", ".", mode="job"
+    )
+    assert code == 0
+    assert "ERRSTREAM" in output, f"stderr must be captured, got: {output!r}"
+
+
+def test_run_with_sandbox_env_forwarded_to_subprocess():
+    """The env dict must be forwarded to the subprocess (not leaked to parent env)."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX plain subprocess test requires non-Windows platform")
+    env = {"SANDBOX_TEST_VAR": "sandbox-value-42"}
+    code, output = sandbox_runner.run_with_sandbox(
+        "python3 -c \"import os; print(os.environ.get('SANDBOX_TEST_VAR',''))\"",
+        ".",
+        mode="job",
+        env=env,
+    )
+    assert code == 0
+    assert "sandbox-value-42" in output, f"env var must be forwarded, got: {output!r}"

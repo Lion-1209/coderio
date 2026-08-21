@@ -44,6 +44,85 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+
+def _check_recursive_rm(command: str) -> str | None:
+    """Python-level check for dangerous rm commands with recursive flags.
+
+    Handles flag permutations that regex can't easily express:
+    - rm -fr /, rm -rf /, rm -r -f / (short flags in any order)
+    - rm --recursive --force /, rm --force --recursive / (long flags, any order)
+    - rm --Force / → NOT blocked (--Force is not --recursive)
+    - rm -f /etc/passwd → NOT blocked (no -r/-R recursive indicator)
+
+    Only triggers when ``rm`` is the actual command name (not inside echo/cat).
+    Returns a reason string if blocked, or None if safe.
+    """
+    # Extract the command name — only block when rm is actually executed.
+    name = _extract_command_name(command)
+    if name != "rm":
+        return None
+
+    tokens = command.strip().split()
+    # Walk past env/sudo/source wrappers to find rm's position.
+    idx = 0
+    if tokens and tokens[0] in ("env", "sudo", "command"):
+        idx = 1
+        while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
+            idx += 1
+    if idx < len(tokens) and tokens[idx] in ("source", "."):
+        idx += 2
+        while idx < len(tokens) and tokens[idx] in ("&&", "||", ";", "&", "|"):
+            idx += 1
+    if idx >= len(tokens) or tokens[idx] != "rm":
+        return None
+
+    rm_tokens = tokens[idx + 1 :]
+    if not rm_tokens:
+        return None
+
+    has_recursive = False
+    for t in rm_tokens:
+        if t.startswith("--"):
+            # --recursive (any case) is the recursive indicator.
+            # --Force / --force are NOT recursive indicators.
+            if re.match(r"^--recursive$", t, re.IGNORECASE):
+                has_recursive = True
+        elif t.startswith("-") and len(t) > 1 and not t.startswith("--"):
+            # Short flag group: must contain r or R to be recursive.
+            # -f alone → not recursive. -fr, -rf, -Rf → recursive.
+            if "r" in t[1:] or "R" in t[1:]:
+                has_recursive = True
+
+    if not has_recursive:
+        return None
+
+    # Check for dangerous targets among rm's arguments.
+    has_dangerous = False
+    for t in rm_tokens:
+        stripped = t.strip("\"'")
+        if stripped == "/" or stripped.startswith("/"):
+            has_dangerous = True
+            break
+        if stripped == "~" or stripped.startswith("~"):
+            has_dangerous = True
+            break
+        if stripped == "$HOME" or stripped.startswith("$HOME"):
+            has_dangerous = True
+            break
+        if stripped == "*" or stripped.startswith("*"):
+            has_dangerous = True
+            break
+
+    if not has_dangerous:
+        return None
+
+    if any(t.strip("\"'") in ("/", "$HOME", "~") or t.strip("\"'").startswith(("/", "$HOME")) for t in rm_tokens):
+        return "recursive delete of system/home directory"
+    if "*" in [t.strip("\"'") for t in rm_tokens]:
+        return "recursive delete of all files (glob)"
+    return "recursive delete of dangerous target"
+
+
 # Built-in blacklist: (pattern, reason). Compiled once at import.
 #
 # Each pattern matches the destructive form but NOT safe variants:
@@ -56,33 +135,17 @@ from dataclasses import dataclass, field
 # - `> /dev/sda` blocks redirect-to-device
 # - `shutdown` / `reboot` / `halt` / `poweroff` block system power control
 # - `:(){` is the canonical fork-bomb opener (catches variants before the full form)
+#
+# NOTE: rm-specific patterns (rm -rf /, rm -rf ~, etc.) are handled by
+# _check_recursive_rm() _before_ the regex loop (see check_command). The
+# regex below only covers the non-recursive `--no-preserve-root` case and
+# all non-rm destructive patterns.
+
 _DEFAULT_BLOCKED: list[tuple[str, str]] = [
-    # Recursive deletion of root or any system directory (/home, /etc, /usr, ...).
-    # `rm -rf /home` is just as catastrophic as `rm -rf /`. Any absolute path
-    # under root with -rf is blocked; `rm -rf ./build` (relative) is fine.
-    #
-    # REGRESSION HARDENING (2026-08-14 report): the original single-flag regex
-    # `-[rRfF]*[rR][fF]*` missed several ACTUALLY-DESTRUCTIVE forms while the
-    # harmless bare `rm -rf /` (coreutils refuses it without
-    # --no-preserve-root!) was the only one blocked:
-    #   - `rm -rf / --no-preserve-root`  ← the only form that truly deletes /
-    #   - `rm -r -f /`                  ← flags written separately
-    #   - `rm -rf "/"`                  ← quoted root
-    #   - `chmod -R 0777 /`             ← leading-zero mode
-    # Fixed below with dedicated patterns; each verified by tests in
-    # test_command_policy.py ("blacklist hardening" section).
-    # Flags may be split across multiple dash-groups: rm -r -f, rm -rf -v, ...
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+/(?:\S|$)", "recursive delete of system directory (absolute path under /)"),
-    # Bare `rm -rf /` at end-of-line (trailing space or EOL).
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+/\s*$", "recursive delete of root directory"),
-    # Quoted root: rm -rf "/" or rm -rf '/'.
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+[\"']/[\"'](?:\s|$)", "recursive delete of root directory (quoted)"),
-    # --no-preserve-root anywhere after rm: its ONLY purpose is defeating the
-    # coreutils root protection — no legitimate coding task uses it.
+    # Recursive rm detection is handled by _check_recursive_rm() (Python-level).
+    # The patterns below catch rm --no-preserve-root (defeats coreutils root
+    # protection) which should always be blocked regardless of -r/-R flags.
     (r"\brm\b[^|;&]*--no-preserve-root", "rm with --no-preserve-root (removes root-delete protection)"),
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+~(?:\s|$|/)", "recursive delete of home directory"),
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+\$HOME(?:\s|$|/)", "recursive delete of home directory"),
-    (r"\brm\s+(?:-[rRfFvIi]+\s+)+\*", "recursive delete of all files (rm -rf *)"),
     # find starting at / with -delete: deletes every match under root.
     # `find / -name x -delete` etc. — any find rooted at / ending in -delete.
     (r"\bfind\s+/(?:\s|$).*?-delete\b", "find -delete starting at filesystem root"),
@@ -96,7 +159,9 @@ _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     (r":\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;", "fork bomb"),
     # Global permission corruption. Accept 777 with or without leading 0
     # (chmod accepts both `777` and `0777`; the old pattern missed 0777).
+    # Also catches mode-before-flag order: chmod 777 -R / (same destruction).
     (r"\bchmod\s+-R\s+0?777\s+/(?:\S|$)", "recursive world-writable on system directory"),
+    (r"\bchmod\s+0?777\s+-R\s+/(?:\S|$)", "recursive world-writable on system directory (mode-before-flag)"),
     # System power control — no coding task needs these.
     (r"\b(?:shutdown|reboot|halt|poweroff)\b", "system power control"),
     # Kernel module manipulation — loading/unloading kernel code.
@@ -321,6 +386,11 @@ class CommandPolicy:
         """
         if not command:
             return None
+        # Python-level check for rm recursive flags (handles permutations
+        # that regex can't express, like rm -fr / or --recursive --force).
+        py_reason = _check_recursive_rm(command)
+        if py_reason is not None:
+            return py_reason
         self._ensure_compiled()
         for pattern, reason in self._compiled:
             if pattern.search(command):

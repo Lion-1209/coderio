@@ -272,7 +272,14 @@ def test_whitelist_runtime_error_degrades_to_no_tools():
 def test_research_subagent_carries_permission_and_review():
     """v3 #11: research now carries PermissionMiddleware + CommandReviewMiddleware
     (execution-time enforcement under the visibility whitelist)."""
+    import inspect
+
     from coderio.agent.deep_loop import _build_research_subagent
+
+    # The function must NOT accept a 'gate' parameter — the research subagent
+    # uses its own hardcoded PLAN gate, period.
+    sig = inspect.signature(_build_research_subagent)
+    assert "gate" not in sig.parameters, "research subagent must not accept external gate param"
 
     spec = _build_research_subagent(command_policy=None)
     mw = [type(m).__name__ for m in spec["middleware"]]
