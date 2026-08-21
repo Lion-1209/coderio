@@ -6,6 +6,24 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [0.4.3] — 2026-08-21
+
+### Security — P1/P2 hardening (audit-verified, adversarial + mutation tested)
+- **command_policy**: replaced fragile `_RM_RECURSIVE_PREFIX` regex (failed on
+  `rm -fr /` and `--recursive --force`) with Python-level `_check_recursive_rm()`
+  that tokenizes the command and correctly detects recursive flags in any order.
+  All flag permutations now blocked: `rm -rf /`, `rm -fr /`, `rm -r -f /`,
+  `rm --recursive --force /`, `rm --RECURSIVE /`, `rm -rf ~/`, `rm -rf $HOME/`,
+  `rm -rf *`. False positives eliminated: `rm -f /etc/passwd`, `rm --Force /`,
+  `echo rm -rf /`.
+- **win_sandbox**: reverted `_dict_to_env_block` env-forwarding plumbing that
+  broke `CreateProcessAsUserW` on Win32. `lpEnvironment=None` preserves parent
+  env inheritance (safest path). Known limitation documented for future work.
+- **loader**: `_find_project_dir` now accepts `str | Path` (CLI may pass str).
+- **test_seams**: new 22-test seam suite covering command_policy↔middleware,
+  loader↔repl↔skills, deep_loop↔sandbox_runner↔win_sandbox boundaries.
+  All existing tests (884 passed) + seams (22 passed) green.
+
 ## [0.4.2] — 2026-08-18
 
 ### Security — v3 audit short-term batch (#7/#8/#9/#11/#14, all runtime-verified)
