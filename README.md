@@ -5,6 +5,8 @@
 > 写了代码没跑过测试就说"完成"？coderio 的 harness 会拦住它。
 > 一个**原生支持智谱 GLM / 阶跃 StepFun Coding Plan** 的本地 coding agent——四级权限、多层沙箱、MCP、生命周期 hooks、交互式 TUI。
 
+![coderio logo](lion.png)
+
 ![demo](demo.gif)
 
 ## 安装
