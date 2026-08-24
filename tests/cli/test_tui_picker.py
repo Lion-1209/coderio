@@ -7,7 +7,7 @@ when push_screen was called from the agent's background thread.
 
 import pytest
 
-from coderio.cli.tui import SessionPickerScreen
+from coderio.cli.tui_screens import SessionPickerScreen
 
 SUMMARIES = [
     {

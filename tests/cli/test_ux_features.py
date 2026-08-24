@@ -8,7 +8,8 @@ import pytest
 from textual.geometry import Size
 from textual.widgets import Static
 
-from coderio.cli.tui import CoderioTUI, ModePickerScreen
+from coderio.cli.tui import CoderioTUI
+from coderio.cli.tui_screens import ModePickerScreen
 
 
 def _all_static_texts(app) -> list[str]:

@@ -192,16 +192,18 @@ def test_pwn_body_routes_to_engine_never_slash_dispatch():
 
 
 def test_tui_source_keeps_expansion_before_slash_branch_as_elif():
-    """Source tripwire locking the wiring: reverting tui.py's slash branch
-    from `elif` back to a sequential `if` resurrects the /pwn attack and this
-    test turns red (mutation-verified guard for the dispatch-order fix)."""
+    """Source tripwire locking the wiring: reverting the slash branch from
+    `elif` back to a sequential `if` resurrects the /pwn attack and this test
+    turns red (mutation-verified guard for the dispatch-order fix). The
+    dispatch lived in tui.run_tui until S3 moved it to TuiRuntime.handle_input
+    — the guard follows the code."""
     import inspect
 
-    from coderio.cli import tui
+    from coderio.cli import tui_runtime
 
-    src = inspect.getsource(tui.run_tui)
-    expand_at = src.find("try_expand_line(line, custom_commands)")
-    assert expand_at != -1, "expansion call missing from run_coder_tui"
+    src = inspect.getsource(tui_runtime.TuiRuntime.handle_input)
+    expand_at = src.find("try_expand_line(line, self.custom_commands)")
+    assert expand_at != -1, "expansion call missing from TuiRuntime.handle_input"
     branch_at = src.find('elif line.startswith("/")', expand_at)
     assert branch_at != -1, (
         'slash branch must be `elif line.startswith("/")` AFTER expansion — '

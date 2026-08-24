@@ -467,14 +467,17 @@ def _build_general_purpose_subagent(gate, command_policy, stream=None, hook_runn
     }
 
 
-def _build_inputs(checkpointer, user_input: str, session: Session) -> dict:
+def _build_inputs(checkpointer, user_input: str | list[dict[str, Any]], session: Session) -> dict:
     """Build the messages input for the agent stream.
 
     With a checkpointer: only pass the new user message (deepagents restores
     prior state from sqlite). Without: pass full conversation history.
     """
     if checkpointer is not None:
-        return {"messages": [HumanMessage(content=user_input)]}
+        # langchain declares list[str | dict] while we carry list[dict[str, Any]];
+        # list invariance flags the narrower list even though every element
+        # satisfies the wider union at runtime.
+        return {"messages": [HumanMessage(content=user_input)]}  # type: ignore[arg-type]
     return {"messages": _build_history_messages(session.messages)}
 
 
@@ -497,7 +500,9 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
 
 
 def run_deep_agent(
-    user_input: str,
+    # str OR multimodal content-block list (docstring below) — build_user_content
+    # returns either depending on whether images are attached.
+    user_input: str | list[dict[str, Any]],
     model,
     session: Session,
     stream=None,

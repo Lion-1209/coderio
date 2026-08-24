@@ -1286,3 +1286,278 @@ def test_seamSA4_workspace_root_drives_agents_anchor(tmp_path, monkeypatch):
 
     assert "ws-agent" in names, f"SA-4: workspace_root agents not discovered — {names}"
     assert "cwd-agent" not in names, f"SA-4: cwd-tree agent leaked past explicit workdir — {names}"
+
+
+# =====================================================================
+# Seam D (new): cli.tui.run_tui ↔ cli.tui_runtime.TuiRuntime (S3 split)
+#
+# run_tui builds the runtime objects (repl.build_runtime), constructs
+# TuiRuntime(store/active/tools/creds_path/custom_commands), constructs
+# CoderioTUI(on_input=runtime.handle_input), then calls bind(tui, cfg=...,
+# model=..., gate=..., session=...) and only then tui.run(). Two contracts
+# cross this seam:
+#
+#   1. Two-phase construction: handle_input is handed to the TUI at
+#      CONSTRUCTION time, while cfg/model/gate/session arrive at bind().
+#      bind() also DISCARDS the build_runtime gate and rebuilds one WITH the
+#      live TUI (confirm mode would otherwise deadlock on input()). So
+#      construct → bind → run must stay in that order: handle_input cannot
+#      fire before tui.run(), and by then rt must hold all four live values.
+#
+#   2. Mutable state ownership: /mode /model /profile /resume /clear swap
+#      rt["gate"] / rt["cfg"] / rt["model"] / rt["session"] IN PLACE so the
+#      NEXT engine turn picks up the new values; no method may cache an old
+#      object reference past a swap.
+# =====================================================================
+
+
+def test_seamD_run_tui_two_phase_construct_bind_run(tmp_path, monkeypatch):
+    """Drive REAL run_tui with stubbed edges and pin the two-phase ordering.
+
+    Proves, against real control flow on both sides of the seam:
+      - CoderioTUI receives TuiRuntime.handle_input (a bound method of a REAL
+        TuiRuntime) at construction, while rt is still EMPTY (phase 1);
+      - bind() runs BEFORE tui.run(), seeding cfg/model/session and rebuilding
+        the gate WITH the live TUI instance (phase 2);
+      - the gate returned by build_runtime never reaches dispatch — bind's
+        rebuild replaces it (confirm-deadlock fix).
+    """
+    from types import SimpleNamespace
+
+    from coderio.cli import tui as tui_mod
+    from coderio.cli.tui_runtime import TuiRuntime
+
+    events = []
+    stub_cfg = SimpleNamespace(
+        active_profile="default",
+        model=SimpleNamespace(default="fake-model", provider_id="p", base_url=""),
+        cli=SimpleNamespace(show_tool_output=True),
+        session=SimpleNamespace(save_dir=str(tmp_path / "sessions")),
+        tools=SimpleNamespace(permission_mode="plan"),
+        profiles=[],
+        hooks=[],
+    )
+    build_runtime_gate = SimpleNamespace(mode="plan")  # what build_runtime handed over
+    seed_session = SimpleNamespace(id="seed")
+    stub_tuple = (
+        stub_cfg,
+        SimpleNamespace(names=lambda: []),
+        SimpleNamespace(),  # model
+        [],  # tools
+        build_runtime_gate,
+        seed_session,
+        SimpleNamespace(all=lambda: [], clear=lambda: None),
+        None,
+    )
+    monkeypatch.setattr("coderio.config.bootstrap.ensure_user_dirs", lambda: None)
+    monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda creds: False)
+    monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda *a: False)
+    monkeypatch.setattr("coderio.cli.repl.build_runtime", lambda **kw: stub_tuple)
+    monkeypatch.setattr("coderio.cli.custom_commands.discover_custom_commands", lambda **kw: {})
+
+    def fake_build_gate(cfg, console=None, tui=None):
+        events.append("bind:build_gate")
+        return SimpleNamespace(mode="confirm")
+
+    monkeypatch.setattr("coderio.cli.repl.build_gate", fake_build_gate)
+
+    captured = {}
+
+    class FakeTui:
+        def __init__(self, on_input=None, show_tool_output=True, banner=None, extra_completions=None):
+            events.append("construct")
+            captured["on_input"] = on_input
+            captured["tui"] = self
+            # Phase-1 snapshot: the input callable exists, the state holder is empty.
+            self.rt_at_construct = dict(on_input.__self__.rt)
+
+        def run(self):
+            events.append("run")
+            rt_obj = captured["on_input"].__self__
+            captured["rt_at_run"] = dict(rt_obj.rt)
+            captured["tui_is_self"] = rt_obj.tui is self
+
+    monkeypatch.setattr(tui_mod, "CoderioTUI", FakeTui)
+
+    real_bind = TuiRuntime.bind
+
+    def spying_bind(self, tui, *, cfg, model, gate, session):
+        events.append("bind")
+        return real_bind(self, tui, cfg=cfg, model=model, gate=gate, session=session)
+
+    monkeypatch.setattr(TuiRuntime, "bind", spying_bind)
+
+    tui_mod.run_tui()
+
+    assert events == ["construct", "bind", "bind:build_gate", "run"], f"ordering broke: {events}"
+    rt_obj = captured["on_input"].__self__
+    # Phase 1: type identity guard — on_input is the real TuiRuntime.handle_input,
+    # handed over BEFORE any state existed.
+    assert isinstance(rt_obj, TuiRuntime), (
+        f"Seam D: on_input must be TuiRuntime.handle_input's bound method, got {rt_obj!r}"
+    )
+    assert captured["on_input"].__name__ == "handle_input"
+    assert captured["tui"].rt_at_construct == {}, (
+        "Seam D: rt must be empty at TUI construction — state arrives only at bind()"
+    )
+    # Phase 2: by tui.run() time all four live values are seeded through bind().
+    assert sorted(captured["rt_at_run"]) == ["cfg", "gate", "model", "session"], sorted(captured["rt_at_run"])
+    assert captured["rt_at_run"]["session"] is seed_session, "build_runtime's session must flow through bind"
+    assert captured["rt_at_run"]["cfg"] is stub_cfg, "build_runtime's cfg must flow through bind"
+    assert captured["tui_is_self"], "bind must attach the very TUI instance being run"
+    # Gate identity guard: the rebuilt gate wins; the build_runtime gate is discarded.
+    assert captured["rt_at_run"]["gate"] is not build_runtime_gate
+    assert captured["rt_at_run"]["gate"].mode == "confirm"
+
+
+def test_seamD_unbound_runtime_fails_loud_before_side_effects(monkeypatch):
+    """Contract gap pinned as-is: calling handle_input without bind() must fail
+    LOUDLY and do NO work (no engine call, no slash dispatch).
+
+    Today both paths raise KeyError ('cfg' via _send_to_engine, 'gate' via
+    _handle_slash_line) — opaque but fail-closed, and run_tui's strict
+    construct→bind→run order means production can't reach this state. If a
+    refactor ever turns this into a silent success (or a deep AttributeError
+    mid-engine-call after side effects started), this test fails. Minimal
+    hardening if desired: raise RuntimeError('TuiRuntime.bind() must be called
+    before handle_input') when self.rt is empty.
+    """
+    from types import SimpleNamespace
+
+    from coderio.cli.tui_runtime import TuiRuntime
+
+    r = TuiRuntime(
+        store=SimpleNamespace(names=lambda: []),
+        active=SimpleNamespace(all=lambda: [], clear=lambda: None),
+        tools=[],
+        creds_path=None,
+        custom_commands={},
+    )
+    assert r.rt == {}
+    engine_calls, slash_calls = [], []
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", lambda **kw: engine_calls.append(kw))
+    monkeypatch.setattr("coderio.cli.commands.handle_slash", lambda line, ctx: slash_calls.append(line))
+
+    for line in ("plain question", "/help"):
+        try:
+            r.handle_input(line)
+        except Exception:
+            pass  # loud failure is the contract; exact type documented above
+        else:
+            raise AssertionError(f"handle_input({line!r}) succeeded WITHOUT bind() — unseeded rt went silent")
+
+    assert engine_calls == [] and slash_calls == [], "unbound runtime must not reach engine or slash"
+
+
+def test_seamD_bind_repeated_last_wins_no_state_leak(monkeypatch):
+    """bind() is idempotent-by-overwrite: repeated binds keep exactly the four
+    keys, replace the TUI reference, and re-run the gate rebuild so the LATEST
+    TUI is wired in (the confirm-mode deadlock fix survives rebinding). No
+    append-style accumulation may creep into the holder."""
+    from types import SimpleNamespace
+
+    from coderio.cli.tui_runtime import TuiRuntime
+
+    r = TuiRuntime(
+        store=SimpleNamespace(names=lambda: []),
+        active=SimpleNamespace(all=lambda: [], clear=lambda: None),
+        tools=[],
+        creds_path=None,
+        custom_commands={},
+    )
+    built_with = []
+
+    def fake_build_gate(cfg, console=None, tui=None):
+        built_with.append(tui)
+        return SimpleNamespace(mode=f"g{len(built_with)}")
+
+    monkeypatch.setattr("coderio.cli.repl.build_gate", fake_build_gate)
+
+    cfg = SimpleNamespace()
+    t1, t2 = object(), object()
+    s1, s2 = SimpleNamespace(id="s1"), SimpleNamespace(id="s2")
+
+    r.bind(t1, cfg=cfg, model=SimpleNamespace(), gate=SimpleNamespace(mode="discarded-1"), session=s1)
+    r.bind(t2, cfg=cfg, model=SimpleNamespace(), gate=SimpleNamespace(mode="discarded-2"), session=s2)
+
+    assert sorted(r.rt) == ["cfg", "gate", "model", "session"], f"holder leaked keys: {sorted(r.rt)}"
+    assert r.tui is t2, "latest bind's TUI must win"
+    assert r.rt["session"] is s2, "latest bind's session must win"
+    assert built_with == [t1, t2], "gate must be rebuilt per bind, wired to each TUI in turn"
+    assert r.rt["gate"].mode == "g2"
+
+
+def test_seamD_resumed_session_flows_into_next_engine_turn(monkeypatch, tmp_path):
+    """State-ownership seam end to end: commands.handle_slash says '/resume <id>'
+    → TuiRuntime swaps rt['session'] to a disk-backed Session → the NEXT
+    plain-text turn carries the RESUMED session into run_deep_agent.
+
+    Kills incident-class bugs where a module caches an old object past a swap:
+    if any layer held the pre-resume session, the engine turn below would
+    receive it instead of rt['session']."""
+    from types import SimpleNamespace
+
+    from coderio.cli.commands import CommandResult
+    from coderio.cli.tui_runtime import TuiRuntime
+    from coderio.session.store import Session
+
+    save_dir = str(tmp_path / "sessions")
+    old = Session.create(save_dir, {})
+    resumed = Session.create(save_dir, {})
+    assert old.id != resumed.id
+
+    cfg = SimpleNamespace(
+        tools=SimpleNamespace(
+            blocked_commands=[],
+            network_allowed=True,
+            whitelist_mode=False,
+            allowed_commands=[],
+            workspace_root=None,
+            sandbox_mode="off",
+            sandbox_fs=None,
+            bash_shell="",
+        ),
+        skills=SimpleNamespace(harness=False),
+        hooks=[],
+        model=SimpleNamespace(default="fake", provider_id="", base_url=""),
+        session=SimpleNamespace(save_dir=save_dir),
+        profiles=[],
+        active_profile="",
+    )
+    r = TuiRuntime(
+        store=SimpleNamespace(names=lambda: []),
+        active=SimpleNamespace(all=lambda: [], clear=lambda: None),
+        tools=[],
+        creds_path=None,
+        custom_commands={},
+    )
+    tui_stub = SimpleNamespace(
+        _add_text=lambda *a, **k: None,
+        call_from_thread=lambda fn, *a, **k: fn(*a, **k),
+        usage={},
+        push_screen=lambda *a, **k: None,
+        exit=lambda: None,
+    )
+    monkeypatch.setattr("coderio.cli.repl.build_gate", lambda cfg, console=None, tui=None: SimpleNamespace(mode="plan"))
+    r.bind(tui_stub, cfg=cfg, model=SimpleNamespace(), gate=SimpleNamespace(mode="plan"), session=old)
+    assert r.rt["session"] is old
+
+    # A-side: commands layer returns an explicit /resume result.
+    monkeypatch.setattr("coderio.cli.commands.handle_slash", lambda line, ctx: CommandResult(new_session_id=resumed.id))
+    r.handle_input(f"/resume {resumed.id}")
+
+    # B-side: the holder was swapped IN PLACE. Note load_by_id returns a NEW
+    # instance reloaded from disk — identity with the in-memory `resumed` is
+    # impossible and irrelevant; what matters is id + no stale reference.
+    assert r.rt["session"] is not old
+    assert r.rt["session"].id == resumed.id
+
+    # Next plain turn: the engine must receive EXACTLY the object currently in
+    # rt['session'] (read at call time), i.e. the resumed conversation — not a
+    # stale reference to the pre-resume session cached anywhere along the seam.
+    seen = {}
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", lambda **kw: seen.update(kw))
+    r.handle_input("continue working")
+    assert seen.get("session") is r.rt["session"], "engine turn must read rt['session'] at call time"
+    assert seen["session"].id == resumed.id, "engine turn must carry the RESUMED conversation"
+    assert seen["session"] is not old, "stale pre-resume session leaked into the engine turn"

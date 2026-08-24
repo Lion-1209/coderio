@@ -37,7 +37,9 @@ class Message:
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
 
     @classmethod
-    def user(cls, content: str) -> "Message":
+    def user(cls, content: str | list) -> "Message":
+        # list = multimodal content blocks (build_user_content output) — the
+        # content field already documents that it holds either shape.
         return cls(role="user", content=content)
 
     @classmethod

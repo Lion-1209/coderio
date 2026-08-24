@@ -28,15 +28,9 @@ from coderio import __version__  # noqa: E402
 
 # OnboardingScreen, _OnboardingApp, and _run_onboarding_tui have been extracted
 # to tui_onboarding.py for modularity.
-from coderio.cli.tui_onboarding import OnboardingScreen, _run_onboarding_tui  # noqa: E402
+from coderio.cli.tui_onboarding import _run_onboarding_tui  # noqa: E402
 
 # The three modal picker screens (Profile / Mode / Session) live in tui_screens.py.
-from coderio.cli.tui_screens import (  # noqa: E402
-    ModePickerScreen,
-    ProfilePickerScreen,
-    SessionPickerScreen,
-)
-
 # CommandMenu, ConfirmMenu, StatusBar and _TASK_PHASE_LABELS have been extracted
 # to tui_widgets.py for modularity.
 from coderio.cli.tui_widgets import (  # noqa: E402
@@ -1196,33 +1190,6 @@ class CoderioTUI(App):
             pass
 
 
-def _switch_active_profile(profile_name: str) -> str:
-    """Write the chosen profile name to config.toml as active_profile.
-
-    Read-modify-write so other sections and the profiles array are preserved.
-    Returns the name written (empty string if it couldn't be written). Called by
-    the /profile picker callback after the user picks a profile.
-    """
-    import tomllib
-    from pathlib import Path
-
-    import tomli_w
-
-    config_path = Path.home() / ".coderio" / "config.toml"
-    data: dict = {}
-    if config_path.is_file():
-        try:
-            with open(config_path, "rb") as f:
-                data = tomllib.load(f)
-        except Exception:
-            data = {}
-    data["active_profile"] = profile_name
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, "wb") as f:
-        tomli_w.dump(data, f)
-    return profile_name
-
-
 def run_tui(
     provider_override: str | None = None,
     model_override: str | None = None,
@@ -1334,294 +1301,32 @@ def run_tui(
         "[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
     )
 
-    # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
-    rt = {"cfg": cfg, "model": model, "gate": gate, "session": session}
-
-    # Custom project/user commands (.coderio/commands/*.md + ~/.coderio/commands).
-    # Discovered ONCE here so the completions menu and execution share one set;
-    # new command files land after a restart (documented v1 behavior). Layer-dir
-    # convention mirrors load_skill_store: the CALLER joins "<anchor>/.coderio/
-    # <thing>" — passing the bare project root would glob every root-level *.md
-    # (README, CHANGELOG...) into the command set (runtime-audit finding).
+    # Input dispatch + session lifecycle live in TuiRuntime (tui_runtime.py) —
+    # extracted from this function's former closures (S3 decomposition): pure
+    # runtime wiring, unit-testable without booting Textual.
     from pathlib import Path as _Pc
 
-    from coderio.cli.custom_commands import discover_custom_commands, try_expand_line
+    from coderio.cli.custom_commands import discover_custom_commands
+    from coderio.cli.tui_runtime import TuiRuntime
     from coderio.config.loader import _find_project_dir
 
     custom_commands = discover_custom_commands(
         project_dir=_find_project_dir(_Pc.cwd()) / ".coderio" / "commands",
         user_dir=_Pc.home() / ".coderio" / "commands",
     )
-    rt["custom_commands"] = custom_commands
 
-    def on_input(line: str) -> None:
-        # Custom commands expand FIRST: "/name args" → template body becomes
-        # the user prompt. The expanded text goes STRAIGHT to the engine path
-        # below — NEVER back into handle_slash. Re-entry would let a repo file
-        # with body "/mode full" flip the permission gate, or "/export <path>"
-        # exfiltrate the session (adversarial-review finding); hence `elif`,
-        # not a second sequential `if`.
-        expanded = try_expand_line(line, custom_commands)
-        if expanded is not None:
-            line = expanded
-        elif line.startswith("/"):
-            from pathlib import Path as _P
-
-            from coderio.cli.commands import ReplContext, handle_slash
-            from coderio.session.store import Session
-
-            ctx = ReplContext(
-                available_skills=store.names(),
-                active_skills_names={s.name for s in active.all()},
-                permission_mode=rt["gate"].mode,
-                model_name=rt["cfg"].model.default,
-                provider_id=rt["cfg"].model.provider_id,
-                api_key="",
-                base_url=rt["cfg"].model.base_url,
-                recent_sessions=Session.list_recent(_P(rt["cfg"].session.save_dir).expanduser()),
-                session_save_dir=str(_P(rt["cfg"].session.save_dir).expanduser()),
-                session=rt["session"],
-                profiles=rt["cfg"].profiles,
-                active_profile=rt["cfg"].active_profile,
-                usage=tui.usage,
-                stream=tui,
-                custom_commands=custom_commands,
-            )
-            res = handle_slash(line, ctx)
-            # /resume with no arg → open the interactive picker instead of printing.
-            # push_screen MUST run on the main thread (it touches the Textual
-            # event loop); on_input runs in the agent's background thread, so
-            # dispatch via call_from_thread — same pattern as _add_text.
-            if res.message == "__OPEN_PICKER__":
-                summaries = Session.summaries(_P(rt["cfg"].session.save_dir).expanduser())
-
-                def _on_picked(sid):
-                    """Picker dismissed: sid is the chosen id, or None if cancelled."""
-                    if sid is None:
-                        return
-                    _load_session(sid)
-
-                tui.call_from_thread(
-                    tui.push_screen,
-                    SessionPickerScreen(
-                        summaries,
-                        save_dir=str(_P(rt["cfg"].session.save_dir).expanduser()),
-                        active_session_id=getattr(rt["session"], "id", ""),
-                    ),
-                    _on_picked,
-                )
-                return
-            if res.message == "__OPEN_ONBOARDING__":
-                # /setup → open the OnboardingScreen to reconfigure provider/model.
-                # After it completes, rebuild the runtime with the new config.
-                def _on_reconfigured(result):
-                    if result is None:
-                        return
-                    # Reload config + rebuild model with the new provider/key.
-                    from pathlib import Path as _Path
-
-                    from coderio.llm import build_chat_model as _build
-
-                    creds = _Path.home() / ".coderio" / "credentials"
-                    new_cfg = load_config(search_from=".")
-                    rt["cfg"] = new_cfg
-                    rt["model"] = _build(new_cfg, creds_path=creds)
-                    tui._add_text(
-                        f"✅ 已重新配置 → {new_cfg.model.default}（{new_cfg.model.provider_id}）",
-                        style="bold green",
-                    )
-
-                tui.call_from_thread(tui.push_screen, OnboardingScreen(), _on_reconfigured)
-                return
-            if res.message == "__OPEN_PROFILE_PICKER__":
-                # /profile → open the ProfilePickerScreen. After the user picks,
-                # write active_profile to config.toml and rebuild the model.
-                profiles = rt["cfg"].profiles or []
-                active_name = rt["cfg"].active_profile
-                if not profiles:
-                    tui._add_text("[yellow]还没有保存的 profile。用 /setup 添加一个配置。[/yellow]")
-                    return
-
-                def _on_profile_picked(name):
-                    if name is None or name == active_name:
-                        return  # cancelled or re-picked the same one
-                    _switch_active_profile(name)
-                    from coderio.llm import build_chat_model as _build
-
-                    new_cfg = load_config(search_from=".")
-                    rt["cfg"] = new_cfg
-                    rt["model"] = _build(new_cfg, creds_path=creds_path)
-                    tui._add_text(f"✅ 已切换到配置 → {name}", style="bold green")
-
-                tui.call_from_thread(
-                    tui.push_screen,
-                    ProfilePickerScreen(profiles, active_name),
-                    _on_profile_picked,
-                )
-                return
-            if res.message == "__OPEN_MODE_PICKER__":
-                # /mode (no arg) → open the ModePickerScreen. After the user
-                # picks, rebuild the gate with the new permission mode.
-                current_mode = rt["gate"].mode
-
-                def _on_mode_picked(mode):
-                    if mode is None or mode == current_mode:
-                        return  # cancelled or re-picked the same one
-                    from dataclasses import replace as _replace
-
-                    from coderio.cli.repl import build_gate
-
-                    c = _replace(rt["cfg"], tools=_replace(rt["cfg"].tools, permission_mode=mode))
-                    rt["cfg"] = c
-                    rt["gate"] = build_gate(c, console=None, tui=tui)
-                    tui._add_text(f"✅ 已切换到 {mode} 模式", style="bold green")
-
-                tui.call_from_thread(
-                    tui.push_screen,
-                    ModePickerScreen(current_mode),
-                    _on_mode_picked,
-                )
-                return
-            if res.message:
-                tui._add_text(res.message)
-            if not res.continue_loop:
-                tui.call_from_thread(tui.exit)
-                return
-            # /resume <explicit-id> path: load straight from the result.
-            if res.new_session_id:
-                _load_session(res.new_session_id)
-                return
-            if res.reset_runtime:
-                from dataclasses import replace as _replace
-
-                from coderio.cli.repl import build_gate
-                from coderio.llm import build_chat_model
-
-                c = rt["cfg"]
-                if res.new_permission_mode:
-                    c = _replace(
-                        c,
-                        tools=_replace(c.tools, permission_mode=res.new_permission_mode),
-                    )
-                    rt["cfg"] = c
-                    rt["gate"] = build_gate(c, console=None, tui=tui)
-                cmd_name = line.strip().split(maxsplit=1)[0]
-                if cmd_name == "/clear":
-                    # /clear: start a fresh session + wipe active skills + clear
-                    # the history pane. Without this the old session's messages
-                    # keep being fed to the model (it reads session.messages).
-                    _clear_context()
-                    return
-                if cmd_name == "/model":
-                    parts = line.strip().split(maxsplit=1)
-                    if len(parts) > 1 and parts[1].strip():
-                        c = _replace(c, model=_replace(c.model, default=parts[1].strip()))
-                        rt["cfg"] = c
-                        rt["model"] = build_chat_model(c, creds_path=creds_path)
-            return
-        from coderio.agent.deep_loop import run_deep_agent
-        from coderio.cli.multimodal import build_user_content, extract_images
-        from coderio.tools.command_policy import CommandPolicy
-
-        imgs = extract_images(line)
-        if imgs:
-            tui._add_text(
-                f"📎 已附加 {len(imgs)} 张图片: " + ", ".join(p for p, _, _ in imgs),
-                style="dim",
-            )
-        user_content = build_user_content(line)
-        # deepagents engine: provides context management, subagents, filesystem.
-        # coderio's harness + permission + command review run as middleware.
-        cmd_policy = CommandPolicy(
-            extra_blocked=rt["cfg"].tools.blocked_commands,
-            network_allowed=rt["cfg"].tools.network_allowed,
-            whitelist_mode=rt["cfg"].tools.whitelist_mode,
-            allowed_commands=rt["cfg"].tools.allowed_commands,
-        )
-        run_deep_agent(
-            user_input=user_content,
-            model=rt["model"],
-            session=rt["session"],
-            stream=tui,
-            gate=rt["gate"],
-            skill_store=store,
-            active_skills=active,
-            tools=tools,
-            workdir=rt["cfg"].tools.workspace_root or None,
-            harness_enabled=rt["cfg"].skills.harness,
-            command_policy=cmd_policy,
-            sandbox_mode=rt["cfg"].tools.sandbox_mode,
-            network_allowed=rt["cfg"].tools.network_allowed,
-            fs_config=rt["cfg"].tools.sandbox_fs,
-            bash_shell=rt["cfg"].tools.bash_shell,
-            hooks=rt["cfg"].hooks,
-        )
-
-    def _load_session(sid: str) -> None:
-        """Swap the active session to a loaded one, clear skills, render history.
-
-        Called after the picker picks a session (or /resume <id> is given). The
-        old session's jsonl stays on disk; we just point the runtime at the new
-        Session object so subsequent turns continue that conversation.
-        """
-        from pathlib import Path as _P
-
-        from coderio.session.store import Session
-
-        save_dir = _P(rt["cfg"].session.save_dir).expanduser()
-        rt["session"] = Session.load_by_id(save_dir, sid)
-        active.clear()
-        # Render the resumed conversation into the history pane so the user sees
-        # context they're continuing, not a blank screen.
-        # Count only conversation messages (exclude system-role metadata like
-        # phase_timeline / context_summary so the count matches what's displayed).
-        convo_msgs = [m for m in rt["session"].messages if m.role != "system"]
-        tui._add_text(f"↩ 已恢复会话 {sid}（{len(convo_msgs)} 条历史消息）", style="bold green")
-        for m in rt["session"].messages:
-            if m.role == "user":
-                c = m.content
-                if isinstance(c, list):
-                    c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
-                tui._add_text(f"▸ you {c}", style="bold cyan")
-            elif m.role == "assistant":
-                tui._add_text(f"  {m.content[:200]}", style="blue")
-
-    def _clear_context() -> None:
-        """Start a fresh session + clear active skills + wipe the history pane.
-
-        Backs the /clear command. Without this the old session's messages keep
-        being fed to the model (loop.py reads session.messages), so 'context
-        cleared' was previously a lie — the model still saw the full history.
-        """
-        from pathlib import Path as _P
-
-        from coderio.session.store import Session
-
-        save_dir = _P(rt["cfg"].session.save_dir).expanduser()
-        rt["session"] = Session.create(
-            save_dir,
-            {
-                "model": rt["cfg"].model.default,
-                "provider": rt["cfg"].model.provider,
-            },
-        )
-        active.clear()
-        # Wipe the visible history pane so the user sees a clean slate (the old
-        # session's jsonl is preserved on disk — /resume can still get it back).
-        tui._clear_history()
-        tui._add_text("🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green")
-
+    runtime = TuiRuntime(
+        store=store,
+        active=active,
+        tools=tools,
+        creds_path=creds_path,
+        custom_commands=custom_commands,
+    )
     tui = CoderioTUI(
-        on_input=on_input,
+        on_input=runtime.handle_input,
         show_tool_output=cfg.cli.show_tool_output,
         banner=banner,
         extra_completions=[f"/{n} " for n in sorted(custom_commands)],
     )
-    # Rebuild the gate with the TUI reference attached. The initial gate from
-    # build_runtime doesn't have the TUI (it was constructed before tui existed).
-    # Without this, confirm mode would use input() which deadlocks against
-    # Textual's terminal takeover.
-    from coderio.cli.repl import build_gate as _bg
-
-    rt["gate"] = _bg(cfg, console=None, tui=tui)
+    runtime.bind(tui, cfg=cfg, model=model, gate=gate, session=session)
     tui.run()
