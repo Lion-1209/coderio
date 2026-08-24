@@ -298,22 +298,18 @@ def _build_extra_tools(tools, skill_store, active_skills):
     return extra
 
 
-def _build_research_subagent(command_policy=None, hook_runner=None):
-    """Return the research subagent spec (read-only, physically isolated).
+def _readonly_subagent_middleware(command_policy=None, hook_runner=None) -> list:
+    """Assemble the READ-ONLY middleware stack shared by the research subagent
+    and every user-defined custom subagent (hooks → PermissionMiddleware(PLAN)
+    → CommandReviewMiddleware). One function so the two can never drift: if a
+    custom agent got a weaker stack, task(subagent_type=...) would be a
+    privilege-escalation primitive dressed as a feature.
 
-    Tool exclusion uses the compat layer (_deepagents_compat) so that a
-    deepagents API change degrades gracefully instead of crashing.
-
-    HooksMiddleware (2026-08-14 v3 audit #12): without it, ``task()``-delegated
-    work bypassed the user's PreToolUse/PostToolUse hooks entirely. The runner
-    is shared with the main agent (stateless across fire() calls).
-
-    Permission + CommandReview: execution-time enforcement on top of the
+    Permission + CommandReview are execution-time enforcement on top of the
     model-visibility whitelist. The whitelist filters what the model SEES,
-    these middlewares gate what actually RUNS. This subagent uses its own
-    hardcoded PLAN gate so it can never be upgraded to write access via the
-    caller's permission mode (an FULL/auto caller must not turn the "read-only"
-    subagent into a writing one).
+    these middlewares gate what actually RUNS. The hardcoded PLAN gate means a
+    FULL/auto caller cannot upgrade the subagent to write access, and neither
+    can anything written in a custom .md system prompt.
     """
     from coderio.agent._deepagents_compat import make_research_subagent_middleware
 
@@ -331,6 +327,19 @@ def _build_research_subagent(command_policy=None, hook_runner=None):
 
     policy = command_policy or CommandPolicy.default()
     middleware.append(CommandReviewMiddleware(policy))
+    return middleware
+
+
+def _build_research_subagent(command_policy=None, hook_runner=None):
+    """Return the research subagent spec (read-only, physically isolated).
+
+    Tool exclusion uses the compat layer (_deepagents_compat) so that a
+    deepagents API change degrades gracefully instead of crashing.
+
+    HooksMiddleware (2026-08-14 v3 audit #12): without it, ``task()``-delegated
+    work bypassed the user's PreToolUse/PostToolUse hooks entirely. The runner
+    is shared with the main agent (stateless across fire() calls).
+    """
     return {
         "name": "research",
         "description": (
@@ -355,7 +364,40 @@ def _build_research_subagent(command_policy=None, hook_runner=None):
             "- The calling agent only sees your final message, not your "
             "intermediate tool calls — make sure your answer is complete."
         ),
-        "middleware": middleware,
+        "middleware": _readonly_subagent_middleware(command_policy, hook_runner),
+    }
+
+
+def _drop_trusted_name_collisions(custom_specs: list[dict], trusted_specs: list[dict]) -> list[dict]:
+    """Defense-in-depth name filter applied at WIRING time (see call site).
+
+    deepagents builds {name: spec} LAST-WINS and custom specs sit at the END
+    of the subagents list — if discovery's reserved-name drop ever regressed,
+    a repo file named research.md would silently REPLACE the trusted spec.
+    This second filter makes a single-layer regression non-escalating
+    (adversarial-review recommendation). Case-insensitive to mirror the
+    discovery-layer rule even though the engine matches exactly.
+    """
+    trusted_lower = {s["name"].lower() for s in trusted_specs}
+    return [s for s in custom_specs if s["name"].lower() not in trusted_lower]
+
+
+def _build_custom_subagent(agent, command_policy=None, hook_runner=None):
+    """Wrap a discovered CustomAgent (.coderio/agents/*.md) as a subagent spec.
+
+    Persona comes from the file; the SECURITY STACK always comes from
+    _readonly_subagent_middleware — custom definitions customize WHO the agent
+    pretends to be, never WHAT it can do.
+    """
+    description = agent.description or (
+        f"Custom read-only research agent ({agent.source_layer} layer, "
+        f".coderio/agents/{agent.name}.md). Reads and searches only."
+    )
+    return {
+        "name": agent.name,
+        "description": description,
+        "system_prompt": agent.system_prompt,
+        "middleware": _readonly_subagent_middleware(command_policy, hook_runner),
     }
 
 
@@ -581,16 +623,42 @@ def run_deep_agent(
         bash_shell=bash_shell,
     )
 
+    # Custom user/project subagents (.coderio/agents/*.md). Layer dirs joined
+    # HERE (not inside discovery) mirroring load_skill_store's caller-joins
+    # convention — passing the bare project root would glob every root *.md
+    # into an agent definition (same trap the custom-commands audit caught).
+    #
+    # ANCHOR PARITY (seam SA-4): skills/config/trust all anchor at
+    # _find_project_dir(search_from) which WALKS UP to the project root;
+    # agents used to anchor at the literal runtime dir (workdir or cwd), so a
+    # launch from a repo subdirectory silently loaded zero project-layer
+    # agents while project-layer skills still loaded — the exact
+    # discovery-vs-loading scope asymmetry of incident #3. Walk up with the
+    # same rule; workspace_root stays the starting point when set.
+    from coderio.agent.custom_agents import discover_custom_agents
+    from coderio.config.loader import _find_project_dir
+
+    trusted_specs = [
+        _build_research_subagent(command_policy=command_policy, hook_runner=hook_runner),
+        _build_general_purpose_subagent(gate, command_policy, stream=stream, hook_runner=hook_runner),
+    ]
+    custom_specs = [
+        _build_custom_subagent(ca, command_policy=command_policy, hook_runner=hook_runner)
+        for ca in discover_custom_agents(
+            project_dir=_find_project_dir(project_dir) / ".coderio" / "agents",
+            user_dir=Path.home() / ".coderio" / "agents",
+        ).values()
+    ]
+    # Defense in depth at wiring time — see _drop_trusted_name_collisions.
+    custom_specs = _drop_trusted_name_collisions(custom_specs, trusted_specs)
+
     extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)
 
     build_kwargs: dict[str, Any] = {
         "model": model,
         "middleware": middleware,
         "backend": backend,
-        "subagents": [
-            _build_research_subagent(command_policy=command_policy, hook_runner=hook_runner),
-            _build_general_purpose_subagent(gate, command_policy, stream=stream, hook_runner=hook_runner),
-        ],
+        "subagents": [*trusted_specs, *custom_specs],
     }
     if sp:
         build_kwargs["system_prompt"] = sp

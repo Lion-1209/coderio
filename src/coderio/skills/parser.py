@@ -7,6 +7,19 @@ from coderio.skills.models import Skill
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", re.DOTALL)
 
+# Frontmatter `description` fields flow into MODEL-VISIBLE surfaces (the
+# subagent task() tool spec every turn; slash-command /help output). An
+# unbounded value lets a repo file inflate or poison that context each round
+# (adversarial-review finding: a 90KB description reached the main model
+# verbatim). Truncate hard; keep whitespace controls only.
+MAX_DESCRIPTION_CHARS = 1024
+
+
+def sanitize_description(raw: str, limit: int = MAX_DESCRIPTION_CHARS) -> str:
+    """Clean a frontmatter description for model-visible consumption."""
+    cleaned = "".join(ch for ch in raw if ch in "\n\t" or ch.isprintable())
+    return cleaned[:limit]
+
 
 def _parse_frontmatter(fm_text: str) -> dict:
     data = {}

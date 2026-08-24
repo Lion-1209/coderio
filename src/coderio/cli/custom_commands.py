@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from coderio.cli.commands import SLASH_COMMANDS
-from coderio.skills.parser import split_frontmatter
+from coderio.skills.parser import sanitize_description, split_frontmatter
 
 ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 # Prompt templates are small by nature; anything near this size is a token
@@ -84,7 +84,7 @@ def _load_layer(layer_dir: Path | None, layer_name: str) -> dict[str, CustomComm
             continue
         out[name] = CustomCommand(
             name=name,
-            description=fm.get("description", ""),
+            description=sanitize_description(fm.get("description", "")),
             body=body,
             source_layer=layer_name,
         )
