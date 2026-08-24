@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
+
 _LINE_PREFIX_RE = re.compile(r"^\s*\d+\s*?\t")
 
 
@@ -47,6 +49,9 @@ class EditFileTool:
             return f"Error: old_string not found in {path}"
         if count > 1 and not replace_all:
             return f"Error: old_string matches {count} times (not unique); set replace_all=true"
+        # Snapshot BEFORE writing so /undo can restore (only on paths that
+        # will actually write — error returns above leave no checkpoint).
+        DEFAULT_CHECKPOINT.snapshot(p)
         if replace_all:
             new_text = text.replace(old_string, new_string)
         else:

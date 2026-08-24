@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
 from coderio.tools.edit_file import _strip_line_prefix
 
 
@@ -58,5 +59,8 @@ class MultiEditTool:
                 )
             text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
             applied += 1
+        # ONE snapshot per run() — multi_edit is one logical operation, and a
+        # single /undo should revert the whole batch, not its first slice.
+        DEFAULT_CHECKPOINT.snapshot(p)
         p.write_text(text, encoding="utf-8")
         return f"Edited {path}: applied {applied} edit(s)"

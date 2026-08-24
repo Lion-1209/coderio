@@ -47,6 +47,11 @@ SLASH_COMMANDS: list[SlashCommand] = [
     ),
     SlashCommand("/model", "switch model at runtime", ["/model "]),
     SlashCommand("/cost", "show token usage for this session", ["/cost"]),
+    SlashCommand(
+        "/undo",
+        "revert the last agent file write (write_file/edit_file/multi_edit)",
+        ["/undo"],
+    ),
     SlashCommand("/think", "expand the last round's collapsed thinking", ["/think"]),
 ]
 
@@ -343,6 +348,16 @@ def handle_slash(line: str, ctx) -> CommandResult:
         if inp == 0 and out == 0:
             return CommandResult(message="本次会话暂无 token 用量(尚未对话或 provider 未返回)。")
         return CommandResult(message=f"Token 用量:\n  输入: {inp}\n  输出: {out}\n  合计: {inp + out}")
+    if cmd == "/undo":
+        from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
+
+        result = DEFAULT_CHECKPOINT.undo()
+        if result is None:
+            return CommandResult(message="没有可撤销的文件写入（栈为空）。")
+        verb = "已恢复写入前的原内容" if result.restored else "已删除（该文件由 agent 新建）"
+        remaining = len(DEFAULT_CHECKPOINT)
+        suffix = f"（还可撤销 {remaining} 步）" if remaining else "（已到底）"
+        return CommandResult(message=f"↩ {result.path} {verb}{suffix}")
     if cmd == "/think":
         stream = getattr(ctx, "stream", None)
         if stream is not None and hasattr(stream, "show_last_thinking"):
