@@ -526,8 +526,10 @@ class Harness:
         self.state.plan_nudged = True
         return (
             "\n[nudge] You're writing code but have no task list yet. For non-trivial "
-            'work, call todo(action="add", ...) first to decompose the task into '
-            "verifiable steps. (Trivial fixes like a typo can ignore this.)"
+            "work, decompose the task into verifiable steps via the write_todos tool "
+            "first. Your task list is mirrored to .coderio/plan.md — the user may "
+            "edit that file between messages, and edits are adopted automatically. "
+            "(Trivial fixes like a typo can ignore this.)"
         )
 
     # ------------------------------------------------------ check_termination (hard gates)
@@ -628,9 +630,9 @@ class Harness:
         return (
             True,
             f"[harness] Your task list has {len(pending)} unfinished item(s). Mark "
-            'them complete via todo(action="update", status="completed") only if '
-            "truly done, or finish the remaining work. Do not claim overall "
-            "completion with pending todos.",
+            'them complete via write_todos (status="completed") only if truly '
+            "done, or finish the remaining work. Do not claim overall completion "
+            "with pending todos.",
             None,
         )
 

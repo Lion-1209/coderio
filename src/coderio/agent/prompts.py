@@ -137,7 +137,8 @@ need its detailed guidance. Do not load a playbook unless you are at that step.
      unspecified, scope unclear, hidden assumptions, possible X-Y problem), ask clarifying
      questions FIRST and WAIT for the user's answers.
   2. spec-writing — for non-trivial features, write a short design/spec.
-  3. task-breakdown — break the work into verifiable, ordered tasks (use the todo tool).
+  3. task-breakdown — break the work into verifiable, ordered tasks (use the
+     write_todos tool — it mirrors to .coderio/plan.md which the user can edit).
      Batch all edits for one task before updating the todo list — don't call
      write_todos after every single edit. Update todos when a task STATUS
      changes (pending → in_progress → completed), not after each file edit.

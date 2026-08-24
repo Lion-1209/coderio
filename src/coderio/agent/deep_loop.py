@@ -594,6 +594,40 @@ def run_deep_agent(
         if ups.context:
             user_input = f"{prompt_text}\n\n[hook context]\n{ups.context}"
 
+    # Plan artifact (.coderio/plan.md, S5): the harness's todo list mirrored to
+    # an editable file. Anchor walks up like skills/config/trust (SA-4 lesson —
+    # a literal runtime dir would miss project plans when launched from a
+    # subdirectory). The SAME TodoStore instance feeds both the middleware
+    # mirror and the artifact, so write_todos → materialize and turn-start
+    # adopt stay in sync. Subagent HarnessMiddleware gets neither: the plan has
+    # exactly one owner. Adoption runs BEFORE the hooks/session append below so
+    # the injected note lands inside this turn's user message.
+    from coderio.agent.plan_artifact import AdoptionNote, PlanArtifact
+    from coderio.config.loader import _find_project_dir
+    from coderio.tools.todo import TodoStore
+
+    plan_artifact = None
+    adoption_note = ""
+    if harness_enabled:
+        plan_artifact = PlanArtifact(
+            anchor=_find_project_dir(project_dir) / ".coderio",
+            store=TodoStore(),
+        )
+        adopted = plan_artifact.adopt_if_edited()
+        if adopted:
+            adoption_note = AdoptionNote(count=adopted, path=plan_artifact.path).render()
+
+    # Plan artifact adoption (S5): if the user edited .coderio/plan.md between
+    # turns, their version already replaced the todo store above — tell the
+    # model so it doesn't keep executing a stale plan.
+    if adoption_note:
+        if isinstance(user_input, str):
+            user_input = f"{user_input}\n\n{adoption_note}"
+        else:
+            # Multimodal content blocks: append as an extra text block so
+            # attached images survive (same concern as the hook context above).
+            user_input = [*user_input, {"type": "text", "text": adoption_note}]
+
     session.append(Message.user(user_input))
 
     sp = _resolve_system_prompt(system_prompt, skill_store, active_skills)
@@ -604,7 +638,15 @@ def run_deep_agent(
         from coderio.agent.hooks import HooksMiddleware
 
         middleware.append(HooksMiddleware(hook_runner))
-    middleware.append(HarnessMiddleware(stream=stream, enabled=harness_enabled))
+
+    middleware.append(
+        HarnessMiddleware(
+            stream=stream,
+            enabled=harness_enabled,
+            todos=plan_artifact.store if plan_artifact is not None else None,
+            plan_artifact=plan_artifact,
+        )
+    )
     if gate is not None:
         middleware.append(PermissionMiddleware(gate))
     # Command-content review: always active (even in FULL mode). Blocks rm -rf /,

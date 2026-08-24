@@ -120,7 +120,13 @@ class HarnessMiddleware(AgentMiddleware):
     'updates' (complete messages).
     """
 
-    def __init__(self, stream=None, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        stream=None,
+        enabled: bool = True,
+        todos: "TodoStore | None" = None,
+        plan_artifact=None,
+    ) -> None:
         # Wire the phase-observation tracker when a stream consumer is present.
         # The display pipeline (TUI StatusBar / stream.on_phase_change) already
         # exists; without a tracker, Harness._track_phase is a no-op and the
@@ -132,12 +138,16 @@ class HarnessMiddleware(AgentMiddleware):
         tracker = AgentStateTracker() if _stream_supports_phase(stream) else None
         self.harness = Harness(
             state=HarnessState(),
-            todos=TodoStore(),
+            todos=todos if todos is not None else TodoStore(),
             enabled=enabled,
             state_tracker=tracker,
             stream=stream,
         )
         self.stream = stream
+        # Optional plan-artifact mirror (.coderio/plan.md). The MAIN agent gets
+        # one from deep_loop; subagents deliberately don't — the plan has one
+        # owner. When provided, every successful write_todos materializes it.
+        self.plan_artifact = plan_artifact
         self._runtime = None  # captured in wrap_tool_call / after_model
 
     def _emit(self, runtime: Any, payload: dict) -> None:
@@ -197,6 +207,10 @@ class HarnessMiddleware(AgentMiddleware):
                     for t in todos_data
                     if isinstance(t, dict)
                 ]
+                # Plan artifact: mirror the fresh task list to
+                # .coderio/plan.md so the user can view/edit it between turns.
+                if self.plan_artifact is not None:
+                    self.plan_artifact.materialize()
 
         # Subagent delegation: the task tool returns a subagent's findings,
         # which may cite files the subagent read but the MAIN agent didn't.
