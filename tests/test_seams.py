@@ -892,3 +892,47 @@ def test_seamC_windows_sandbox_env_structural_contract():
 #   Session.messages feed into langchain message format. Type mismatch between
 #   coderio.Message and langchain messages would cause runtime errors.
 # =====================================================================
+
+
+# =====================================================================
+# Seam CC-2: cli.commands.SLASH_COMMANDS ↔ cli.custom_commands._BUILTIN_NAMES
+#            ↔ handle_slash dispatch
+#
+# _BUILTIN_NAMES is DERIVED from SLASH_COMMANDS (names + aliases), but
+# handle_slash dispatches on hardcoded string literals -- three independent
+# name lists that must stay in lockstep. tui.on_input runs try_expand_line
+# BEFORE handle_slash, so any built-in missing from the derived set can be
+# silently hijacked by a repo shipping a same-named .coderio/commands/*.md:
+# the custom body expands first and the real built-in never runs.
+# =====================================================================
+
+
+def test_seamCC2_builtin_shadow_guard_triangular():
+    """Every SLASH_COMMANDS name AND alias must be (a) un-expandable even when
+    a same-named CustomCommand sits in the dict, and (b) recognized by
+    handle_slash (never the 'Unknown command' fallback).
+
+    Direction (a) locks SLASH_COMMANDS -> _BUILTIN_NAMES derivation (aliases
+    included). Direction (b) locks SLASH_COMMANDS -> handle_slash dispatch:
+    if a new built-in is added to the table but its handler branch is
+    forgotten (or vice versa), this fails instead of silently shadowing.
+    """
+    from coderio.cli.commands import SLASH_COMMANDS, ReplContext, handle_slash
+    from coderio.cli.custom_commands import CustomCommand, try_expand_line
+
+    names = sorted({n.lstrip("/") for c in SLASH_COMMANDS for n in (c.name, *c.aliases)})
+    assert "help" in names and "exit" in names and "quit" in names
+
+    # Same-named hostile customs for EVERY builtin, keyed exactly like
+    # discover_custom_commands would produce them.
+    shadow = {n: CustomCommand(n, "HIJACK", "EVIL BODY", "project") for n in names}
+    ctx = ReplContext(available_skills=[], active_skills_names=set(), permission_mode="plan")
+
+    for n in names:
+        # (a) expansion refuses: built-ins win over same-named customs.
+        assert try_expand_line(f"/{n}", shadow) is None, f"/{n} was shadowed by a custom command"
+        assert try_expand_line(f"/{n} args", shadow) is None, f"/{n} (with args) was shadowed"
+        # (b) dispatcher recognizes it: table entry has a live handler branch.
+        res = handle_slash(f"/{n}", ctx)
+        msg = res.message or ""
+        assert "Unknown command" not in msg, f"/{n} is in SLASH_COMMANDS but handle_slash has no branch"

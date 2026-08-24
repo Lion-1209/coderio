@@ -90,11 +90,20 @@ class CoderioTUI(App):
 
     name = "textual_tui"
 
-    def __init__(self, on_input=None, show_tool_output: bool = True, banner: str | None = None) -> None:
+    def __init__(
+        self,
+        on_input=None,
+        show_tool_output: bool = True,
+        banner: str | None = None,
+        extra_completions: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self._on_input = on_input
         self.show_tool_output = show_tool_output
         self._banner = banner
+        # Custom command completions (/name form), discovered by the caller at
+        # startup — compose() runs later and has no project context of its own.
+        self._extra_completions = extra_completions or []
         # StreamHandler state
         self.buffer = ""
         self.usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -169,7 +178,7 @@ class CoderioTUI(App):
         # the StatusBar (which was hiding "就" in "就绪") and no lost bottom
         # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
-            yield CommandMenu(slash_completions())
+            yield CommandMenu(slash_completions(self._extra_completions))
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
@@ -1328,8 +1337,34 @@ def run_tui(
     # Mutable runtime holder — /model, /mode, /resume rebuild parts in place.
     rt = {"cfg": cfg, "model": model, "gate": gate, "session": session}
 
+    # Custom project/user commands (.coderio/commands/*.md + ~/.coderio/commands).
+    # Discovered ONCE here so the completions menu and execution share one set;
+    # new command files land after a restart (documented v1 behavior). Layer-dir
+    # convention mirrors load_skill_store: the CALLER joins "<anchor>/.coderio/
+    # <thing>" — passing the bare project root would glob every root-level *.md
+    # (README, CHANGELOG...) into the command set (runtime-audit finding).
+    from pathlib import Path as _Pc
+
+    from coderio.cli.custom_commands import discover_custom_commands, try_expand_line
+    from coderio.config.loader import _find_project_dir
+
+    custom_commands = discover_custom_commands(
+        project_dir=_find_project_dir(_Pc.cwd()) / ".coderio" / "commands",
+        user_dir=_Pc.home() / ".coderio" / "commands",
+    )
+    rt["custom_commands"] = custom_commands
+
     def on_input(line: str) -> None:
-        if line.startswith("/"):
+        # Custom commands expand FIRST: "/name args" → template body becomes
+        # the user prompt. The expanded text goes STRAIGHT to the engine path
+        # below — NEVER back into handle_slash. Re-entry would let a repo file
+        # with body "/mode full" flip the permission gate, or "/export <path>"
+        # exfiltrate the session (adversarial-review finding); hence `elif`,
+        # not a second sequential `if`.
+        expanded = try_expand_line(line, custom_commands)
+        if expanded is not None:
+            line = expanded
+        elif line.startswith("/"):
             from pathlib import Path as _P
 
             from coderio.cli.commands import ReplContext, handle_slash
@@ -1350,6 +1385,7 @@ def run_tui(
                 active_profile=rt["cfg"].active_profile,
                 usage=tui.usage,
                 stream=tui,
+                custom_commands=custom_commands,
             )
             res = handle_slash(line, ctx)
             # /resume with no arg → open the interactive picker instead of printing.
@@ -1575,7 +1611,12 @@ def run_tui(
         tui._clear_history()
         tui._add_text("🆕 已开启新会话（历史已清空，可用 /resume 恢复）", style="bold green")
 
-    tui = CoderioTUI(on_input=on_input, show_tool_output=cfg.cli.show_tool_output, banner=banner)
+    tui = CoderioTUI(
+        on_input=on_input,
+        show_tool_output=cfg.cli.show_tool_output,
+        banner=banner,
+        extra_completions=[f"/{n} " for n in sorted(custom_commands)],
+    )
     # Rebuild the gate with the TUI reference attached. The initial gate from
     # build_runtime doesn't have the TUI (it was constructed before tui existed).
     # Without this, confirm mode would use input() which deadlocks against

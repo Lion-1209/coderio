@@ -51,15 +51,20 @@ SLASH_COMMANDS: list[SlashCommand] = [
 ]
 
 
-def slash_completions() -> list[str]:
+def slash_completions(extra: list[str] | None = None) -> list[str]:
     """Flatten all completion candidates (commands + aliases + subcommands).
 
     Used by the TUI SuggestFromList. Aliases are included so /quit completes too.
+    ``extra`` carries custom command completions (/name form) discovered at
+    startup — passed in rather than discovered here so this stays a pure
+    function over its arguments (and import-time cheap).
     """
     out: list[str] = []
     for c in SLASH_COMMANDS:
         out.extend(c.completions)
         out.extend(c.aliases)
+    if extra:
+        out.extend(extra)
     return out
 
 
@@ -82,6 +87,7 @@ class ReplContext:
     active_profile: str = ""  # name of the currently active profile
     usage: dict = None
     stream: object = None  # RichStream — for /think to expand collapsed thinking
+    custom_commands: dict = None  # {name: CustomCommand} — discovered at startup, rendered by /help
 
 
 @dataclass
@@ -93,9 +99,11 @@ class CommandResult:
     message: str | None = None
 
 
-def _help_text() -> str:
+def _help_text(ctx=None) -> str:
     """Build /help from SLASH_COMMANDS so the listing never drifts from the
-    actual command handlers. Aliases are joined with the primary name."""
+    actual command handlers. Aliases are joined with the primary name.
+    Custom commands (ctx.custom_commands) render as a second section so users
+    can discover what a repo ships without listing .coderio/commands/."""
     names: dict[str, SlashCommand] = {}
     for c in SLASH_COMMANDS:
         key = c.name
@@ -106,11 +114,19 @@ def _help_text() -> str:
     lines = ["coderio slash commands:"]
     for key, c in names.items():
         lines.append(f"  {key:<{width}}  {c.summary}")
+    customs = getattr(ctx, "custom_commands", None) or {}
+    if customs:
+        lines.append("")
+        lines.append("custom commands (.coderio/commands):")
+        cwidth = max(len(f"/{n}") for n in customs)
+        for n, cc in sorted(customs.items()):
+            desc = cc.description or "(no description)"
+            lines.append(f"  /{n:<{cwidth - 1}}  {desc}  [dim]({cc.source_layer})[/dim]")
     return "\n".join(lines)
 
 
 def _cmd_help(ctx) -> CommandResult:
-    return CommandResult(message=_help_text())
+    return CommandResult(message=_help_text(ctx))
 
 
 def _cmd_skills(ctx) -> CommandResult:
