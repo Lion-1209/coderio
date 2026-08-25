@@ -76,13 +76,15 @@ jobs:
 
       - name: Run tests with coverage
         # Enforces a coverage floor so coverage can't silently regress.
-        # The 70% floor is conservative (current baseline is ~75%) — it catches
-        # gross regressions (a module losing its tests) without failing on
-        # minor fluctuations. pyproject.toml's [tool.coverage.report]
-        # fail_under=60 is the local-dev default; CI enforces the stricter 70%.
+        # Measured baseline 2026-08-24: 82% total (weakest: sandbox_runner 43%
+        # — POSIX-only branches skip on Windows). The 75% floor keeps real
+        # headroom for platform variance while catching gross regressions
+        # (a module losing its tests). pyproject.toml's
+        # [tool.coverage.report] fail_under=60 is the local-dev default;
+        # CI enforces the stricter 75%.
         shell: bash
         run: |
-          uv run python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=70
+          uv run python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=75
 
       - name: Type check (mypy)
         # HARD GATE for clean modules. pyproject.toml's [[tool.mypy.overrides]]

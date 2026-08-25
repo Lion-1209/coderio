@@ -190,10 +190,11 @@ asyncio_mode = "auto"
 source = ["coderio"]
 
 [tool.coverage.report]
-# Local-dev coverage floor. CI enforces a stricter 70% via --cov-fail-under
+# Local-dev coverage floor. CI enforces a stricter 75% via --cov-fail-under
 # (see .github/workflows/ci.yml). This 60% is the "running tests in your
 # editor" safety net — lower than CI so local runs don't fail on partial
-# test selection. Current baseline: ~75% total, deep_loop 75%, middleware 80%+.
+# test selection. Measured baseline 2026-08-24: 82% total; known weakest
+# sandbox_runner 43% (POSIX-only branches skip on Windows).
 fail_under = 60
 
 [tool.mypy]
