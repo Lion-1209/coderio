@@ -6,6 +6,49 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [0.4.4] — 2026-08-24
+
+### Added — extensibility & safety-of-agency features (each adversarially reviewed, mutation-verified)
+- **Custom slash commands**: `.coderio/commands/*.md` (project layer overrides user layer)
+  turn prompt templates into `/commands` with `$ARGUMENTS` substitution and optional
+  frontmatter descriptions. Built-ins can never be shadowed — exact matches refused at
+  expansion, case variants dropped at discovery (Windows case-insensitive-FS spoof
+  surface). Bodies route straight to the engine, never re-enter built-in dispatch: a
+  repo file with body `/mode full` cannot flip the permission gate.
+- **Custom subagents**: `.coderio/agents/*.md` define personas invokable via
+  `task(subagent_type=...)`. Persona-only customization — every assembled spec rides
+  the same PLAN-gated read-only middleware stack as the built-in research agent;
+  reserved names dropped at discovery AND re-filtered at wiring time. Adversarially
+  verified end-to-end: write tools physically unbound, nested task() blocked on three
+  independent layers.
+- **File checkpoints + `/undo`**: every structured write (write_file/edit_file/
+  multi_edit) snapshots the target's pre-write state; `/undo` reverts step by step.
+  multi_edit is one undo step; error paths consume no depth; failed restores re-push
+  for retry; bounded at 50 entries / 64MB; deliberately survives /clear. Shell-side
+  writes (redirects) bypass it — OS sandboxing is the layer for that class.
+- **Plan artifact**: the todo list mirrors to `<project>/.coderio/plan.md` after every
+  successful write_todos; user edits between messages are adopted at next turn start
+  (human override wins) with an injected note so the model doesn't execute a stale plan.
+
+### Fixed
+- Three prompt surfaces (PlanGate nudge, CompletionGate force-continue, CODE-workflow)
+  directed the model to coderio's legacy `todo()` tool whose store is an orphan the
+  gates never check — completion instructions could loop forever. All now point at
+  `write_todos`, the canonical surface.
+- Custom-command discovery anchor joined at the caller after a runtime audit caught
+  production loading zero commands while globbing root-level *.md files as agents.
+- Subagent discovery anchors walk up to the project root like skills/config/trust
+  (launching from a repo subdirectory previously missed project-layer definitions).
+- Frontmatter descriptions are truncated to 1024 chars and control-char-stripped —
+  a 90KB description previously reached the main model verbatim every turn.
+
+### Changed
+- CI coverage floor raised 70% → 75% against a measured 82% baseline (gate verified
+  to trip); stale coverage comments corrected.
+- tui.py decomposed (1627 → 1332 lines): input dispatch + session lifecycle extracted
+  to testable TuiRuntime; behavior verified statement-equivalent by AST diff + real
+  Textual input-routing tests.
+
 ## [0.4.3] — 2026-08-21
 
 ### Security — P1/P2 hardening (audit-verified, adversarial + mutation tested)

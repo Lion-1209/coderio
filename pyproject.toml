@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coderio"
-version = "0.4.3"
+version = "0.4.4"
 description = "A skill-driven coding agent — structural harness, foldable thinking TUI, deepagents engine."
 readme = "README_en.md"
 license = "MIT"

@@ -45,13 +45,17 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 ## 特性一览
 
 - **交互式 TUI**：流式输出、思考折叠（Ctrl+O）、可折叠 TODO 面板、纵向权限菜单、任务中断（Esc）、slash 命令补全、会话管理
+- **自定义 slash 命令**：`.coderio/commands/*.md`（项目级/用户级）把提示词模板变成 `/命令`，`$ARGUMENTS` 占位符替换，内置命令不可被遮蔽
+- **自定义子代理**：`.coderio/agents/*.md` 定义 `task(subagent_type=...)` 可调的专属人格——只定制"是谁"，能力恒为只读栈
+- **文件回滚**：agent 的每次结构化写盘自动快照，`/undo` 一键逐级恢复（改坏文件不再可怕）
+- **计划产物**：任务清单自动镜像到 `.coderio/plan.md`，你手动编辑它，下一轮 agent 自动采纳你的版本
 - **headless 模式**：`coderio run "任务"` 单次运行（CI / 脚本 / benchmark），退出码分级
 - **MCP 支持**：`.mcp.json`（Claude Code 兼容格式）接入外部工具，`coderio mcp` 命令行管理
 - **生命周期 hooks**：`[[hooks]]` 在 PreToolUse / PostToolUse / UserPromptSubmit 等事件执行你的命令（exit 2 = 阻断），IO 契约与 Claude Code 兼容
 - **skills 三层加载**：bundled + 用户 + 项目层，渐进披露省上下文
 - **上下文治理**：自动压缩（60% 窗口触发）、大块 offload、sqlite 检查点跨轮持久化
 - **子 agent**：research（只读，双重强制）+ general-purpose（继承主 agent 全部安全层）
-- **工程纪律**：850+ 测试、80% 覆盖率、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
+- **工程纪律**：950+ 测试、82% 覆盖率（CI 卡 75% 下限）、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
 
 <details>
 <summary><b>配置示例</b>（点击展开）</summary>
@@ -87,7 +91,7 @@ coderio mcp add github --type http --url ...          # 管理 MCP
 coderio skills install                               # 安装 skill 套件
 ```
 
-TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、/profile 切配置、/think 展开思考）。
+TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、/undo 回滚文件写入、/think 展开思考）。
 
 ## 已知限制
 

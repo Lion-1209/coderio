@@ -39,12 +39,12 @@ coderio 是一个**技能驱动的编程 agent**：它的"骨架"是 Lion-Skills
 
 | 模块 | 行数 | 职责 | 关键文件 |
 |------|------|------|----------|
-| `agent/` | ~2500 | deepagents 引擎、harness/permission middleware、提示词构建、流式协议 | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, prompts.py |
-| `cli/` | ~3800 | Typer 应用、Textual TUI、Rich 流式 UI、slash 命令、凭证/onboarding | tui.py, repl.py, stream.py, app.py, onboarding.py |
-| `tools/` | ~1100 | 工具集 + 权限门 + langchain 适配（路径隔离由 deepagents virtual_mode 处理） | bash.py, permission.py, base.py |
-| `config/` | ~400 | 三层 TOML 配置合并 + 用户目录 bootstrap | loader.py, models.py |
-| `skills/` | ~220 | SkillStore 三层加载（bundled < user < project） | store.py, parser.py, models.py |
-| `session/` | 260 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
+| `agent/` | ~3600 | deepagents 引擎、harness/permission middleware、计划产物、自定义子代理、提示词构建、流式协议 | deep_loop.py, harness_middleware.py, permission_middleware.py, harness.py, plan_artifact.py, custom_agents.py, prompts.py |
+| `cli/` | ~5300 | Typer 应用、Textual TUI（渲染）+ TuiRuntime（输入分发/会话生命周期）、自定义 slash 命令、Rich 流式 UI、凭证/onboarding | tui.py, tui_runtime.py, repl.py, stream.py, app.py, commands.py, custom_commands.py, tui_onboarding.py |
+| `tools/` | ~3000 | 工具集 + 文件写入 checkpoint + 权限门 + 命令黑名单 + OS 沙箱 + langchain 适配 | bash.py, permission.py, command_policy.py, checkpoint.py, base.py |
+| `config/` | ~900 | 三层 TOML 配置合并 + 仓库信任门 + 用户目录 bootstrap | loader.py, models.py, trust.py |
+| `skills/` | ~255 | SkillStore 三层加载（bundled < user < project）+ 共享 frontmatter 解析 | store.py, parser.py, models.py |
+| `session/` | ~330 | jsonl 追加式会话存储 + resume + 压缩截断 | store.py, message.py |
 | `llm/` | 320 | 模型工厂 + provider context window 探测 | factory.py, probe.py |
 
 ### 依赖方向（关键约束）
@@ -268,12 +268,13 @@ is_interrupted()（用户中断检查，agent 线程在每轮开头调用）
 
 `NullStream` 全空实现，用于测试/headless。
 
-### 6.5 TUI 交互（`cli/tui.py`）
+### 6.5 TUI 交互（`cli/tui.py` + `cli/tui_runtime.py`）
 
 Textual 8.x App，核心设计：
 
-- **线程模型**：agent 在 Textual Worker 后台线程跑，UI 更新通过 `_render_q`（thread-safe deque）+ 60ms 定时器排空
-- **流式渲染**：dict 分派表（`_RENDER_DISPATCH`）映射 action → handler，每个 handler返回 streaming/final/none 决定滚动策略
+- **渲染与分发分离**（S3 拆分）：`CoderioTUI` 只管 widget 树与流式渲染；输入路由、slash 处理、会话生命周期在 `TuiRuntime`（两阶段构造：先建 runtime，`bind()` 时把带 TUI 引用的 gate 接上——confirm 模式否则会在 Textual 接管终端后死于 input() 死锁）
+- **线程模型**：agent 在后台线程跑，UI 更新通过 `_render_q`（thread-safe deque）+ 定时器排空
+- **流式渲染**：dict 分派表映射 action → handler，每个 handler 返回 streaming/final/none 决定滚动策略
 - **中断**：`Esc` / `⏹ 中断` 按钮 → `_interrupted` 标志位，agent 流循环检查 `is_interrupted()` → `InterruptedError` → 黄色"已中断"面板
 - **confirm 模式**：`TuiPermissionGate` 用 `ConfirmMenu`（纵向选择菜单）+ `threading.Event` 跨线程同步，↑↓ 选择 + Enter 确认
 - **可视化选择器**：`/mode`（ModePickerScreen）、`/profile`（ProfilePickerScreen）、`/resume`（SessionPickerScreen）
@@ -290,13 +291,17 @@ Textual 8.x App，核心设计：
 | 类别 | 工具 |
 |------|------|
 | 读 | read_file, list_dir, glob, grep |
-| 写 | write_file, edit_file, multi_edit |
+| 写 | write_file, edit_file, multi_edit（写前自动 checkpoint，`/undo` 可回滚）|
 | 执行 | bash（Git Bash，Windows 自动探测，.venv 自动激活，进程树超时杀）|
-| 计划 | todo（TodoStore，harness 读它）|
+| 计划 | write_todos（deepagents 原生，镜像到 `.coderio/plan.md` 供用户编辑）|
 | 外部 | web_search, web_fetch |
 | 记忆 | note（跨会话长期记忆）|
 
 **权限门**（`permission.py`）：plan / confirm / auto_edit / full 四模式。`DESTRUCTIVE_TOOLS`（write_file/edit_file/multi_edit/execute/web_fetch/note）在 plan 模式全挡、confirm 模式逐个问、auto_edit 自动放行文件编辑但仍问高危工具、full 全放。
+
+**文件 checkpoint**（`checkpoint.py`，S4）：三个结构化写工具落盘前快照进内存栈（50 条 / 64MB 上限），`/undo` 逐级回滚；bash 重定向等 shell 路径不覆盖——OS 级沙箱才是那一层的答案。
+
+**计划产物**（`plan_artifact.py`，S5）：write_todos 成功后任务清单镜像到 `<project>/.coderio/plan.md`；用户在两轮之间手改它，下一轮开始自动采纳其版本并注入提示。
 
 **命令审查层**（`command_review.py` + `command_policy.py`）：权限门只管"哪个工具能执行"，不管"命令内容是什么"。shell（execute）不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、`shutdown` 等破坏性命令。即使 FULL 模式也挡（安全优先于"full=全放行"字面语义）。用户可在 config.toml `[tools].blocked_commands` 追加正则黑名单。`network_allowed=false` 可禁用 web_fetch/web_search（离线模式）。
 

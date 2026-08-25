@@ -45,13 +45,17 @@ Zhipu **GLM Coding Plan** and StepFun **Step Plan** work out of the box (direct 
 ## Feature highlights
 
 - **Interactive TUI**: streaming output, foldable thinking (Ctrl+O), collapsible TODO panel, vertical permission menu, task interruption (Esc), slash-command autocomplete, session management
+- **Custom slash commands**: `.coderio/commands/*.md` (project/user layers) turn prompt templates into `/commands` with `$ARGUMENTS` substitution; built-ins can never be shadowed
+- **Custom subagents**: `.coderio/agents/*.md` define personas invokable via `task(subagent_type=...)` — you customize WHO the agent is, its capabilities stay on the read-only stack
+- **File rollback**: every structured agent write is auto-checkpointed; `/undo` reverts step by step (a bad edit is one command from gone)
+- **Plan artifact**: the task list auto-mirrors to `.coderio/plan.md`; edit it by hand and the agent adopts your version at the next turn
 - **Headless mode**: `coderio run "task"` one-shot execution (CI / scripts / benchmarks) with graded exit codes
 - **MCP support**: connect external tools via `.mcp.json` (Claude Code-compatible format), managed with `coderio mcp`
 - **Lifecycle hooks**: `[[hooks]]` run your commands at PreToolUse / PostToolUse / UserPromptSubmit (exit 2 = block) — IO contract compatible with Claude Code
 - **Three-layer skills**: bundled + user + project, progressive disclosure saves context
 - **Context governance**: auto-compaction (60% window trigger), large-block offload, sqlite checkpoints across turns
 - **Subagents**: research (read-only, double-enforced) + general-purpose (inherits the main agent's full security stack)
-- **Engineering discipline**: 850+ tests, 80% coverage, mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
+- **Engineering discipline**: 950+ tests, 82% coverage (CI floor 75%), mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
 
 <details>
 <summary><b>Config example</b> (click to expand)</summary>
@@ -87,7 +91,7 @@ coderio mcp add github --type http --url ...          # manage MCP
 coderio skills install                               # install skill suites
 ```
 
-Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /profile configs, /think unfold reasoning).
+Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /undo file writes, /think unfold reasoning).
 
 ## Known limitations
 
