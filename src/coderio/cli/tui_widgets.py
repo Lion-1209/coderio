@@ -65,9 +65,13 @@ class CommandMenu(Vertical):
     CommandMenu ListItem > Widget :hover { background: $boost; }
     """
 
-    def __init__(self, completions: list[str]) -> None:
+    def __init__(self, completions: list[str], descriptions: dict[str, str] | None = None) -> None:
         super().__init__()
         self._all = completions
+        # completion → one-line description, shown as a dim second column in
+        # each row (2026-08-27 live TUI audit: the menu listed bare names and
+        # gave no hint what a command does before selecting it).
+        self._descs = descriptions or {}
         self._input: Input | None = None  # the Input this menu feeds
         # Value last accepted by Tab/Enter. refresh_for skips reopening while the
         # input still equals this — otherwise setting .value in accept() retriggers
@@ -89,6 +93,11 @@ class CommandMenu(Vertical):
         sub = [c for c in self._all if p in c.lower() and c not in exact]
         return exact + sub
 
+    @staticmethod
+    def _bare(candidate: str) -> str:
+        """The bare command of a completion candidate: '/mode plan' → '/mode'."""
+        return candidate.split(" ", 1)[0]
+
     def refresh_for(self, value: str) -> None:
         """Re-filter and show/hide based on the current input value."""
         # If the user just accepted a command (Tab/Enter), the value now equals
@@ -108,7 +117,16 @@ class CommandMenu(Vertical):
         lv = self.query_one("#cmd-list", ListView)
         lv.clear()
         for c in matches:
-            lv.append(ListItem(Static(c), name=c))
+            desc = self._descs.get(c, "")
+            # Subcommand/argument forms ("/mode plan") reuse the parent's
+            # description — hide it to avoid 5 identical rows of the same text.
+            if c != self._bare(c) and self._descs.get(self._bare(c)) == desc:
+                label = f"{c}"
+            elif desc:
+                label = f"{c}  [dim]{desc}[/dim]"
+            else:
+                label = c
+            lv.append(ListItem(Static(label, markup=True), name=c))
         self.add_class("-visible")
         # auto-select the first (top) match so Enter is immediately meaningful
         try:

@@ -70,6 +70,9 @@ class CoderioTUI(App):
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
+    /* Final answer: plain markdown with a left accent bar — turn boundaries
+       are marked by the cyan "› you …" echo lines, so no full box per reply. */
+    #history .final-answer { border-left: thick $accent; padding: 0 0 0 1; margin-bottom: 1; }
     /* NOTE: do NOT define `Screen { layers }` here — it changes how Textual
        renders the scrollable region (bottom rows of scrolled content stop
        rendering). The CommandMenu popup uses display:none/block for show/hide
@@ -163,7 +166,7 @@ class CoderioTUI(App):
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
-        from coderio.cli.commands import slash_completions
+        from coderio.cli.commands import slash_completions, slash_descriptions
 
         yield VerticalScroll(id="history")
         # input-bar holds the CommandMenu + StatusBar + Input. CommandMenu lives
@@ -172,7 +175,7 @@ class CoderioTUI(App):
         # the StatusBar (which was hiding "就" in "就绪") and no lost bottom
         # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
-            yield CommandMenu(slash_completions(self._extra_completions))
+            yield CommandMenu(slash_completions(self._extra_completions), slash_descriptions())
             with Horizontal(id="status-row"):
                 yield StatusBar()
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
@@ -512,11 +515,12 @@ class CoderioTUI(App):
             self._mount_widget_main(col)
 
     def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
-        """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
+        """MAIN THREAD: fold thinking + replace live output with final Markdown.
 
-        The final answer is rendered as Static(Panel(Markdown(buf))) (see
-        _mount_final_panel). scroll_end lands on the real content bottom once the
-        layout settles (note the layers caveat in the CSS).
+        The final answer is rendered as Static(Markdown(buf)) with a left
+        accent bar (see _mount_final_panel). scroll_end lands on the real
+        content bottom once the layout settles (note the layers caveat in the
+        CSS).
         """
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
@@ -532,13 +536,18 @@ class CoderioTUI(App):
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
-        """MAIN THREAD: mount the final Markdown Panel and scroll to the bottom.
+        """MAIN THREAD: mount the final Markdown block and scroll to the bottom.
 
-        Mounts Static(Panel(Markdown(buf))) and schedules a multi-stage delayed
-        scroll (the Panel's height needs a few layout passes to settle).
+        Plain bordered-free Markdown: the old Panel(title="coderio") stamped a
+        blue box + brand title onto EVERY reply — heavy visual noise that also
+        duplicated the welcome banner's branding (2026-08-27 live TUI audit).
+        Turn boundaries are already delineated by the cyan "› you …" echo
+        lines, so the answer needs no container of its own. Mounts Static and
+        schedules a multi-stage delayed scroll (height needs a few layout
+        passes to settle).
         """
         history = self.query_one("#history")
-        widget = Static(Panel(Markdown(buf), border_style="blue", title="coderio"))
+        widget = Static(Markdown(buf), classes="final-answer")
         history.mount(widget)
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
@@ -943,11 +952,15 @@ class CoderioTUI(App):
             first = result.splitlines()[0][:60] if result.splitlines() else ""
             self._render_q.append(("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim"))
             return
-        lines = result.splitlines()
-        shown = "\n".join(lines[:3])
-        if len(lines) > 3:
-            shown += f"\n…({len(lines) - 3} more lines)"
-        self._render_q.append(("static", shown, "dim"))
+        # Labeled, CHAR-capped preview. The old code truncated by LINE count,
+        # so a tool returning one huge line (list_dir's 57-entry Python repr,
+        # web_fetch HTML) soft-wrapped into a ~17-row unlabeled wall mid-
+        # transcript (2026-08-27 live TUI audit). Collapse ALL whitespace and
+        # cap by characters instead — one compact, attributable line.
+        flat = " ".join(result.split())
+        if len(flat) > 160:
+            flat = flat[:160] + "…"
+        self._render_q.append(("static", f"  ↳ {name}: {flat}" if flat else f"  ↳ {name}: (空)", "dim"))
 
     def on_truncated(self, stop_reason: str) -> None:
         self._flush_round_thinking()

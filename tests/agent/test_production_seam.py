@@ -447,3 +447,31 @@ def test_plan_adoption_signal_survives_after_model_state_sync(tmp_path):
     assert ret is not None and ret.get("todos") == [{"content": "user edited plan", "status": "pending"}]
     # …and the store was NOT overwritten by the stale state todos.
     assert store3.todos[0].content == "user edited plan"
+
+
+def test_production_multi_edit_relative_path_uses_workspace_anchor(tmp_path):
+    """Seam T4 pin: inside the REAL graph, deepagents write_file anchors
+    relative paths at the workspace root while multi_edit anchored at process
+    cwd — when they differ the same input went to two different files. The
+    model's relative-path multi_edit must land in the workspace."""
+    target = tmp_path / "rel.txt"
+    target.write_text("ONE TWO", encoding="utf-8")
+    stream, _ = _run(
+        tmp_path,
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tc(
+                        "multi_edit",
+                        {"path": "rel.txt", "edits": [{"old_string": "ONE", "new_string": "1"}]},
+                    )
+                ],
+            ),
+            AIMessage(content="done"),
+        ],
+    )
+    assert target.read_text(encoding="utf-8") == "1 TWO", (
+        "relative multi_edit must edit the file under the WORKSPACE "
+        "(pytest cwd is the repo root — exactly the drift this pins)"
+    )

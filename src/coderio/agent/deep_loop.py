@@ -781,6 +781,20 @@ def run_deep_agent(
     # Defense in depth at wiring time — see _drop_trusted_name_collisions.
     custom_specs = _drop_trusted_name_collisions(custom_specs, trusted_specs)
 
+    # ANCHOR PARITY for multi_edit: deepagents' own write/edit tools resolve
+    # relative paths against the backend root_dir; MultiEditTool used to
+    # resolve against process cwd — a launch whose cwd differs from the
+    # workspace (subdirectory + workspace_root) wrote the SAME relative input
+    # into two different files depending on which tool the model picked.
+    # Rewire every MultiEditTool to the workspace before conversion so one
+    # anchor governs all structured edits (2026-08-27 seam probe T4).
+    from coderio.tools.multi_edit import MultiEditTool
+
+    anchor_dir = str(project_dir)
+    for t in tools or []:
+        if isinstance(t, MultiEditTool):
+            t.anchor = anchor_dir
+
     extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)
 
     build_kwargs: dict[str, Any] = {

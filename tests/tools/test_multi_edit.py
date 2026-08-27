@@ -167,3 +167,28 @@ def test_dict_edits_none_new_string_deletes_text(tmp_path):
     )
     assert "applied 1 edit" in out
     assert f.read_text(encoding="utf-8") == "beta\n"
+
+
+def test_relative_path_resolves_against_anchor_not_cwd(tmp_path, monkeypatch):
+    """Anchor parity with deepagents' write/edit tools: a RELATIVE path must
+    resolve against the tool's anchor (the workspace), not process cwd — a
+    launch from a subdirectory used to send the same relative input to two
+    different files depending on which tool the model picked."""
+    import os
+
+    anchor = tmp_path / "ws"
+    anchor.mkdir()
+    f = anchor / "m.txt"
+    f.write_text("alpha beta\n", encoding="utf-8")
+
+    elsewhere = tmp_path / "cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # cwd deliberately != workspace
+
+    out = MultiEditTool(anchor=anchor).run(
+        path="m.txt",
+        edits=[{"old_string": "alpha", "new_string": "ALPHA"}],
+    )
+    assert "applied 1 edit" in out
+    assert f.read_text(encoding="utf-8") == "ALPHA beta\n"
+    assert not os.path.exists("m.txt"), "must not touch a file under process cwd"

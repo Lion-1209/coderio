@@ -73,6 +73,17 @@ def slash_completions(extra: list[str] | None = None) -> list[str]:
     return out
 
 
+def slash_descriptions() -> dict[str, str]:
+    """Map every completion candidate (incl. aliases/subcommand forms) to its
+    command's one-line description, for the TUI autocomplete menu's second
+    column. Same single source of truth as slash_completions — never drifts."""
+    out: dict[str, str] = {}
+    for c in SLASH_COMMANDS:
+        for cand in [*c.completions, *c.aliases]:
+            out[cand] = c.summary
+    return out
+
+
 @dataclass
 class ReplContext:
     """Snapshot of REPL state needed by command handlers."""

@@ -281,3 +281,19 @@ def test_export_no_session():
     ctx.session = None
     res = handle_slash("/export", ctx)
     assert "No conversation" in (res.message or "")
+
+
+def test_slash_descriptions_covers_every_candidate():
+    """Every completion candidate (incl. aliases and subcommand forms) must
+    map to its command's summary — same single source of truth as
+    slash_completions, so the TUI menu column can never drift from /help."""
+    from coderio.cli.commands import SLASH_COMMANDS, slash_completions, slash_descriptions
+
+    descs = slash_descriptions()
+    for cand in slash_completions():
+        assert cand in descs, f"completion {cand!r} has no description"
+    # Aliases resolve to the canonical command's description.
+    quit_desc = descs["/quit"]
+    exit_desc = descs["/exit"]
+    assert quit_desc == exit_desc == "exit the REPL"
+    assert len(descs) >= len(SLASH_COMMANDS)

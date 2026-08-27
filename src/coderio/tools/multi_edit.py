@@ -29,8 +29,21 @@ class MultiEditTool:
     )
     args_schema = MultiEditArgs
 
+    def __init__(self, anchor: str | Path | None = None) -> None:
+        """Resolve RELATIVE paths against ``anchor`` instead of process cwd.
+
+        deepagents' write/edit tools resolve relative paths against the
+        backend's root_dir, not process cwd. Without an anchor here, a launch
+        whose cwd differs from the workspace (subdirectory launch +
+        workspace_root config) wrote the same relative input into two
+        different files depending on which tool the model picked (2026-08-27
+        seam probe T4). run_deep_agent rewires this to the workspace."""
+        self.anchor = str(Path(anchor).resolve()) if anchor else None
+
     def run(self, path: str, edits: list[dict | _SingleEdit]) -> str:
         p = Path(path)
+        if not p.is_absolute() and self.anchor:
+            p = Path(self.anchor) / p
         if not p.is_file():
             return f"Error: file not found: {path}"
         if not edits:

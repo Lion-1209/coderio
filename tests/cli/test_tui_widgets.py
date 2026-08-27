@@ -472,3 +472,52 @@ class TestStatusBar:
             text = str(rendered.plain if hasattr(rendered, "plain") else rendered)
             assert "思考" in text
             assert "步骤1" in text
+
+
+# ============================================================ descriptions column
+
+
+class TestCommandMenuDescriptions:
+    """2026-08-27 live TUI audit: the autocomplete menu listed bare command
+    names — no hint what a command does before selecting it. Rows now carry a
+    dim description; repeated subcommand forms suppress the parent's text."""
+
+    @pytest.mark.asyncio
+    async def test_description_shown_for_bare_command(self) -> None:
+        menu = CommandMenu(["/help", "/undo"], {"/help": "show this help", "/undo": "revert last write"})
+        app = _host_app(menu)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            menu.refresh_for("/h")
+            await pilot.pause()
+            lv = menu.query_one("#cmd-list", ListView)
+            label = str(lv.children[0].children[0].render())
+            assert "show this help" in label, "bare command row must show its description"
+
+    @pytest.mark.asyncio
+    async def test_subcommand_form_suppresses_duplicate_description(self) -> None:
+        descs = {"/mode": "change permission mode", "/mode plan": "change permission mode"}
+        menu = CommandMenu(["/mode", "/mode plan"], descs)
+        app = _host_app(menu)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            menu.refresh_for("/")
+            await pilot.pause()
+            lv = menu.query_one("#cmd-list", ListView)
+            labels = [str(item.children[0].render()) for item in lv.children]
+            bare_row = next(x for x in labels if x == "/mode" or x.startswith("/mode  "))
+            sub_row = next(x for x in labels if x.startswith("/mode plan"))
+            assert "permission mode" in bare_row, "bare /mode keeps its description"
+            assert "permission mode" not in sub_row, "'/mode plan' must not repeat the parent text"
+
+    @pytest.mark.asyncio
+    async def test_missing_description_falls_back_to_bare_name(self) -> None:
+        menu = CommandMenu(["/zzz"], {})
+        app = _host_app(menu)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            menu.refresh_for("/")
+            await pilot.pause()
+            lv = menu.query_one("#cmd-list", ListView)
+            label = str(lv.children[0].children[0].render())
+            assert label.strip() == "/zzz"
