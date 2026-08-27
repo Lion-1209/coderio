@@ -211,6 +211,10 @@ class HarnessMiddleware(AgentMiddleware):
                 # .coderio/plan.md so the user can view/edit it between turns.
                 if self.plan_artifact is not None:
                     self.plan_artifact.materialize()
+                    # The model re-authored the plan — its version supersedes
+                    # any turn-start adoption; drop that pending signal so
+                    # after_model's state sync runs normally.
+                    self.plan_artifact.clear_adoption()
 
         # Subagent delegation: the task tool returns a subagent's findings,
         # which may cite files the subagent read but the MAIN agent didn't.
@@ -265,14 +269,25 @@ class HarnessMiddleware(AgentMiddleware):
         # recreated each run_deep_agent call). Without this, CompletionGate
         # would see an empty todo list even though graph state has pending todos.
         state_todos = get_state_todos(state)
+        todos_update: dict | None = None
         if state_todos and isinstance(state_todos, list):
-            from coderio.tools.todo import Todo
+            if self.plan_artifact is not None and self.plan_artifact.consume_adoption():
+                # The user's plan.md edit was adopted at turn start, but the
+                # checkpointed graph state still holds the PRE-edit todos
+                # (TodoListMiddleware is back in the stack, so state todos are
+                # non-empty again). The sync below would clobber the adoption
+                # and the gates would keep judging the plan the user just
+                # changed (2026-08-27 adversarial review Y2). plan.md is the
+                # user-facing authority — push the ADOPTED plan into state.
+                todos_update = {"todos": [{"content": t.content, "status": t.status} for t in self.harness.todos.todos]}
+            else:
+                from coderio.tools.todo import Todo
 
-            self.harness.todos.todos = [
-                Todo(content=t.get("content", ""), status=t.get("status", "pending"))
-                for t in state_todos
-                if isinstance(t, dict)
-            ]
+                self.harness.todos.todos = [
+                    Todo(content=t.get("content", ""), status=t.get("status", "pending"))
+                    for t in state_todos
+                    if isinstance(t, dict)
+                ]
 
         text = ""
         content = getattr(last, "content", "")
@@ -294,6 +309,10 @@ class HarnessMiddleware(AgentMiddleware):
             # Emit a visible signal so the TUI explains why the agent keeps running.
             self._emit(runtime, {"type": "harness_continue", "reason": inject})
             # Force-continue: inject the harness demand as a user message.
+            # todos_update (adoption push-back, see above) rides along so the
+            # state and the store agree even on a force-continued turn.
+            if todos_update:
+                return {"jump_to": "model", "messages": [HumanMessage(content=inject)], **todos_update}
             return {"jump_to": "model", "messages": [HumanMessage(content=inject)]}
         if warn:
             self._emit(runtime, {"type": "harness_warn", "message": warn})
@@ -304,4 +323,6 @@ class HarnessMiddleware(AgentMiddleware):
             self.harness.state_tracker.finish(hint="turn end")
             if self.stream is not None and hasattr(self.stream, "on_phase_change"):
                 self.stream.on_phase_change("complete", 0, "turn end")
-        return None
+        # Plain state update (no jump_to) — normal termination, just carrying
+        # the adopted todos into state when one is pending.
+        return todos_update

@@ -91,6 +91,53 @@ class _WinLocalShellBackend:
         if cls._RealCls is None:
             from deepagents.backends import LocalShellBackend
 
+            # deepagents' own context management offloads oversized tool
+            # results and conversation history to <root>/large_tool_results/
+            # and <root>/conversation_history/ THROUGH backend.write/edit —
+            # from the backend they look like ordinary writes. Snapshotting
+            # them poisons /undo: the next undo deletes an offload file the
+            # conversation still references, while the user-visible damage
+            # they wanted to revert stays put (2026-08-27 adversarial review
+            # R2, reproduced on the real graph). Internal scratch, not user
+            # data — never checkpoint them.
+            _internal_prefixes = ("large_tool_results/", "conversation_history/")
+
+            def _internal_artifact_path(file_path) -> bool:
+                p = str(file_path).replace("\\", "/").lstrip("/")
+                return p.startswith(_internal_prefixes)
+
+            def _checkpoint_snapshot(backend, fp):
+                """Snapshot pre-write state; returns a result-checker the
+                caller runs on the backend result, or None (internal path or
+                resolution error — nothing was snapshotted).
+
+                deepagents backends REPORT failures as result objects
+                (WriteResult(error=...)) instead of raising, so an
+                except-handler can't see a failed call: without the
+                result-check, a failed edit leaves a ghost snapshot that
+                turns the next /undo into a false "restored" while nothing
+                changed (2026-08-27 adversarial review Y1).
+                discard_if_unchanged keeps the snapshot when the disk DID
+                change (partial write) — that's real damage worth undoing."""
+                from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
+
+                if _internal_artifact_path(fp):
+                    return None
+                try:
+                    DEFAULT_CHECKPOINT.snapshot(backend._resolve_path(fp))
+                except (OSError, RuntimeError):
+                    return None  # resolution error → the super() call reports it
+
+                def _check(result):
+                    if getattr(result, "error", None):
+                        try:
+                            DEFAULT_CHECKPOINT.discard_if_unchanged(backend._resolve_path(fp))
+                        except (OSError, RuntimeError):
+                            pass  # conservative: keep the snapshot
+                    return result
+
+                return _check
+
             class _Sub(LocalShellBackend):
                 """Real subclass overriding execute for Windows GBK safety.
 
@@ -121,6 +168,33 @@ class _WinLocalShellBackend:
                 # exit 0 (2026-08-14 report P0-4: the model thinks the command
                 # succeeded and cannot self-correct).
                 _bash_shell: str = ""
+
+                # PRODUCTION CHECKPOINT HOOK (2026-08-26 review P0): the
+                # /undo feature snapshotted only coderio's own write tools,
+                # but the production engine's write_file/edit_file/delete are
+                # deepagents' (coderio's are _SKIPped in _build_extra_tools)
+                # — so every production write bypassed the checkpoint and
+                # /undo was a no-op on all real paths. Fix at the BACKEND
+                # layer (below every tool): every STRUCTURED write through
+                # write/edit/delete snapshots the resolved disk file first,
+                # whichever tool invoked it. Honest scope: shell redirects
+                # (echo x > f, sed -i) still bypass this — see
+                # tools/checkpoint.py for that documented boundary — and
+                # deepagents' internal offload paths are excluded (R2 below).
+                def write(self, file_path, content):
+                    check = _checkpoint_snapshot(self, file_path)
+                    result = super().write(file_path, content)
+                    return check(result) if check else result
+
+                def edit(self, file_path, old_string, new_string, replace_all=False):  # noqa: FBT002
+                    check = _checkpoint_snapshot(self, file_path)
+                    result = super().edit(file_path, old_string, new_string, replace_all)
+                    return check(result) if check else result
+
+                def delete(self, file_path):
+                    check = _checkpoint_snapshot(self, file_path)
+                    result = super().delete(file_path)
+                    return check(result) if check else result
 
                 def _resolve_bash(self) -> str | None:
                     """Find a bash executable, or None to fall back to shell=True.
@@ -647,6 +721,14 @@ def run_deep_agent(
             plan_artifact=plan_artifact,
         )
     )
+    # Planning middleware (write_todos tool): deepagents 0.7.6 REMOVED it from
+    # the default graph (graph.py only mentions TodoListMiddleware in a stale
+    # comment) — without re-adding it, the model's write_todos calls fail with
+    # "not a valid tool" and the plan.md artifact's agent→file direction is
+    # dead while the system prompt still teaches the tool (2026-08-26 review).
+    from langchain.agents.middleware import TodoListMiddleware
+
+    middleware.append(TodoListMiddleware(system_prompt=""))
     if gate is not None:
         middleware.append(PermissionMiddleware(gate))
     # Command-content review: always active (even in FULL mode). Blocks rm -rf /,

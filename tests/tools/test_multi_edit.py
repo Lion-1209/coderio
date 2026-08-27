@@ -142,3 +142,28 @@ def test_rejects_empty_old_string_atomically(tmp_path):
     assert "no changes written" in out.lower(), "must be atomic (no partial writes)"
     # File must be unchanged — the valid first edit must NOT have been applied.
     assert f.read_text(encoding="utf-8") == original
+
+
+def test_dict_edits_with_none_values_error_not_crash(tmp_path):
+    """Present-but-None values (hand-built dicts) must produce the empty-
+    old_string error, not an AttributeError in _strip_line_prefix (Y4)."""
+    f = tmp_path / "n.txt"
+    f.write_text("alpha\n", encoding="utf-8")
+    out = MultiEditTool().run(
+        path=str(f),
+        edits=[{"old_string": None, "new_string": "X"}],
+    )
+    assert out.startswith("Error")
+    assert f.read_text(encoding="utf-8") == "alpha\n"
+
+
+def test_dict_edits_none_new_string_deletes_text(tmp_path):
+    """new_string=None means 'delete the matched text' — same as empty string."""
+    f = tmp_path / "n2.txt"
+    f.write_text("alpha beta\n", encoding="utf-8")
+    out = MultiEditTool().run(
+        path=str(f),
+        edits=[{"old_string": "alpha ", "new_string": None}],
+    )
+    assert "applied 1 edit" in out
+    assert f.read_text(encoding="utf-8") == "beta\n"

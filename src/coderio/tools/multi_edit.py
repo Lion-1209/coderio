@@ -29,7 +29,7 @@ class MultiEditTool:
     )
     args_schema = MultiEditArgs
 
-    def run(self, path: str, edits: list[dict]) -> str:
+    def run(self, path: str, edits: list[dict | _SingleEdit]) -> str:
         p = Path(path)
         if not p.is_file():
             return f"Error: file not found: {path}"
@@ -38,9 +38,22 @@ class MultiEditTool:
         text = p.read_text(encoding="utf-8", errors="replace")
         applied = 0
         for i, edit in enumerate(edits):
-            old = _strip_line_prefix(edit.get("old_string", ""))
-            new = _strip_line_prefix(edit.get("new_string", ""))
-            replace_all = edit.get("replace_all", False)
+            # pydantic validates args_schema BEFORE run() sees them, so `edits`
+            # arrives as list[_SingleEdit] objects when invoked through
+            # to_langchain_tool (production), but plain dicts in direct unit
+            # tests. Accept both (2026-08-26 review P1: the .get() call on
+            # an object crashed the whole production turn with AttributeError).
+            if isinstance(edit, dict):
+                # `or ""`: a present-but-None value (hand-built dicts in tests
+                # or scripts) must not crash _strip_line_prefix — return the
+                # empty-old_string error instead (2026-08-27 review Y4).
+                old = _strip_line_prefix(edit.get("old_string") or "")
+                new = _strip_line_prefix(edit.get("new_string") or "")
+                replace_all = edit.get("replace_all") or False
+            else:
+                old = _strip_line_prefix(edit.old_string)
+                new = _strip_line_prefix(edit.new_string)
+                replace_all = edit.replace_all
             # Empty old_string is a footgun (see edit_file.py): str.replace("",
             # x) inserts x between every character. Reject before it corrupts
             # the file — multi_edit is atomic, so nothing is written yet.

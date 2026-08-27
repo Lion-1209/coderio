@@ -316,3 +316,69 @@ def test_clear_context_preserves_checkpoints(monkeypatch, tmp_path):
 
     assert len(DEFAULT_CHECKPOINT) == 1, "/clear wiped the undo stack"
     assert r.rt["session"].id == "fresh-session"
+
+
+def test_snapshot_refuses_directories(tmp_path):
+    """Directories can't be captured as single-file bytes; deepagents' delete
+    rmtree's them. A recorded dir (existed=False) would make /undo claim
+    'deleted agent-created file' while nothing was restored (2026-08-27 R3)."""
+    cp = FileCheckpoint()
+    d = tmp_path / "pkg"
+    d.mkdir()
+    (d / "m.py").write_text("x = 1", encoding="utf-8")
+    cp.snapshot(d)
+    assert len(cp) == 0, "directory snapshot must be refused"
+    assert cp.undo() is None
+
+
+def test_discard_if_unchanged_pops_only_noop_snapshots(tmp_path):
+    """Ghost-snapshot rollback (Y1): a failed write/edit that changed nothing
+    must drop its snapshot; a PARTIAL write that did change the file keeps it."""
+    cp = FileCheckpoint()
+
+    # Case 1: pre-state snapshot, file untouched → pop.
+    f1 = tmp_path / "a.txt"
+    f1.write_text("STABLE", encoding="utf-8")
+    cp.snapshot(f1)
+    cp.discard_if_unchanged(f1)
+    assert len(cp) == 0, "unchanged file → snapshot guards nothing"
+
+    # Case 2: created-file snapshot, path still missing → pop.
+    f2 = tmp_path / "never.txt"
+    cp.snapshot(f2)
+    cp.discard_if_unchanged(f2)
+    assert len(cp) == 0, "never-created file → snapshot guards nothing"
+
+    # Case 3: snapshot then disk CHANGED (partial write) → keep.
+    f3 = tmp_path / "partial.txt"
+    f3.write_text("BEFORE", encoding="utf-8")
+    cp.snapshot(f3)
+    f3.write_text("PARTIAL WRITE", encoding="utf-8")
+    cp.discard_if_unchanged(f3)
+    assert len(cp) == 1, "partial write is real damage — keep the snapshot"
+
+    # Case 4: top of stack is a DIFFERENT path → no-op, don't pop.
+    f4 = tmp_path / "other.txt"
+    f4.write_text("O", encoding="utf-8")
+    cp.snapshot(f4)
+    cp.discard_if_unchanged(f3)
+    assert len(cp) == 2
+
+
+def test_undo_directory_entry_does_not_wedge_the_stack(tmp_path):
+    """A created-file entry whose path later became a directory can never be
+    unlinked; the entry must be dropped (not re-pushed) so later /undo calls
+    still work, and the error must surface to the caller (2026-08-27 R3)."""
+    cp = FileCheckpoint()
+    p = tmp_path / "later_dir"
+    cp.snapshot(p)  # not exists → existed=False entry
+    p.mkdir()  # then the path becomes a directory
+    with pytest.raises(OSError, match="directory"):
+        cp.undo()
+    assert len(cp) == 0, "wedge entry must be dropped, not re-pushed"
+    # The stack is usable afterwards.
+    marker = tmp_path / "m.txt"
+    marker.write_text("M", encoding="utf-8")
+    cp.snapshot(marker)
+    marker.write_text("M2", encoding="utf-8")
+    assert cp.undo() is not None

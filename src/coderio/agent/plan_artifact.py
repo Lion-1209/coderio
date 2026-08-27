@@ -41,6 +41,35 @@ _HEADER = (
 _ITEM_RE = re.compile(r"^-\s+\[( |x|X)\]\s+(.+?)\s*$")
 _PRIORITY_RE = re.compile(r"\s*`(?:\(high\)|\(medium\)|\(low\))`\s*$")
 
+# Sync marker: materialize() stamps a short hash of the checklist items into
+# the file; adopt_if_edited() only adopts when the stamp is absent or doesn't
+# match the on-disk items. Without this, the turn-start TodoStore is always
+# fresh-empty and a pre-existing plan.md was "adopted" (with a note injected
+# to the model) EVERY turn — even when nobody touched the file (2026-08-26
+# review: the false positive fired 2 notes in 2 turns with zero edits).
+_SYNC_MARKER_RE = re.compile(r"<!-- sync:([0-9a-f]{8}) -->")
+
+
+def _items_hash(todos: list[Todo]) -> str:
+    """Hash over the SERIALIZATION ROUND-TRIP of the items, not raw store state.
+
+    A plan.md checkbox has two states: pending and completed. langchain's
+    write_todos forces status=in_progress on the first task; it serializes as
+    ``[ ]`` and parses back as pending. Hashing raw state made
+    stamp(store-with-in_progress) != hash(parse(file)) for the MOST COMMON
+    production todo state — the false-positive adoption this stamp exists to
+    kill came back on every turn (2026-08-27 seam test, reproduced on the real
+    graph: two turns, zero edits, adoption note injected). Normalizing through
+    serialize→parse pins the hash domain to what the file can represent, so
+    in_progress ≡ pending by definition and any future serialization
+    asymmetry is absorbed here too.
+    """
+    import hashlib
+
+    roundtripped = parse_plan(serialize_plan(todos)) or []
+    payload = "|".join(f"{t.status}:{t.content}:{t.priority}" for t in roundtripped)
+    return hashlib.sha256(payload.encode()).hexdigest()[:8]
+
 
 def serialize_plan(todos: list[Todo]) -> str:
     lines = [_HEADER.rstrip("\n"), ""]
@@ -82,11 +111,15 @@ class PlanArtifact:
         # convention as skills/commands/agents layer dirs).
         self.path = Path(anchor) / PLAN_FILENAME
         self.store = store
+        # Set when adopt_if_edited() adopted user edits; consumed by
+        # HarnessMiddleware.after_model (see consume_adoption).
+        self._adoption_pending = False
 
     # ------------------------------------------------------------ file → todos
     def adopt_if_edited(self) -> int:
         """Adopt external edits. Returns the number of tasks adopted (0 when
-        the file is missing, unchanged, or has no parseable items)."""
+        the file is missing, unedited since our last write, or has no
+        parseable items)."""
         try:
             on_disk = self.path.read_text(encoding="utf-8")
         except OSError:
@@ -94,17 +127,52 @@ class PlanArtifact:
         parsed = parse_plan(on_disk)
         if parsed is None:
             return 0
+        # External-edit detection via the sync stamp: only adopt when the
+        # stamp is gone (user deleted/rewrote it) or disagrees with the
+        # on-disk items (user changed checklist content). Whitespace-only
+        # reformatting keeps the items hash → correctly NOT an edit.
+        stamp = _SYNC_MARKER_RE.search(on_disk)
+        if stamp and stamp.group(1) == _items_hash(parsed):
+            # Still exactly what materialize() wrote — sync a fresh-empty
+            # store from the file WITHOUT flagging an adoption, so the harness
+            # state is warm but no false "externally modified" note fires.
+            # A NON-empty store is already warm and may hold statuses the
+            # checkbox format can't express (in_progress) — backfilling would
+            # downgrade them (2026-08-27 adversarial review R1).
+            if not self.store.todos:
+                self.store.todos = parsed
+            return 0
         if serialize_plan(parsed) == serialize_plan(self.store.todos):
             return 0  # same plan, different formatting — don't churn state
         self.store.todos = parsed
+        self._adoption_pending = True
         return len(parsed)
+
+    def consume_adoption(self) -> bool:
+        """True exactly once after an adoption replaced the plan.
+
+        HarnessMiddleware.after_model consumes this: the checkpointed graph
+        state still holds the PRE-adoption todos (TodoListMiddleware is back
+        in the stack, so state todos are non-empty again), and the middleware's
+        state→store sync would clobber the user's just-adopted plan.md edit —
+        the gates would keep judging the stale plan (2026-08-27 review Y2).
+        """
+        if self._adoption_pending:
+            self._adoption_pending = False
+            return True
+        return False
+
+    def clear_adoption(self) -> None:
+        """Drop a pending adoption signal (the model just re-authored the plan
+        via write_todos — its version supersedes any adoption)."""
+        self._adoption_pending = False
 
     # ------------------------------------------------------------ todos → file
     def materialize(self) -> bool:
         """Write the current todo list to disk. Returns True when a write
         happened (False = missing dir or byte-identical content already there)."""
         try:
-            rendered = serialize_plan(self.store.todos)
+            rendered = serialize_plan(self.store.todos) + f"<!-- sync:{_items_hash(self.store.todos)} -->\n"
             if self.path.is_file() and self.path.read_text(encoding="utf-8") == rendered:
                 return False
             self.path.parent.mkdir(parents=True, exist_ok=True)

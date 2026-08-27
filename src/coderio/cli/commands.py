@@ -351,7 +351,12 @@ def handle_slash(line: str, ctx) -> CommandResult:
     if cmd == "/undo":
         from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
 
-        result = DEFAULT_CHECKPOINT.undo()
+        try:
+            result = DEFAULT_CHECKPOINT.undo()
+        except OSError as e:
+            # e.g. the path an entry guards has become a directory — the
+            # entry is already popped; report instead of crashing the TUI.
+            return CommandResult(message=f"撤销失败: {e}")
         if result is None:
             return CommandResult(message="没有可撤销的文件写入（栈为空）。")
         verb = "已恢复写入前的原内容" if result.restored else "已删除（该文件由 agent 新建）"
