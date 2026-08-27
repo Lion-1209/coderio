@@ -528,49 +528,71 @@ class TestCommandMenuDescriptions:
 
 
 class TestPauseButton:
-    """⏸ 暂停 / ▶ 继续 (2026-08-27): interrupt KILLS the turn; pause parks it.
-    Lifecycle: hidden until running → toggle swaps label + sets/clears the
-    event + flips StatusBar phase → turn end resets everything."""
+    """zcode-style send slot (2026-08-27 user feedback): the ➤ button lives in
+    the input row PERMANENTLY — idle it submits; while running it morphs to
+    ⏸/▶ (pause/resume) with ⏹ beside it. The old status-row buttons popped in
+    and out mid-stream, which read as broken."""
 
     @pytest.mark.asyncio
-    async def test_hidden_until_running_then_toggle_cycle(self) -> None:
+    async def test_send_slot_morphs_through_turn_lifecycle(self) -> None:
         app = CoderioTUI()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            btn = app.query_one("#pause-btn", Button)
-            assert "-visible" not in btn.classes, "must be hidden while idle"
+            send = app.query_one("#send-btn", Button)
+            stop = app.query_one("#interrupt-btn", Button)
+            assert str(send.label).startswith("➤"), "idle send slot shows submit"
+            assert "-visible" not in stop.classes, "⏹ hidden while idle"
+            assert send.region.width > 0, "send button must always occupy layout space"
 
             # Simulate a running turn (what on_input_submitted's worker does).
             app._is_running = True
             app._show_interrupt_btn(True)
             await pilot.pause()
-            assert "-visible" in btn.classes
-            # REAL layout pin (2026-08-27 live audit): the buttons were
-            # class-visible yet rendered at width 0 — StatusBar's 1fr default
-            # starved them off-row, so ⏹ 中断 had never actually been visible
-            # during a run. classes alone don't prove pixels.
-            assert btn.region.width > 0, "pause button must occupy layout space"
-            assert app.query_one("#interrupt-btn", Button).region.width > 0
+            assert str(send.label).startswith("⏸"), "running: slot offers pause"
+            assert "running" in send.classes
+            assert "-visible" in stop.classes
+            assert stop.region.width > 0, "⏹ must occupy real layout space"
 
-            # First press: paused. Event set drives deep_loop's gate.
+            # First press: paused → slot offers resume, tint flips.
             assert app.action_toggle_pause() is True
             assert app._pause_event.is_set()
-            assert str(btn.label).startswith("▶"), "label must offer resume while paused"
+            assert str(send.label).startswith("▶")
+            assert "paused" in send.classes
             assert app._status_bar.phase == "paused"
 
             # Second press: resumed.
             assert app.action_toggle_pause() is False
             assert not app._pause_event.is_set()
-            assert str(btn.label).startswith("⏸")
+            assert str(send.label).startswith("⏸")
             assert app._status_bar.phase == "responding"
 
-            # Turn end: buttons hide AND pause state fully resets for next turn.
+            # Turn end (worker's finally sets _is_running False BEFORE
+            # showing buttons off — mirror that exact order):
             app.action_toggle_pause()
+            app._is_running = False
             app._show_interrupt_btn(False)
             await pilot.pause()
-            assert "-visible" not in btn.classes
+            assert "-visible" not in stop.classes
             assert not app._pause_event.is_set(), "turn end must clear a leftover pause"
-            assert str(btn.label).startswith("⏸"), "label resets for the next turn"
+            assert str(send.label).startswith("➤"), "next turn starts with a submit slot"
+
+    @pytest.mark.asyncio
+    async def test_send_button_submits_input_when_idle(self) -> None:
+        """Clicking ➤ must dispatch through the SAME path as Enter
+        (_spawn_turn → _on_input), so both submission routes can never
+        drift apart."""
+        app = CoderioTUI()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            seen: list[str] = []
+            app._on_input = seen.append  # no real engine behind the test
+            inp = app.query_one("#msg", Input)
+            inp.value = "hello via send button"
+            await pilot.pause()
+            await pilot.click("#send-btn")
+            await pilot.pause()
+            assert inp.value == "", "clicking ➤ must clear the input"
+            assert seen == ["hello via send button"], f"➤ click must reach the engine dispatch path: {seen}"
 
     @pytest.mark.asyncio
     async def test_toggle_is_noop_when_idle(self) -> None:

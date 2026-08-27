@@ -50,39 +50,32 @@ class CoderioTUI(App):
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     #status-row { height: auto; }
-    /* interrupt-btn + pause-btn: NO border — a border adds 2 rows to the
-       widget's outer height, which makes #status-row (height:auto, takes max
-       child height) grow from 1 to 2 rows, leaving a black gap between the
-       status bar and the input whenever the agent is running. Use a tinted
-       background instead so each button stays exactly 1 row tall, matching
-       the StatusBar. */
+    #status-row StatusBar { width: 1fr; }
+    /* interrupt-btn + send-btn live in #input-row, ALWAYS rendered (zcode
+       style: the send slot morphs ➤ → ⏸/▶ while running; ⏹ appears only
+       while running via -visible). The row is pinned to EXACTLY one line —
+       Input included — so the buttons sit bottom-right ON the input line
+       itself, flush with the input-bar's bottom edge, with no leftover rows
+       below: the old auto-height row let the 3-row Input stretch the line,
+       leaving the button top-aligned with a black strip under it (user
+       feedback 2026-08-27: "占住右上角、下方还有黑色区域"). */
+    #input-row { height: 1; }
+    #input-row Input { width: 1fr; height: 1; border: none; padding: 0; }
     #interrupt-btn,
-    #pause-btn {
-        display: none; height: 1; min-width: 8; padding: 0 1;
-        /* Explicitly kill the border — Button(variant="error"/"warning")
-           injects a 'tall' border by default, which adds 2 rows to the outer
-           height and makes #status-row grow, leaving a black gap while the
-           agent runs. */
+    #send-btn {
+        width: auto; min-width: 4; height: 1; padding: 0 1;
         border: none;
         text-style: bold;
     }
-    #interrupt-btn { background: $error 20%; color: $error; width: auto; }
-    #pause-btn { background: $warning 20%; color: $warning; width: auto; }
-    /* StatusBar's Textual default is 1fr, which starves the auto-width
-       buttons to zero — the ⏹ 中断 button had NEVER been visible during a
-       run (user report: "还是没有对话暂停按钮"), both squeezed off-row.
-       Pin 1fr on the bar and auto on the buttons so they always fit. */
-    #status-row StatusBar { width: 1fr; }
-    /* Both buttons are shown only while the agent is running (via add_class);
-       #pause-btn additionally swaps its label to "▶ 继续" while paused. */
-    #interrupt-btn.-visible,
-    #pause-btn.-visible { display: block; }
+    #interrupt-btn { display: none; background: $error 20%; color: $error; }
+    #interrupt-btn.-visible { display: block; }
+    #send-btn { background: $accent 20%; color: $accent; }
+    /* While running the send slot becomes the pause/resume toggle. */
+    #send-btn.running { background: $warning 20%; color: $warning; }
+    #send-btn.paused { background: $success 20%; color: $success; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
-    /* Final answer: plain markdown with a left accent bar — turn boundaries
-       are marked by the cyan "› you …" echo lines, so no full box per reply. */
-    #history .final-answer { border-left: thick $accent; padding: 0 0 0 1; margin-bottom: 1; }
     /* NOTE: do NOT define `Screen { layers }` here — it changes how Textual
        renders the scrollable region (bottom rows of scrolled content stop
        rendering). The CommandMenu popup uses display:none/block for show/hide
@@ -153,6 +146,11 @@ class CoderioTUI(App):
         self._interrupted: bool = False
         self._agent_worker = None
         self._is_running: bool = False  # True while the agent worker is active
+        # Pause UI state mirror (send slot tint/label): True while the user
+        # has ⏸'d the running turn. Kept separate from _pause_event so the
+        # button visuals can be synced without touching the threading Event
+        # from UI code paths unnecessarily.
+        self._paused_ui: bool = False
         # PAUSE (⏸ button / /pause): set = stream consumption parked between
         # chunks inside deep_loop._run_stream (backpressure — nothing new is
         # pulled or rendered). Cleared by resume, and ALWAYS cleared at turn
@@ -187,26 +185,29 @@ class CoderioTUI(App):
         from coderio.cli.commands import slash_completions, slash_descriptions
 
         yield VerticalScroll(id="history")
-        # input-bar holds the CommandMenu + StatusBar + Input. CommandMenu lives
-        # INSIDE the bar (not as a separate dock:bottom sibling) so that when it
-        # expands it pushes the bar's contents up as a unit — no overlap with
-        # the StatusBar (which was hiding "就" in "就绪") and no lost bottom
-        # border. The bar is dock:bottom; #history is 1fr and shrinks to fit.
+        # input-bar holds the CommandMenu + StatusBar + ConfirmMenu + input row.
+        # The send/stop controls live IN THE INPUT ROW permanently (zcode
+        # style): idle shows "➤ 发送", running morphs the same slot to
+        # "⏸/▶" with ⏹ beside it. The earlier status-row buttons only
+        # materialized mid-stream — controls that pop in and out read as
+        # broken (user feedback 2026-08-27). The bar is dock:bottom; #history
+        # is 1fr and shrinks to fit.
         with Vertical(id="input-bar"):
             yield CommandMenu(slash_completions(self._extra_completions), slash_descriptions())
             with Horizontal(id="status-row"):
                 yield StatusBar()
-                yield Button("⏸ 暂停", id="pause-btn", variant="warning")
-                yield Button("⏹ 中断", id="interrupt-btn", variant="error")
             # Vertical permission-confirmation menu (zcode/codex style): floats
             # above the input box, ↑↓ to choose, Enter to confirm. Replaces the
             # old three-button #confirm-row whose Button borders inflated the
             # layout and left a black gap.
             yield ConfirmMenu()
-            yield Input(
-                placeholder="输入消息, /help 看命令, Esc 中断任务",
-                id="msg",
-            )
+            with Horizontal(id="input-row"):
+                yield Input(
+                    placeholder="输入消息, /help 看命令, Esc 中断任务",
+                    id="msg",
+                )
+                yield Button("⏹", id="interrupt-btn", variant="error", tooltip="中断本轮任务 (Esc)")
+                yield Button("➤", id="send-btn", variant="primary", tooltip="发送 (Enter) / 运行中: 暂停⏸·继续▶")
 
     def on_mount(self) -> None:
         self.title = "coderio"
@@ -534,12 +535,11 @@ class CoderioTUI(App):
             self._mount_widget_main(col)
 
     def _render_finalize(self, buf: str, think_text: str, secs: float, had_live: bool) -> None:
-        """MAIN THREAD: fold thinking + replace live output with final Markdown.
+        """MAIN THREAD: fold thinking + replace live output with final Markdown Panel.
 
-        The final answer is rendered as Static(Markdown(buf)) with a left
-        accent bar (see _mount_final_panel). scroll_end lands on the real
-        content bottom once the layout settles (note the layers caveat in the
-        CSS).
+        The final answer is rendered as Static(Panel(Markdown(buf))) (see
+        _mount_final_panel). scroll_end lands on the real content bottom once
+        the layout settles (note the layers caveat in the CSS).
         """
         if think_text.strip():
             self._render_think_fold(think_text, secs, had_live)
@@ -555,18 +555,16 @@ class CoderioTUI(App):
             self.call_after_refresh(self._mount_final_panel, buf)
 
     def _mount_final_panel(self, buf: str) -> None:
-        """MAIN THREAD: mount the final Markdown block and scroll to the bottom.
+        """MAIN THREAD: mount the final answer and scroll to the bottom.
 
-        Plain bordered-free Markdown: the old Panel(title="coderio") stamped a
-        blue box + brand title onto EVERY reply — heavy visual noise that also
-        duplicated the welcome banner's branding (2026-08-27 live TUI audit).
-        Turn boundaries are already delineated by the cyan "› you …" echo
-        lines, so the answer needs no container of its own. Mounts Static and
-        schedules a multi-stage delayed scroll (height needs a few layout
-        passes to settle).
+        KEPT: the blue-bordered Panel titled "coderio". A border-free redesign
+        was tried (2026-08-27) and reverted the same day on direct user
+        feedback — the box reads better and brands the answer. Mounts Static
+        and schedules a multi-stage delayed scroll (the Panel's height needs a
+        few layout passes to settle).
         """
         history = self.query_one("#history")
-        widget = Static(Markdown(buf), classes="final-answer")
+        widget = Static(Panel(Markdown(buf), border_style="blue", title="coderio"))
         history.mount(widget)
         self.set_timer(0.15, self._scroll_history_end)
         self.set_timer(0.3, self._scroll_history_end)
@@ -600,58 +598,93 @@ class CoderioTUI(App):
         # toggle is picked up by the next layout pass. This avoids the race
         # where call_from_thread is deferred until after the blocking agent
         # call returns (too late — the button never showed during the turn).
-        for btn_id in ("#interrupt-btn", "#pause-btn"):
-            try:
-                btn = self.query_one(btn_id, Button)
-                if show:
-                    btn.add_class("-visible")
-                else:
-                    btn.remove_class("-visible")
-            except Exception:
-                pass
+        try:
+            stop = self.query_one("#interrupt-btn", Button)
+            if show:
+                stop.add_class("-visible")
+            else:
+                stop.remove_class("-visible")
+        except Exception:
+            pass
+        # Send slot mirrors the turn state: idle ➤ / running ⏸ / paused ▶.
+        # Turn end ALWAYS resets it (and clears a leftover pause) so the next
+        # turn starts clean even if this one ended while paused.
         if not show:
-            # Turn is over: reset the pause UI so the NEXT turn starts with a
-            # fresh "⏸ 暂停" button even if this turn ended while paused.
             self._pause_event.clear()
-            try:
-                pause = self.query_one("#pause-btn", Button)
-                pause.label = "⏸ 暂停"
-            except Exception:
-                pass
+            self._paused_ui = False
+        self._sync_send_btn()
+
+    def _sync_send_btn(self) -> None:
+        """Set the send slot's label/tint from (running, paused). Main thread."""
+        try:
+            btn = self.query_one("#send-btn", Button)
+            if not self._is_running:
+                btn.label = "➤"
+                btn.remove_class("running")
+                btn.remove_class("paused")
+            elif self._paused_ui:
+                btn.label = "▶ 继续"
+                btn.add_class("running")
+                btn.add_class("paused")
+            else:
+                btn.label = "⏸ 暂停"
+                btn.add_class("running")
+                btn.remove_class("paused")
+        except Exception:
+            pass
 
     def action_toggle_pause(self) -> bool:
         """Toggle pause/resume of the running agent turn. Returns now-paused.
 
         Pausing parks stream consumption (deep_loop checks our _pause_event
         between chunks); the model's in-flight request stays connected, so
-        streaming just freezes and resumes from where it stopped.
-
-        Returns False when nothing is running (caller can show a hint).
+        streaming just freezes and resumes from where it stopped. Backpressure,
+        not preemption: tokens already in flight still land, and a pause held
+        past the provider's idle timeout surfaces on resume as a network error.
         """
         if not self._is_running:
             return False
-        paused = not self._pause_event.is_set()
-        if paused:
+        self._paused_ui = not self._pause_event.is_set()
+        if self._paused_ui:
             self._pause_event.set()
         else:
             self._pause_event.clear()
-        try:
-            btn = self.query_one("#pause-btn", Button)
-            btn.label = "▶ 继续" if paused else "⏸ 暂停"
-        except Exception:
-            pass
+        self._sync_send_btn()
         bar = self._status_bar
         if bar is not None:
             # Status text mirrors the state; resume returns to the live phase.
-            bar.set_phase("paused" if paused else "responding")
-        return paused
+            bar.set_phase("paused" if self._paused_ui else "responding")
+            # A pause pressed while a TOOL is running can only take effect at
+            # the next chunk boundary — after the tool returns. Say so, or the
+            # frozen screen reads like the button did nothing (user feedback
+            # 2026-08-27: "怪怪的").
+            if self._paused_ui and bar.phase == "tool":
+                self._add_text("⏸ 将在当前工具执行结束后暂停。", style="dim")
+        return self._paused_ui
+
+    def _submit_current_input(self) -> None:
+        """Send-button submit: dispatch whatever is in #msg, exactly as Enter
+        would (same echo, same worker). No-op on empty input."""
+        try:
+            inp = self.query_one("#msg", Input)
+        except Exception:
+            return
+        line = inp.value.strip()
+        if not line:
+            return
+        inp.value = ""
+        self._on_input(line)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button clicks (interrupt / pause — confirm is a keyboard menu)."""
-        if event.button.id == "interrupt-btn":
+        """Handle input-row buttons: the morphing send slot (submit when idle,
+        pause/resume while running) and ⏹ interrupt. Confirm is a keyboard menu."""
+        if event.button.id == "send-btn":
+            if self._is_running:
+                self.action_toggle_pause()
+            else:
+                self._submit_current_input()
+        elif event.button.id == "interrupt-btn":
             self.action_interrupt()
-        elif event.button.id == "pause-btn":
-            self.action_toggle_pause()
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -738,89 +771,97 @@ class CoderioTUI(App):
         if not line:
             return
         event.input.value = ""
+        self._spawn_turn(line)
+
+    def _spawn_turn(self, line: str) -> None:
+        """Echo + start the agent worker for one user line. Shared by Enter
+        (on_input_submitted) and the ➤ send button so both paths stay
+        behaviorally identical."""
         self._add_text(f"▸ you {line}", style="bold cyan")
-        if self._on_input:
-            # Use a Textual WORKER (thread=True), not a raw threading.Thread. A
-            # worker is managed by Textual, so the main event loop stays alive and
-            # keeps draining pending UI updates while the worker runs AND after it
-            # completes — a raw daemon thread would not.
-            def _run():
-                self._is_running = True
-                self._interrupted = False
-                # A pause left set by a previous turn must never wedge this one.
-                self._pause_event.clear()
-                self.call_from_thread(self._show_interrupt_btn, True)
-                try:
-                    self._on_input(line)
-                except SystemExit:
-                    self._render_q.append(("exit",))
-                except InterruptedError:
-                    # User pressed Esc / clicked 中断. Show a notice and clean up.
-                    self._round_thinking = ""
-                    self._round_think_start = 0.0
-                    self._live_think_body = None
-                    self._live_think_chars = 0
-                    self._round_think_started = False
-                    self.buffer = ""
-                    self._live_output_last_flush = 0.0
-                    if self._status_bar:
-                        self._status_bar.set_phase("idle")
-                    self._render_q.append(
-                        (
-                            "panel",
-                            Panel(
-                                "用户已中断当前任务。已完成的中间结果保留在历史中。\n"
-                                "输入新消息继续，或按 ↑ 恢复上一条输入。",
-                                title="⚠ 已中断",
-                                border_style="yellow",
-                            ),
-                        )
+        if not self._on_input:
+            return
+
+        # Use a Textual WORKER (thread=True), not a raw threading.Thread. A
+        # worker is managed by Textual, so the main event loop stays alive and
+        # keeps draining pending UI updates while the worker runs AND after it
+        # completes — a raw daemon thread would not.
+        def _run():
+            self._is_running = True
+            self._interrupted = False
+            # A pause left set by a previous turn must never wedge this one.
+            self._pause_event.clear()
+            self.call_from_thread(self._show_interrupt_btn, True)
+            try:
+                self._on_input(line)
+            except SystemExit:
+                self._render_q.append(("exit",))
+            except InterruptedError:
+                # User pressed Esc / clicked 中断. Show a notice and clean up.
+                self._round_thinking = ""
+                self._round_think_start = 0.0
+                self._live_think_body = None
+                self._live_think_chars = 0
+                self._round_think_started = False
+                self.buffer = ""
+                self._live_output_last_flush = 0.0
+                if self._status_bar:
+                    self._status_bar.set_phase("idle")
+                self._render_q.append(
+                    (
+                        "panel",
+                        Panel(
+                            "用户已中断当前任务。已完成的中间结果保留在历史中。\n"
+                            "输入新消息继续，或按 ↑ 恢复上一条输入。",
+                            title="⚠ 已中断",
+                            border_style="yellow",
+                        ),
                     )
-                except Exception as e:
-                    # Reset the streaming state + status bar so the TUI doesn't
-                    # get stuck in 'thinking' phase when the agent errors out
-                    # (e.g. API auth failure, network error). on_finish is never
-                    # called when run_deep_agent raises, so we must clean up here.
-                    self._round_thinking = ""
-                    self._round_think_start = 0.0
-                    self._live_think_body = None
-                    self._live_think_chars = 0
-                    self._round_think_started = False
-                    self.buffer = ""
-                    self._live_output_last_flush = 0.0
-                    if self._status_bar:
-                        self._status_bar.set_phase("idle")
-                    self._render_q.append(
-                        (
-                            "panel",
-                            Panel(
-                                Text(f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。"),
-                                title="⚠ 运行错误",
-                                border_style="red",
-                            ),
-                        )
+                )
+            except Exception as e:
+                # Reset the streaming state + status bar so the TUI doesn't
+                # get stuck in 'thinking' phase when the agent errors out
+                # (e.g. API auth failure, network error). on_finish is never
+                # called when run_deep_agent raises, so we must clean up here.
+                self._round_thinking = ""
+                self._round_think_start = 0.0
+                self._live_think_body = None
+                self._live_think_chars = 0
+                self._round_think_started = False
+                self.buffer = ""
+                self._live_output_last_flush = 0.0
+                if self._status_bar:
+                    self._status_bar.set_phase("idle")
+                self._render_q.append(
+                    (
+                        "panel",
+                        Panel(
+                            Text(f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。"),
+                            title="⚠ 运行错误",
+                            border_style="red",
+                        ),
                     )
+                )
 
-                    def _refill_input():
-                        try:
-                            inp = self.query_one("#msg", Input)
-                            inp.value = line
-                            inp.focus()
-                        except Exception:
-                            pass
+                def _refill_input():
+                    try:
+                        inp = self.query_one("#msg", Input)
+                        inp.value = line
+                        inp.focus()
+                    except Exception:
+                        pass
 
-                    self.call_from_thread(_refill_input)
-                finally:
-                    self._is_running = False
-                    self.call_from_thread(self._show_interrupt_btn, False)
+                self.call_from_thread(_refill_input)
+            finally:
+                self._is_running = False
+                self.call_from_thread(self._show_interrupt_btn, False)
 
-            self._agent_worker = self.run_worker(
-                _run,
-                thread=True,
-                exclusive=True,
-                name="agent_turn",
-                exit_on_error=False,
-            )
+        self._agent_worker = self.run_worker(
+            _run,
+            thread=True,
+            exclusive=True,
+            name="agent_turn",
+            exit_on_error=False,
+        )
 
     # ----------------------------------------------------- binding: Ctrl+O
     def action_toggle_thinking(self) -> None:
