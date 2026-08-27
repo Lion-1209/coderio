@@ -439,6 +439,9 @@ class StatusBar(Widget):
             "thinking": "思考中",
             "responding": "输出中",
             "tool": f"执行 {tool_tag}",
+            # Pause is a UI-level state (⏸ button): stream consumption parked,
+            # nothing new renders until the user resumes.
+            "paused": "已暂停",
         }
         if self.phase == "idle":
             return Text(labels["idle"], style="dim")

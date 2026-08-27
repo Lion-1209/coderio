@@ -452,3 +452,81 @@ def test_win_shell_backend_existing_workspace_runs_normally(tmp_path):
     result = backend.execute("echo workspace-ok")
     out = getattr(result, "output", "") or ""
     assert "workspace-ok" in out, f"existing workspace should run normally, got: {out!r}"
+
+
+def test_pause_gate_blocks_while_set_and_returns_when_cleared():
+    """The pause gate's blocking contract, unit-tested WITHOUT a stream:
+    entering with pause SET must block (thread stays alive), and clearing
+    must release it. Deterministic — no consumer/producer race."""
+    import threading
+    import time
+
+    from coderio.agent.deep_loop import _pause_gate
+
+    pause = threading.Event()
+    pause.set()
+    entered = threading.Event()
+    released = []
+
+    def worker():
+        entered.set()
+        _pause_gate(pause)
+        released.append(True)
+
+    th = threading.Thread(target=worker)
+    th.start()
+    assert entered.wait(timeout=2)
+    time.sleep(0.25)
+    assert not released, "gate must BLOCK while pause is set"
+    assert th.is_alive()
+
+    pause.clear()
+    th.join(timeout=2)
+    assert not th.is_alive() and released, "clearing pause must release the gate"
+
+
+def test_pause_gate_returns_immediately_when_unset():
+    import threading
+
+    from coderio.agent.deep_loop import _pause_gate
+
+    th = threading.Thread(target=_pause_gate, args=(threading.Event(),))
+    th.start()
+    th.join(timeout=1.0)
+    assert not th.is_alive(), "unset pause must NOT block the gate"
+
+
+def test_run_stream_pauses_before_first_chunk_when_already_paused():
+    """Integration pin for the in-loop gate: with pause SET before the turn
+    starts, the consumer must not pull a single chunk until resume — and it
+    must drain everything after. Deterministic (the pause precedes the first
+    gate check), and mutation-proven: deleting the gate call makes this red
+    (chunks flow immediately, seen != [])."""
+    import threading
+    import time
+
+    from coderio.agent.deep_loop import _run_stream
+    from coderio.agent.stream import NullStream
+
+    pause = threading.Event()
+    pause.set()  # ⏸ pressed before the turn starts
+    seen: list[int] = []
+
+    class FakeAgent:
+        def stream(self, *a, **k):
+            for i in (1, 2, 3):
+                seen.append(i)
+                yield ("custom", {"type": f"mark-{i}"})
+
+    def consume():
+        _run_stream(FakeAgent(), {}, "t", 50, NullStream(), None, set(), [], pause)
+
+    th = threading.Thread(target=consume)
+    th.start()
+    time.sleep(0.3)  # ample time for a gate-less loop to drain all 3 chunks
+    assert seen == [], f"paused turn must not pull any chunk: {seen}"
+
+    pause.clear()  # ▶ resume
+    th.join(timeout=5)
+    assert not th.is_alive(), "consumer thread never finished after resume"
+    assert seen == [1, 2, 3], f"resume must drain the whole stream: {seen}"

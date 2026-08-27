@@ -50,23 +50,33 @@ class CoderioTUI(App):
     #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
     #input-bar Input { border: none; }
     #status-row { height: auto; }
-    /* interrupt-btn: NO border — a border adds 2 rows to the widget's outer
-       height, which makes #status-row (height:auto, takes max child height)
-       grow from 1 to 2 rows, leaving a black gap between the status bar and
-       the input whenever the agent is running. Use a tinted background instead
-       so the button stays exactly 1 row tall, matching the StatusBar. */
-    #interrupt-btn {
+    /* interrupt-btn + pause-btn: NO border — a border adds 2 rows to the
+       widget's outer height, which makes #status-row (height:auto, takes max
+       child height) grow from 1 to 2 rows, leaving a black gap between the
+       status bar and the input whenever the agent is running. Use a tinted
+       background instead so each button stays exactly 1 row tall, matching
+       the StatusBar. */
+    #interrupt-btn,
+    #pause-btn {
         display: none; height: 1; min-width: 8; padding: 0 1;
-        /* Explicitly kill the border — Button(variant="error") injects a 'tall'
-           border by default, which adds 2 rows to the outer height and makes
-           #status-row grow, leaving a black gap while the agent runs. */
+        /* Explicitly kill the border — Button(variant="error"/"warning")
+           injects a 'tall' border by default, which adds 2 rows to the outer
+           height and makes #status-row grow, leaving a black gap while the
+           agent runs. */
         border: none;
-        background: $error 20%;
-        color: $error;
         text-style: bold;
     }
-    /* interrupt-btn is shown only when the agent is running (via add_class). */
-    #interrupt-btn.-visible { display: block; }
+    #interrupt-btn { background: $error 20%; color: $error; width: auto; }
+    #pause-btn { background: $warning 20%; color: $warning; width: auto; }
+    /* StatusBar's Textual default is 1fr, which starves the auto-width
+       buttons to zero — the ⏹ 中断 button had NEVER been visible during a
+       run (user report: "还是没有对话暂停按钮"), both squeezed off-row.
+       Pin 1fr on the bar and auto on the buttons so they always fit. */
+    #status-row StatusBar { width: 1fr; }
+    /* Both buttons are shown only while the agent is running (via add_class);
+       #pause-btn additionally swaps its label to "▶ 继续" while paused. */
+    #interrupt-btn.-visible,
+    #pause-btn.-visible { display: block; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -143,6 +153,14 @@ class CoderioTUI(App):
         self._interrupted: bool = False
         self._agent_worker = None
         self._is_running: bool = False  # True while the agent worker is active
+        # PAUSE (⏸ button / /pause): set = stream consumption parked between
+        # chunks inside deep_loop._run_stream (backpressure — nothing new is
+        # pulled or rendered). Cleared by resume, and ALWAYS cleared at turn
+        # start/end so a leftover pause can never wedge the next turn. Owned
+        # by the TUI; tui_runtime forwards it into run_deep_agent.
+        import threading
+
+        self._pause_event = threading.Event()
         # Inline confirmation state: when _confirm_event is non-None, the
         # agent thread is blocked waiting for the user to allow/deny a write.
         self._confirm_event = None
@@ -178,6 +196,7 @@ class CoderioTUI(App):
             yield CommandMenu(slash_completions(self._extra_completions), slash_descriptions())
             with Horizontal(id="status-row"):
                 yield StatusBar()
+                yield Button("⏸ 暂停", id="pause-btn", variant="warning")
                 yield Button("⏹ 中断", id="interrupt-btn", variant="error")
             # Vertical permission-confirmation menu (zcode/codex style): floats
             # above the input box, ↑↓ to choose, Enter to confirm. Replaces the
@@ -575,25 +594,64 @@ class CoderioTUI(App):
         bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
     def _show_interrupt_btn(self, show: bool) -> None:
-        """Show/hide the interrupt button. Safe from any thread."""
+        """Show/hide the interrupt + pause buttons. Safe from any thread."""
         # add_class/remove_class on a Button are plain attribute mutations
         # (GIL-safe). We don't need call_from_thread here — the CSS class
         # toggle is picked up by the next layout pass. This avoids the race
         # where call_from_thread is deferred until after the blocking agent
         # call returns (too late — the button never showed during the turn).
+        for btn_id in ("#interrupt-btn", "#pause-btn"):
+            try:
+                btn = self.query_one(btn_id, Button)
+                if show:
+                    btn.add_class("-visible")
+                else:
+                    btn.remove_class("-visible")
+            except Exception:
+                pass
+        if not show:
+            # Turn is over: reset the pause UI so the NEXT turn starts with a
+            # fresh "⏸ 暂停" button even if this turn ended while paused.
+            self._pause_event.clear()
+            try:
+                pause = self.query_one("#pause-btn", Button)
+                pause.label = "⏸ 暂停"
+            except Exception:
+                pass
+
+    def action_toggle_pause(self) -> bool:
+        """Toggle pause/resume of the running agent turn. Returns now-paused.
+
+        Pausing parks stream consumption (deep_loop checks our _pause_event
+        between chunks); the model's in-flight request stays connected, so
+        streaming just freezes and resumes from where it stopped.
+
+        Returns False when nothing is running (caller can show a hint).
+        """
+        if not self._is_running:
+            return False
+        paused = not self._pause_event.is_set()
+        if paused:
+            self._pause_event.set()
+        else:
+            self._pause_event.clear()
         try:
-            btn = self.query_one("#interrupt-btn", Button)
-            if show:
-                btn.add_class("-visible")
-            else:
-                btn.remove_class("-visible")
+            btn = self.query_one("#pause-btn", Button)
+            btn.label = "▶ 继续" if paused else "⏸ 暂停"
         except Exception:
             pass
+        bar = self._status_bar
+        if bar is not None:
+            # Status text mirrors the state; resume returns to the live phase.
+            bar.set_phase("paused" if paused else "responding")
+        return paused
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button clicks (interrupt only — confirm is now a keyboard menu)."""
+        """Handle button clicks (interrupt / pause — confirm is a keyboard menu)."""
         if event.button.id == "interrupt-btn":
             self.action_interrupt()
+        elif event.button.id == "pause-btn":
+            self.action_toggle_pause()
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -689,6 +747,8 @@ class CoderioTUI(App):
             def _run():
                 self._is_running = True
                 self._interrupted = False
+                # A pause left set by a previous turn must never wedge this one.
+                self._pause_event.clear()
                 self.call_from_thread(self._show_interrupt_btn, True)
                 try:
                     self._on_input(line)

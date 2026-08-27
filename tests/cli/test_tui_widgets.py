@@ -18,8 +18,9 @@ from typing import Any
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from textual.widgets import Input, ListView
+from textual.widgets import Button, Input, ListView
 
+from coderio.cli.tui import CoderioTUI
 from coderio.cli.tui_widgets import CommandMenu, ConfirmMenu, StatusBar
 
 # A representative set of slash completions for CommandMenu.
@@ -521,3 +522,60 @@ class TestCommandMenuDescriptions:
             lv = menu.query_one("#cmd-list", ListView)
             label = str(lv.children[0].children[0].render())
             assert label.strip() == "/zzz"
+
+
+# ============================================================ pause button
+
+
+class TestPauseButton:
+    """⏸ 暂停 / ▶ 继续 (2026-08-27): interrupt KILLS the turn; pause parks it.
+    Lifecycle: hidden until running → toggle swaps label + sets/clears the
+    event + flips StatusBar phase → turn end resets everything."""
+
+    @pytest.mark.asyncio
+    async def test_hidden_until_running_then_toggle_cycle(self) -> None:
+        app = CoderioTUI()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            btn = app.query_one("#pause-btn", Button)
+            assert "-visible" not in btn.classes, "must be hidden while idle"
+
+            # Simulate a running turn (what on_input_submitted's worker does).
+            app._is_running = True
+            app._show_interrupt_btn(True)
+            await pilot.pause()
+            assert "-visible" in btn.classes
+            # REAL layout pin (2026-08-27 live audit): the buttons were
+            # class-visible yet rendered at width 0 — StatusBar's 1fr default
+            # starved them off-row, so ⏹ 中断 had never actually been visible
+            # during a run. classes alone don't prove pixels.
+            assert btn.region.width > 0, "pause button must occupy layout space"
+            assert app.query_one("#interrupt-btn", Button).region.width > 0
+
+            # First press: paused. Event set drives deep_loop's gate.
+            assert app.action_toggle_pause() is True
+            assert app._pause_event.is_set()
+            assert str(btn.label).startswith("▶"), "label must offer resume while paused"
+            assert app._status_bar.phase == "paused"
+
+            # Second press: resumed.
+            assert app.action_toggle_pause() is False
+            assert not app._pause_event.is_set()
+            assert str(btn.label).startswith("⏸")
+            assert app._status_bar.phase == "responding"
+
+            # Turn end: buttons hide AND pause state fully resets for next turn.
+            app.action_toggle_pause()
+            app._show_interrupt_btn(False)
+            await pilot.pause()
+            assert "-visible" not in btn.classes
+            assert not app._pause_event.is_set(), "turn end must clear a leftover pause"
+            assert str(btn.label).startswith("⏸"), "label resets for the next turn"
+
+    @pytest.mark.asyncio
+    async def test_toggle_is_noop_when_idle(self) -> None:
+        app = CoderioTUI()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            assert app.action_toggle_pause() is False, "no running turn to pause"
+            assert not app._pause_event.is_set()
