@@ -53,7 +53,6 @@ SLASH_COMMANDS: list[SlashCommand] = [
         ["/undo"],
     ),
     SlashCommand("/think", "expand the last round's collapsed thinking", ["/think"]),
-    SlashCommand("/pause", "pause or resume the running turn (⏸ toggle)", ["/pause"], aliases=("/unpause",)),
 ]
 
 
@@ -105,18 +104,6 @@ class ReplContext:
     usage: dict = None
     stream: object = None  # RichStream — for /think to expand collapsed thinking
     custom_commands: dict = None  # {name: CustomCommand} — discovered at startup, rendered by /help
-
-    def toggle_pause(self) -> str:
-        """Shared by /pause and /resume (aliases of one toggle). Returns a
-        user-facing message. Works when ctx.stream is the live TUI with an
-        agent turn in flight; otherwise explains why not."""
-        st = self.stream
-        if st is None or not getattr(st, "_is_running", False):
-            return "没有进行中的任务可暂停。"
-        if not hasattr(st, "action_toggle_pause"):
-            return "当前引擎不支持暂停。"
-        paused = st.action_toggle_pause()
-        return "⏸ 已暂停 — 再输入 /pause 或点按钮继续。" if paused else "▶ 已继续。"
 
 
 @dataclass
@@ -387,24 +374,6 @@ def handle_slash(line: str, ctx) -> CommandResult:
         remaining = len(DEFAULT_CHECKPOINT)
         suffix = f"（还可撤销 {remaining} 步）" if remaining else "（已到底）"
         return CommandResult(message=f"↩ {result.path} {verb}{suffix}")
-    if cmd in ("/pause", "/unpause"):
-        # One toggle behind two names (and the ⏸ button): /resume exists so
-        # the user doesn't have to remember which state they're in. Order
-        # matters: the "nothing running" check comes first, then the toggle
-        # capability — duck-typed contexts (tests, plain REPLs) may implement
-        # neither.
-        st = getattr(ctx, "stream", None)
-        if st is None or not getattr(st, "_is_running", False):
-            return CommandResult(message="没有进行中的任务可暂停。")
-        ctx_toggle = getattr(ctx, "toggle_pause", None)
-        if ctx_toggle is not None:
-            # ReplContext.toggle_pause returns a ready-made message.
-            return CommandResult(message=ctx_toggle())
-        st_toggle = getattr(st, "action_toggle_pause", None)
-        if st_toggle is None:
-            return CommandResult(message="当前环境不支持暂停。")
-        paused = st_toggle()
-        return CommandResult(message="⏸ 已暂停 — 再输入 /pause 或点按钮继续。" if paused else "▶ 已继续。")
     if cmd == "/think":
         stream = getattr(ctx, "stream", None)
         if stream is not None and hasattr(stream, "show_last_thinking"):

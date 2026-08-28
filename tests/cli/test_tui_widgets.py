@@ -527,11 +527,10 @@ class TestCommandMenuDescriptions:
 # ============================================================ pause button
 
 
-class TestPauseButton:
-    """zcode-style send slot (2026-08-27 user feedback): the ➤ button lives in
-    the input row PERMANENTLY — idle it submits; while running it morphs to
-    ⏸/▶ (pause/resume) with ⏹ beside it. The old status-row buttons popped in
-    and out mid-stream, which read as broken."""
+class TestSendStopButton:
+    """ONE morphing control (zcode pattern — one concept, one button):
+    idle ➤ submits, running ⏹ interrupts (click dispatches action_interrupt,
+    same as Esc). No separate pause concept."""
 
     @pytest.mark.asyncio
     async def test_send_slot_morphs_through_turn_lifecycle(self) -> None:
@@ -539,42 +538,24 @@ class TestPauseButton:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             send = app.query_one("#send-btn", Button)
-            stop = app.query_one("#interrupt-btn", Button)
             assert str(send.label).startswith("➤"), "idle send slot shows submit"
-            assert "-visible" not in stop.classes, "⏹ hidden while idle"
+            assert "running" not in send.classes
             assert send.region.width > 0, "send button must always occupy layout space"
 
             # Simulate a running turn (what on_input_submitted's worker does).
             app._is_running = True
             app._show_interrupt_btn(True)
             await pilot.pause()
-            assert str(send.label).startswith("⏸"), "running: slot offers pause"
+            assert str(send.label).startswith("⏹"), "running: slot IS the stop button"
             assert "running" in send.classes
-            assert "-visible" in stop.classes
-            assert stop.region.width > 0, "⏹ must occupy real layout space"
+            assert send.region.width > 0, "stop button must occupy real layout space"
 
-            # First press: paused → slot offers resume, tint flips.
-            assert app.action_toggle_pause() is True
-            assert app._pause_event.is_set()
-            assert str(send.label).startswith("▶")
-            assert "paused" in send.classes
-            assert app._status_bar.phase == "paused"
-
-            # Second press: resumed.
-            assert app.action_toggle_pause() is False
-            assert not app._pause_event.is_set()
-            assert str(send.label).startswith("⏸")
-            assert app._status_bar.phase == "responding"
-
-            # Turn end (worker's finally sets _is_running False BEFORE
-            # showing buttons off — mirror that exact order):
-            app.action_toggle_pause()
+            # Interrupt while running → turn end path restores the slot.
             app._is_running = False
             app._show_interrupt_btn(False)
             await pilot.pause()
-            assert "-visible" not in stop.classes
-            assert not app._pause_event.is_set(), "turn end must clear a leftover pause"
-            assert str(send.label).startswith("➤"), "next turn starts with a submit slot"
+            assert str(send.label).startswith("➤"), "turn end restores the submit slot"
+            assert "running" not in send.classes
 
     @pytest.mark.asyncio
     async def test_send_button_submits_input_when_idle(self) -> None:
@@ -595,9 +576,16 @@ class TestPauseButton:
             assert seen == ["hello via send button"], f"➤ click must reach the engine dispatch path: {seen}"
 
     @pytest.mark.asyncio
-    async def test_toggle_is_noop_when_idle(self) -> None:
+    async def test_send_button_interrupts_when_running(self) -> None:
+        """Clicking ⏹ while running must request an interrupt (the same flag
+        Esc sets) — that is the ONE stop concept."""
         app = CoderioTUI()
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            assert app.action_toggle_pause() is False, "no running turn to pause"
-            assert not app._pause_event.is_set()
+            app._is_running = True
+            app._show_interrupt_btn(True)
+            await pilot.pause()
+            assert app._interrupted is False
+            await pilot.click("#send-btn")
+            await pilot.pause()
+            assert app._interrupted is True, "⏹ click must raise the interrupt flag"

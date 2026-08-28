@@ -66,18 +66,17 @@ class CoderioTUI(App):
         width: 1fr; height: 1; padding: 0;
         background: transparent;
     }
-    #interrupt-btn,
+    /* ONE morphing button (zcode style — one concept, one control):
+       idle ➤ submits; running it IS the stop button (⏹, error tint).
+       No separate pause concept: interrupt kills the turn, resubmitting
+       continues the work. */
     #send-btn {
         width: auto; min-width: 4; height: 1; padding: 0 1;
         border: none;
         text-style: bold;
+        background: $accent 20%; color: $accent;
     }
-    #interrupt-btn { display: none; background: $error 20%; color: $error; }
-    #interrupt-btn.-visible { display: block; }
-    #send-btn { background: $accent 20%; color: $accent; }
-    /* While running the send slot becomes the pause/resume toggle. */
-    #send-btn.running { background: $warning 20%; color: $warning; }
-    #send-btn.paused { background: $success 20%; color: $success; }
+    #send-btn.running { background: $error 20%; color: $error; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
@@ -151,19 +150,7 @@ class CoderioTUI(App):
         self._interrupted: bool = False
         self._agent_worker = None
         self._is_running: bool = False  # True while the agent worker is active
-        # Pause UI state mirror (send slot tint/label): True while the user
-        # has ⏸'d the running turn. Kept separate from _pause_event so the
-        # button visuals can be synced without touching the threading Event
-        # from UI code paths unnecessarily.
-        self._paused_ui: bool = False
-        # PAUSE (⏸ button / /pause): set = stream consumption parked between
-        # chunks inside deep_loop._run_stream (backpressure — nothing new is
-        # pulled or rendered). Cleared by resume, and ALWAYS cleared at turn
-        # start/end so a leftover pause can never wedge the next turn. Owned
-        # by the TUI; tui_runtime forwards it into run_deep_agent.
-        import threading
 
-        self._pause_event = threading.Event()
         # Inline confirmation state: when _confirm_event is non-None, the
         # agent thread is blocked waiting for the user to allow/deny a write.
         self._confirm_event = None
@@ -206,8 +193,7 @@ class CoderioTUI(App):
             yield ConfirmMenu()
             with Horizontal(id="input-toolbar"):
                 yield StatusBar()
-                yield Button("⏹", id="interrupt-btn", variant="error", tooltip="中断本轮任务 (Esc)")
-                yield Button("➤", id="send-btn", variant="primary", tooltip="发送 (Enter) / 运行中: 暂停⏸·继续▶")
+                yield Button("➤", id="send-btn", variant="primary", tooltip="发送 (Enter) / 运行中: 中断⏹ (Esc)")
 
     def on_mount(self) -> None:
         self.title = "coderio"
@@ -592,75 +578,21 @@ class CoderioTUI(App):
         bar.set_phase(phase, tool_name, step=step, tool_index=tool_index, tool_total=tool_total)
 
     def _show_interrupt_btn(self, show: bool) -> None:
-        """Show/hide the interrupt + pause buttons. Safe from any thread."""
-        # add_class/remove_class on a Button are plain attribute mutations
-        # (GIL-safe). We don't need call_from_thread here — the CSS class
-        # toggle is picked up by the next layout pass. This avoids the race
-        # where call_from_thread is deferred until after the blocking agent
-        # call returns (too late — the button never showed during the turn).
-        try:
-            stop = self.query_one("#interrupt-btn", Button)
-            if show:
-                stop.add_class("-visible")
-            else:
-                stop.remove_class("-visible")
-        except Exception:
-            pass
-        # Send slot mirrors the turn state: idle ➤ / running ⏸ / paused ▶.
-        # Turn end ALWAYS resets it (and clears a leftover pause) so the next
-        # turn starts clean even if this one ended while paused.
-        if not show:
-            self._pause_event.clear()
-            self._paused_ui = False
-        self._sync_send_btn()
-
-    def _sync_send_btn(self) -> None:
-        """Set the send slot's label/tint from (running, paused). Main thread."""
+        """Morph the send slot with the turn state (safe from any thread):
+        idle ➤ submits; running ⏹ interrupts — zcode's one-control pattern,
+        the send button IS the stop button. Turn end always restores ➤.
+        label/add_class writes are plain attribute mutations (GIL-safe), no
+        call_from_thread needed — the next layout pass picks them up."""
         try:
             btn = self.query_one("#send-btn", Button)
-            if not self._is_running:
+            if show:
+                btn.label = "⏹"
+                btn.add_class("running")
+            else:
                 btn.label = "➤"
                 btn.remove_class("running")
-                btn.remove_class("paused")
-            elif self._paused_ui:
-                btn.label = "▶ 继续"
-                btn.add_class("running")
-                btn.add_class("paused")
-            else:
-                btn.label = "⏸ 暂停"
-                btn.add_class("running")
-                btn.remove_class("paused")
         except Exception:
             pass
-
-    def action_toggle_pause(self) -> bool:
-        """Toggle pause/resume of the running agent turn. Returns now-paused.
-
-        Pausing parks stream consumption (deep_loop checks our _pause_event
-        between chunks); the model's in-flight request stays connected, so
-        streaming just freezes and resumes from where it stopped. Backpressure,
-        not preemption: tokens already in flight still land, and a pause held
-        past the provider's idle timeout surfaces on resume as a network error.
-        """
-        if not self._is_running:
-            return False
-        self._paused_ui = not self._pause_event.is_set()
-        if self._paused_ui:
-            self._pause_event.set()
-        else:
-            self._pause_event.clear()
-        self._sync_send_btn()
-        bar = self._status_bar
-        if bar is not None:
-            # Status text mirrors the state; resume returns to the live phase.
-            bar.set_phase("paused" if self._paused_ui else "responding")
-            # A pause pressed while a TOOL is running can only take effect at
-            # the next chunk boundary — after the tool returns. Say so, or the
-            # frozen screen reads like the button did nothing (user feedback
-            # 2026-08-27: "怪怪的").
-            if self._paused_ui and bar.phase == "tool":
-                self._add_text("⏸ 将在当前工具执行结束后暂停。", style="dim")
-        return self._paused_ui
 
     def _submit_current_input(self) -> None:
         """Send-button submit: dispatch whatever is in #msg, exactly as Enter
@@ -676,15 +608,13 @@ class CoderioTUI(App):
         self._on_input(line)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle input-row buttons: the morphing send slot (submit when idle,
-        pause/resume while running) and ⏹ interrupt. Confirm is a keyboard menu."""
+        """Handle the morphing send/stop button: ➤ submits when idle, ⏹
+        interrupts while running. Confirm is a keyboard menu."""
         if event.button.id == "send-btn":
             if self._is_running:
-                self.action_toggle_pause()
+                self.action_interrupt()
             else:
                 self._submit_current_input()
-        elif event.button.id == "interrupt-btn":
-            self.action_interrupt()
 
     # ----------------------------------------------------- command menu (autocomplete)
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -788,8 +718,6 @@ class CoderioTUI(App):
         def _run():
             self._is_running = True
             self._interrupted = False
-            # A pause left set by a previous turn must never wedge this one.
-            self._pause_event.clear()
             self.call_from_thread(self._show_interrupt_btn, True)
             try:
                 self._on_input(line)

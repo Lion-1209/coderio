@@ -297,35 +297,3 @@ def test_slash_descriptions_covers_every_candidate():
     exit_desc = descs["/exit"]
     assert quit_desc == exit_desc == "exit the REPL"
     assert len(descs) >= len(SLASH_COMMANDS)
-
-
-def test_slash_pause_resume_toggle_messages():
-    """/pause and /resume are two names for one toggle; honest no-op message
-    when nothing is running, and graceful degradation for duck-typed ctxs."""
-    from types import SimpleNamespace
-
-    from coderio.cli.commands import ReplContext
-
-    msg = handle_slash("/pause", _FakeCtx()).message
-    assert "没有进行中的任务" in msg, f"idle ctx must say so: {msg}"
-
-    def _ctx_with(toggle_returns):
-        tui = SimpleNamespace(_is_running=True, action_toggle_pause=lambda: toggle_returns)
-        return ReplContext(
-            available_skills=[],
-            active_skills_names=set(),
-            permission_mode="full",
-            stream=tui,
-        )
-
-    msg = handle_slash("/pause", _ctx_with(toggle_returns=True)).message
-    assert "已暂停" in msg
-    # The alias /resume hits the same toggle — user needn't know the state.
-    msg = handle_slash("/unpause", _ctx_with(toggle_returns=False)).message
-    assert "已继续" in msg
-
-    # A stream that is "running" but has no toggle (plain REPL engine).
-    ctx = _FakeCtx()
-    ctx.stream = SimpleNamespace(_is_running=True)  # no action_toggle_pause
-    msg = handle_slash("/pause", ctx).message
-    assert "不支持" in msg, f"duck-typed stream must degrade gracefully: {msg}"

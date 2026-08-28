@@ -21,7 +21,7 @@ async def test_tui_starts_and_widgets_exist():
         # Every widget that compose() yields must be findable.
         app.query_one("#msg", Input)
         app.query_one("#history")
-        app.query_one("#interrupt-btn", Button)
+        app.query_one("#send-btn", Button)
         app.query_one("StatusBar")
         app.query_one("CommandMenu")
         app.query_one("ConfirmMenu")
@@ -53,15 +53,18 @@ async def test_input_has_placeholder():
 
 
 @pytest.mark.asyncio
-async def test_interrupt_btn_hidden_on_idle():
-    """Interrupt button is hidden when no agent is running."""
+async def test_send_slot_visible_and_idle_on_start():
+    """The send/stop slot is PERMANENT (zcode style): it must be visible at
+    startup showing the submit arrow — not a hidden button that pops in
+    mid-stream (the old status-row design's flaw)."""
     from coderio.cli.tui import CoderioTUI
 
     app = CoderioTUI()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause(0.3)
-        btn = app.query_one("#interrupt-btn", Button)
-        assert btn.styles.display == "none", "interrupt button should be hidden when idle"
+        btn = app.query_one("#send-btn", Button)
+        assert btn.styles.display == "block", "send slot must be visible on startup"
+        assert str(btn.label).startswith("➤"), "idle slot shows the submit arrow"
 
 
 @pytest.mark.asyncio

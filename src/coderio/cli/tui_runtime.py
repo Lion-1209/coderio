@@ -314,10 +314,6 @@ class TuiRuntime:
             fs_config=rt["cfg"].tools.sandbox_fs,
             bash_shell=rt["cfg"].tools.bash_shell,
             hooks=rt["cfg"].hooks,
-            # ⏸ button / /pause: the TUI owns the event; deep_loop parks stream
-            # consumption between chunks while it's set. getattr: pause is
-            # optional infrastructure — duck-typed TUI hosts stay working.
-            pause_event=getattr(self.tui, "_pause_event", None),
         )
 
     # ------------------------------------------------------- session lifecycle

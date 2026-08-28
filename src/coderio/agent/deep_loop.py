@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -556,21 +555,7 @@ def _build_inputs(checkpointer, user_input: str | list[dict[str, Any]], session:
     return {"messages": _build_history_messages(session.messages)}
 
 
-def _pause_gate(pause_event) -> None:
-    """Block while ``pause_event`` is set (⏸ button / /pause contract: set =
-    PARKED). Poll instead of Event.wait() — Event.wait() blocks while UNSET,
-    the exact inverse of pause semantics, and the inversion is invisible
-    until a pause is actually pressed (2026-08-27: the first wiring hung
-    every turn). 50ms poll is imperceptible for a UI toggle. Extracted as a
-    module function so the blocking contract is unit-testable without a
-    stream (test_pause_gate_*), since timing an in-stream pause press against
-    a fast consumer is inherently racy.
-    """
-    while pause_event is not None and pause_event.is_set():
-        time.sleep(0.05)
-
-
-def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen_ids, turn_writes, pause_event=None):
+def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen_ids, turn_writes):
     """Drive the deepagents graph with three stream modes. Returns final text."""
     config = {
         "recursion_limit": recursion_limit,
@@ -584,10 +569,6 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
     # not real backpressure.
     chunk_iter = iter(agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]))
     while True:
-        # Pause gate (TUI ⏸ button / /pause): park BEFORE pulling the next
-        # chunk — nothing further is produced, consumed, or rendered until
-        # cleared; the unread SSE bytes apply backpressure upstream.
-        _pause_gate(pause_event)
         try:
             mode, event = next(chunk_iter)
         except StopIteration:
@@ -623,7 +604,6 @@ def run_deep_agent(
     fs_config=None,
     bash_shell: str = "",
     hooks: list | None = None,
-    pause_event=None,
 ) -> str:
     """Run a deepagents-backed agent turn (coderio's production engine).
 
@@ -652,13 +632,6 @@ def run_deep_agent(
             optionally disables web tools). None = use CommandPolicy.default()
             (built-in blacklist active, network allowed). Pass an explicit policy
             to customize via config.toml [tools].blocked_commands / network_allowed.
-        pause_event: optional threading.Event. When SET, the stream-consumption
-            loop parks BETWEEN chunks — no more events are pulled and nothing is
-            rendered until the event is cleared (the TUI pause button / /pause).
-            Backpressure, not preemption: the in-flight model request keeps its
-            connection; a pause long enough to hit the provider's idle timeout
-            surfaces on resume as an ordinary network error (honest limit —
-            true mid-request suspension needs a resumable transport).
     """
     stream = stream or NullStream()
     from deepagents import create_deep_agent
@@ -866,7 +839,7 @@ def run_deep_agent(
         if hasattr(stream, "on_step_start"):
             stream.on_step_start()
         final_text = _run_stream(
-            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes, pause_event
+            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes
         )
     finally:
         if _db_conn is not None:
