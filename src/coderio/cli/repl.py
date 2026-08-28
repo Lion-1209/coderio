@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,20 @@ def build_gate(cfg: Config, console=None, tui=None):
     # user opted in. FULL mode already allows everything; PLAN stays read-only.
     sandbox_active = cfg.tools.sandbox_mode != "off"
     auto_exec = sandbox_active and cfg.tools.auto_allow_if_sandboxed
+    # HONEST WARNING (2026-08-28 audit): on Windows NEITHER sandbox mode
+    # isolates file writes — "write" is effectively "job" (Restricted Token
+    # no-op, see win_sandbox.py) — so with auto-allow on, the user believes a
+    # filesystem boundary protects them while execute runs with the parent's
+    # full permissions. Warn on every gate build, for both modes.
+    if auto_exec and sys.platform == "win32" and cfg.tools.sandbox_mode in ("job", "write"):
+        warn = (
+            "⚠ [sandbox] Windows 下沙箱暂无文件写隔离（job/write 均为资源限制）。"
+            "auto_allow_if_sandboxed 已开启，execute 将无确认执行（黑名单仍生效）。"
+        )
+        if console is not None:
+            console.print(warn, style="yellow")
+        else:
+            print(warn, file=sys.stderr)
     if mode == PermissionMode.FULL:
         return AutoPermissionGate()
     if mode == PermissionMode.PLAN:

@@ -29,7 +29,7 @@ The shared weakness of coding agents: **the model says "I'm done" and you just h
 | **GroundingGate** | Cites files it never read → intercepted |
 | **PlanGate** | Writes code without a todo list → soft nudge |
 
-Not a prompt-level soft rule — a system-level control based on tool-call ground truth. Claude Code and Codex don't have this.
+Not a prompt-level soft rule — a system-level control based on tool-call ground truth. Built-in, with escalating enforcement and exit-code parsing — rare among terminal coding agents.
 
 ### Native Chinese coding-plan support
 

@@ -192,6 +192,16 @@ def _from_dict(data: dict) -> Config:
     # a best-effort optimization, not a required config field.
     m_cl_raw = m.get("context_limit", 0)
     m_context_limit = m_cl_raw if isinstance(m_cl_raw, int) and not isinstance(m_cl_raw, bool) else 0
+    # Normalize sandbox_mode: "Write"/" OFF " must behave exactly like their
+    # lowercase forms. Before this, a capitalized value silently kept
+    # auto-allow ON while escaping every sandbox check/warning that compares
+    # against exact literals (2026-08-28 adversarial review). Unknown values
+    # raise loudly — a typo'd sandbox_mode must not silently degrade to
+    # "no sandbox, auto-allow on".
+    _sandbox_raw = t.get("sandbox_mode", cfg.tools.sandbox_mode)
+    _sandbox = str(_sandbox_raw).strip().lower()
+    if _sandbox not in ("off", "job", "write"):
+        raise ValueError(f"Invalid [tools] sandbox_mode: {_sandbox_raw!r}. Expected one of: off, job, write.")
     return Config(
         model=ModelConfig(
             default=m.get("default", cfg.model.default),
@@ -209,7 +219,7 @@ def _from_dict(data: dict) -> Config:
             network_allowed=_bool(t, "network_allowed", cfg.tools.network_allowed),
             whitelist_mode=_bool(t, "whitelist_mode", cfg.tools.whitelist_mode),
             allowed_commands=_str_list(t, "allowed_commands", cfg.tools.allowed_commands),
-            sandbox_mode=t.get("sandbox_mode", cfg.tools.sandbox_mode),
+            sandbox_mode=_sandbox,
             auto_allow_if_sandboxed=_bool(t, "auto_allow_if_sandboxed", cfg.tools.auto_allow_if_sandboxed),
             sandbox_fs=_read_sandbox_fs(t.get("sandbox_filesystem", {}), cfg.tools.sandbox_fs),
         ),

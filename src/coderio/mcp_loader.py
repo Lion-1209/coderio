@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -226,6 +227,16 @@ async def load_mcp_tools(
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
     except ImportError:
+        # _log.warning alone is invisible here: nothing configures a logging
+        # handler at startup, so the user got ZERO feedback after configuring
+        # .mcp.json exactly as the README says (audit 2026-08-28, "MCP 静默
+        # 失败"). This print is safe — build_runtime runs BEFORE the TUI
+        # takes over the terminal.
+        print(
+            "\n[MCP] 检测到 .mcp.json 配置，但缺少依赖 langchain-mcp-adapters，MCP 工具未启用。\n"
+            "      安装：pip install 'coderio[mcp]'\n",
+            file=sys.stderr,
+        )
         _log.warning(
             "langchain-mcp-adapters not installed — MCP tools disabled. "
             "Install with: pip install langchain-mcp-adapters"

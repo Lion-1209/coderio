@@ -14,8 +14,11 @@ Protections applied here (defense in depth):
 1. Scheme allowlist: only ``http`` / ``https`` (blocks ``file://``, ``ftp://``...).
 2. IP-based blocking at CONNECT time: the hostname is resolved and every
    resolved address is checked against private / loopback / link-local /
-   reserved ranges BEFORE the request is sent. DNS-rebinding is mitigated by
-   checking at connect time via a custom transport, not just at parse time.
+   reserved ranges BEFORE the request is sent. HONEST LIMIT (2026-08-28
+   audit): httpx re-resolves DNS internally when connecting, so a TOCTOU
+   DNS-rebinding window remains — the docstring previously claimed a
+   "custom transport" that pins resolved IPs; no such transport exists in
+   this implementation.
 3. Redirect policy: redirects are followed MANUALLY (max 3 hops), and each hop's
    URL goes through the same validation. ``follow_redirects=False`` on the
    client — an allowlisted URL redirecting to 169.254.169.254 is still blocked.

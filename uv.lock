@@ -507,7 +507,7 @@ wheels = [
 
 [[package]]
 name = "coderio"
-version = "0.4.2"
+version = "0.4.4"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },
@@ -543,14 +543,14 @@ mcp = [
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "ddgs", specifier = ">=4.0" },
-    { name = "deepagents", specifier = ">=0.6" },
+    { name = "deepagents", specifier = ">=0.7.6,<0.8" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "langchain", specifier = ">=0.3" },
+    { name = "langchain", specifier = ">=1.0" },
     { name = "langchain-anthropic", specifier = ">=0.2" },
     { name = "langchain-core", specifier = ">=0.3" },
     { name = "langchain-mcp-adapters", marker = "extra == 'mcp'", specifier = ">=0.3.2" },
     { name = "langchain-openai", specifier = ">=0.2" },
-    { name = "langgraph", specifier = ">=0.2" },
+    { name = "langgraph", specifier = ">=1.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2" },

@@ -108,6 +108,33 @@ async def test_todos_render_as_dynamic_checklist():
         count_after_second = len(list(history.children))
         assert count_after_second == count_after_first, "second update should not add a new widget"
 
+        # /clear regression (2026-08-28 adversarial review finding 4): the
+        # tracked todo widget dies with the pane. Without the reset, the next
+        # turn's write_todos .update()s a DETACHED widget (a silent no-op —
+        # detached Static.update() does not raise) and the todo list stays
+        # invisible for the whole rest of the session.
+        app._clear_history()
+        await pilot.pause(0.3)
+        assert app._todo_widget is None, "/clear must reset the tracked todo widget"
+
+        app.on_todos_update(
+            [
+                {"content": "post-clear task", "status": "in_progress"},
+            ]
+        )
+        await pilot.pause(0.5)
+        assert app._todo_widget is not None, "write_todos after /clear must mount a fresh panel"
+        new_widget_still_tracked = app._todo_widget
+        app.on_todos_update(
+            [
+                {"content": "post-clear task", "status": "completed"},
+            ]
+        )
+        await pilot.pause(0.5)
+        assert app._todo_widget is new_widget_still_tracked, (
+            "post-clear updates must keep updating the SAME mounted widget"
+        )
+
         # on_finish resets the widget reference.
         app.on_finish()
         assert app._todo_widget is None, "todo widget should be reset on finish"

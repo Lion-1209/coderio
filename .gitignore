@@ -39,3 +39,6 @@ htmlcov/
 .tmp/
 tmp/
 .zcode/
+
+# zcode workspace instructions — local only, not part of the project
+/AGENTS.md

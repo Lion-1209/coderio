@@ -16,6 +16,8 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 
 要求：Python 3.11+；Windows 需 Git Bash。支持 Linux / macOS。
 
+可选：MCP 外部工具（`.mcp.json`）需要额外依赖——`pip install "coderio[mcp]"`；未安装时 MCP 工具不启用（启动会有提示）。
+
 ## 为什么是 coderio
 
 市面上 coding agent 的共同软肋：**模型说"我做完了"，你就得信**。coderio 把这句话变成了结构约束——
@@ -29,11 +31,15 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 | **GroundingGate** | 引用从未读过的文件下结论 → 拦截 |
 | **PlanGate** | 没 TODO 就动手写码 → 软提醒 |
 
-不是提示词软规则，是基于工具调用 ground truth 的系统级控制。Claude Code / Codex 都没有这个。
+不是提示词软规则，是基于工具调用 ground truth 的系统级控制。开箱即用、带逐级升级与退出码解析的结构化验证——同类终端 agent 中少见。
 
 ### 原生支持中文 Coding Plan
 
 智谱 **GLM Coding Plan** 和阶跃 **StepFun Step Plan** 开箱即用（Anthropic 协议直连）——你的订阅额度跑本地 agent，不需要转发、不需要中间层。同时支持 OpenAI / Anthropic / Ollama / 任意 OpenAI 兼容端点，多 profile 一键切换。
+
+### 多模态输入
+
+在消息里引用图片文件路径（`@路径`，或把图片文件拖进终端让路径自动填入输入框），图片会随消息发给支持视觉的模型——截图、UI 设计稿、报错截图，agent 能看图说话、按图改码。注意：路径含空格时请先把文件移到无空格目录（路径解析暂不支持带空格的路径）。
 
 ### 多层安全，诚实声明
 

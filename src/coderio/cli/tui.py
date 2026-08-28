@@ -414,17 +414,29 @@ class CoderioTUI(App):
         panel = Panel(Markdown(text), title="📝 任务清单", border_style="cyan")
 
         if self._todo_widget is not None:
-            # Update existing widget in-place (no new mount).
-            try:
-                self._todo_widget.update(panel)
-                return "none"
-            except Exception:
-                pass  # widget was removed (scrolled off) → mount a new one
+            # Update existing widget in-place (no new mount) — but only while
+            # it is actually attached. A detached Static.update() does NOT
+            # raise (verified on textual 8.2.8), so an attached-check is the
+            # only reliable way to detect "widget was cleared/remounted" and
+            # fall through to a fresh mount.
+            if getattr(self._todo_widget, "is_attached", True):
+                try:
+                    self._todo_widget.update(panel)
+                    return "none"
+                except Exception:
+                    pass  # update failed → fall through and mount a new one
+            self._todo_widget = None  # detached: remount below
         # First call or widget lost → mount new.
         from textual.widgets import Static
 
+        # FIX (2026-08-28 audit C2): mount THE tracked widget. The old code
+        # assigned Static(panel) to self._todo_widget but mounted a SECOND
+        # instance via _add_static_main(panel) — the tracked widget was an
+        # orphan, so every in-place .update() silently no-op'd and each
+        # write_todos silently froze the panel content in place (the tracked
+        # widget was never mounted, so .update() was a no-op).
         self._todo_widget = Static(panel)
-        self._add_static_main(panel)
+        self._mount_widget_main(self._todo_widget)
         return "final"
 
     # Dispatch table: action name -> handler. Built once at class definition.
@@ -463,6 +475,11 @@ class CoderioTUI(App):
             h.remove_children()
         except Exception:
             pass
+        # The tracked todo widget died with the pane — without this reset the
+        # next turn's write_todos would .update() a detached widget (a silent
+        # no-op) and the todo list would stay invisible for the whole session
+        # (2026-08-28 adversarial review, finding 4).
+        self._todo_widget = None
 
     def _render_live_output(self, full_text: str) -> None:
         """MAIN THREAD: append the NEW part of the streaming text to a RichLog.

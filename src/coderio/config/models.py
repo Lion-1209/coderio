@@ -73,15 +73,23 @@ class ToolsConfig:
     #   "off"    = no OS sandbox (regex blacklist + whitelist only) [default]
     #   "job"    = Job Object resource limits + reliable process-tree kill
     #              (prevents fork bombs, OOM, orphaned grandchildren)
-    #   "write"  = Job Object + Windows Restricted Token write isolation
-    #              (reads system-wide, writes gated — needs Win10+, no admin)
-    # On Linux, "write" uses bubblewrap if available (see linux_sandbox.py).
+    #   "write"  = HONEST STATUS (2026-08-28 audit): on Windows this is
+    #              EFFECTIVELY THE SAME AS "job" — the Restricted Token is a
+    #              no-op and file writes are NOT isolated (see the
+    #              win_sandbox.py module header). On Linux, "write" uses
+    #              bubblewrap if available (real write isolation; see
+    #              linux_sandbox.py). Consequence: on Windows,
+    #              auto_allow_if_sandboxed=True approves execute with NO
+    #              filesystem boundary — the permission prompt was the only
+    #              gate and auto-allow just removed it.
     sandbox_mode: str = "off"
     # When True + sandbox_mode != "off", the execute (shell) tool auto-approves
     # without a confirmation prompt (Claude Code's "autoAllowBashIfSandboxed"
     # design: the sandbox provides the real isolation boundary, so per-command
     # prompts become noise). Defaults False (backward compat). The blacklist
     # still applies — rm -rf / is blocked even in auto-allow mode.
+    # WARNING: on Windows the "write" sandbox does NOT isolate writes today —
+    # the startup path prints an explicit warning for this combination.
     auto_allow_if_sandboxed: bool = False
     # Filesystem isolation 4-tuple for the sandbox (Linux bubblewrap only;
     # Windows ignores it — token is no-op). See SandboxFsConfig.
