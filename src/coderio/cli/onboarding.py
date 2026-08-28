@@ -49,33 +49,33 @@ def _menu(prompt_fn) -> ProviderInfo | str:
             n += 1
 
     if plan:
-        _add_group("Coding Plan（订阅制）", plan)
+        _add_group("Coding Plans (subscription)", plan)
     if cn_direct:
-        _add_group("国内 API Key 直连", cn_direct)
+        _add_group("China direct API key", cn_direct)
     if intl:
-        _add_group("国际", intl)
+        _add_group("International", intl)
     if local:
-        _add_group("本地模型", local)
+        _add_group("Local models", local)
     if custom:
-        _add_group("自定义", custom)
+        _add_group("Custom endpoint", custom)
     idx[n] = _SKIP
-    lines.append(f"  [{n}] 跳过（稍后手动配置）")
+    lines.append(f"  [{n}] Skip (configure manually later)")
     for line in lines:
         print(line)
     while True:
-        raw = prompt_fn("选择 provider 编号: ").strip()
+        raw = prompt_fn("Select a provider number: ").strip()
         if raw.isdigit() and int(raw) in idx:
             return idx[int(raw)]
-        print(f"  无效，请输入 1-{n}")
+        print(f"  Invalid — enter a number 1-{n}")
 
 
 def _choose_model(prompt_fn, p: ProviderInfo) -> str:
     if not p.models:
-        return prompt_fn("输入模型名: ").strip()
+        return prompt_fn("Model name: ").strip()
     for i, m in enumerate(p.models, 1):
         star = " *" if m == p.default_model else ""
         print(f"  [{i}] {m}{star}")
-    raw = prompt_fn("选择模型（回车=默认）: ").strip()
+    raw = prompt_fn("Pick a model (Enter = default): ").strip()
     if raw == "" or not raw.isdigit():
         return p.default_model
     i = int(raw) - 1
@@ -190,18 +190,18 @@ def _verify_and_probe(p: ProviderInfo, api_key: str, model: str, base_url: str) 
     except Exception as e:
         msg = str(e).lower()
         if any(k in msg for k in ("authentication", "401", "unauthorized", "api key")):
-            return (False, f"API key 无效或已过期: {e}", 0)
+            return (False, f"API key invalid or expired: {e}", 0)
         if any(k in msg for k in ("connect", "timeout", "refused", "unreachable")):
-            return (False, f"无法连接到 {base_url}，请检查网络: {e}", 0)
+            return (False, f"Cannot reach {base_url} — check your network: {e}", 0)
         if any(k in msg for k in ("404", "not found", "model")):
-            return (False, f"模型 {model} 不可用: {e}", 0)
-        return (False, f"验证失败: {type(e).__name__}: {e}", 0)
+            return (False, f"Model {model} unavailable: {e}", 0)
+        return (False, f"Verification failed: {type(e).__name__}: {e}", 0)
     # Verify passed — best-effort probe for context window size. Never raises.
     from coderio.llm.probe import probe_context_limit
 
     context_limit = probe_context_limit(p.kind, base_url, api_key, model)
-    suffix = f"（检测到 {context_limit // 1000}K 上下文窗口）" if context_limit > 0 else ""
-    return (True, f"验证成功{suffix}", context_limit)
+    suffix = f" (context window: {context_limit // 1000}K detected)" if context_limit > 0 else ""
+    return (True, f"Verified{suffix}", context_limit)
 
 
 # Back-compat shim: older call sites/tests may still import _verify_key.
@@ -212,44 +212,44 @@ def _verify_key(p: ProviderInfo, api_key: str, model: str, base_url: str) -> tup
 
 def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> OnboardingResult | None:
     """Run the interactive wizard. Returns None if user skips."""
-    print("检测到尚未配置 API key，启动配置向导：")
+    print("No API key configured yet — starting setup wizard:")
     choice = _menu(prompt_fn)
     if choice == _SKIP:
-        print("已跳过。稍后可编辑 ~/.coderio/config.toml 手动配置。")
+        print("Skipped. You can edit ~/.coderio/config.toml manually later.")
         return None
     p = choice
     base_url = p.base_url
     if p.id == "openai_custom":
-        base_url = prompt_fn("输入 base_url: ").strip()
+        base_url = prompt_fn("Base URL: ").strip()
     model = _choose_model(prompt_fn, p)
     context_limit = 0
     if p.id != "ollama":
-        print(f"  提示：{p.api_key_hint}")
+        print(f"  Hint: {p.api_key_hint}")
         api_key = password_fn().strip()
         if not api_key:
-            print("  未输入 key，已取消。")
+            print("  No key entered — cancelled.")
             return None
         # Verify the key works before saving — catches typos, wrong endpoints,
         # expired keys at config time instead of on first message in the TUI.
         # On success, also probe the model's context window so compaction uses
         # the real threshold (256K for step-3.7-flash, 200K for claude, etc).
-        print("  正在验证连接...")
+        print("  Verifying connection...")
         ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
         if not ok:
-            print(f"  ❌ {msg}")
-            retry = prompt_fn("  重新输入 key？(回车=重试, n=跳过): ").strip().lower()
+            print(f"  X {msg}")
+            retry = prompt_fn("  Re-enter key? (Enter = retry, n = skip): ").strip().lower()
             if retry == "n":
                 return None
             api_key = password_fn().strip()
             if not api_key:
                 return None
-            print("  正在验证连接...")
+            print("  Verifying connection...")
             ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
             if not ok:
                 print(f"  ❌ {msg}")
-                print("  仍验证失败。配置已跳过，请稍后检查配置。")
+                print("  Verification still failing. Setup skipped — check your config later.")
                 return None
-        print(f"  ✅ {msg}")
+        print(f"  OK {msg}")
     else:
         api_key = "ollama"  # Ollama doesn't need a key
     write_credentials({p.id: api_key}, creds_file)
@@ -266,5 +266,5 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
     if creds_file is not None:
         config_path = creds_file.parent / "config.toml"
         _save_to_config(result, config_path)
-    print("  配置完成！")
+    print("  Setup complete!")
     return result

@@ -149,6 +149,11 @@ _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     # find starting at / with -delete: deletes every match under root.
     # `find / -name x -delete` etc. — any find rooted at / ending in -delete.
     (r"\bfind\s+/(?:\s|$).*?-delete\b", "find -delete starting at filesystem root"),
+    # find rooted at / whose -exec/-execdir runs rm — the audit's bypass
+    # vector: `find / -exec rm -rf {} +` deletes everything without -delete.
+    (r"\bfind\s+/(?:\s|$).*?-exec(?:dir)?\b.*\brm\b", "find -exec rm starting at filesystem root"),
+    # xargs piping into recursive rm: `echo / | xargs rm -rf`.
+    (r"\bxargs\s+(?:sudo\s+)?rm\s+-[a-zA-Z]*[rR]", "xargs piping into recursive rm"),
     # Filesystem format — destroys all data on a device.
     (r"\bmkfs(?:\.\w+)?\s", "filesystem format (destroys all data on target)"),
     # Writing to raw block devices.
@@ -294,6 +299,128 @@ _DEFAULT_ALLOWED = frozenset(
 )
 
 
+# Shell wrappers whose quoted argument is itself a shell command. When a
+# segment starts with one of these, the quoted body is unwrapped and
+# re-checked recursively — `sh -c "rm -rf /"` is an rm, not a sh.
+# Shell separators that start a NEW command. Quoted separators are not
+# honored by this naive split — over-splitting only makes us check shorter
+# fragments, which fails SAFE (may over-block a fragment, never under-block).
+_SEGMENT_SPLIT_RE = re.compile("&&|\\|\\||[;|&]|\r\n|\n")
+
+
+# Shells whose "-c/--command" (or cmd's /c) argument is itself a command to
+# re-check. Token-based parsing handles merged short flags (bash -lc) and
+# cmd's slash-style flags — neither survives a regex approach cleanly
+# (2026-08-28 adversarial review findings #4/#5).
+_WRAPPER_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "powershell", "pwsh", "cmd"}
+
+
+def _unwrap_wrapper(seg: str) -> str | None:
+    """If ``seg`` is a shell wrapper (``bash -lc "..."``, ``cmd /c ...``),
+    return everything after the -c/--command//c flag; else None."""
+    tokens = seg.split()
+    if not tokens:
+        return None
+    shell = tokens[0].lower().strip("\"'") if len(tokens[0]) > 1 else tokens[0]
+    if shell not in _WRAPPER_SHELLS:
+        return None
+    for j in range(1, len(tokens)):
+        t = tokens[j].lower()
+        if shell == "cmd":
+            if t in ("/c", "/k"):
+                inner = " ".join(tokens[j + 1 :]).strip().strip("\"'")
+                return inner or None
+        else:
+            # -c / --command / merged short flags ending in c (bash -lc)
+            if t in ("-c", "--command") or (t.startswith("-") and t.endswith("c") and len(t) > 2 and "w" not in t):
+                # strip the wrapping quotes: '"rm -rf /"' must become a
+                # command whose first token _check_recursive_rm recognizes
+                inner = " ".join(tokens[j + 1 :]).strip().strip("\"'")
+                return inner or None
+    return None
+
+
+def _iter_shell_segments(command: str) -> list[str]:
+    """Split a command into segments at shell separators, unwrapping one
+    level of ``sh -c "..."``-style wrappers recursively.
+
+    - ``cmd1 && cmd2 | cmd3`` → [cmd1, cmd2, cmd3]
+    - ``sh -c "rm -rf /"``   → the inner ``rm -rf /`` (plus the sh wrapper)
+
+    Over-splitting inside quotes fails SAFE: a fragment is still checked
+    against every pattern. KNOWN LIMIT: quoted fragments are split too, so
+    a command like sh -c "'rm' -rf /" gets its quotes stripped and the
+    inner command's first token may still carry a stray quote character
+    (token de-quoting is best-effort) — this check is anti-footgun, not
+    anti-obfuscation.
+    """
+    segments: list[str] = []
+
+    def _walk(cmd: str) -> None:
+        for raw in _SEGMENT_SPLIT_RE.split(cmd):
+            seg = raw.strip()
+            if not seg:
+                continue
+            inner = _unwrap_wrapper(seg)
+            if inner is not None:
+                _walk(inner)
+                continue
+            segments.append(seg)
+
+    _walk(command)
+    return segments
+
+
+def _check_recursive_windows_delete(command: str) -> str | None:
+    """Windows counterparts of _check_recursive_rm (2026-08-28 audit: the
+    blacklist had no PowerShell/cmd destructive patterns).
+
+    Catches:
+    - ``Remove-Item -Recurse ...`` aimed at dangerous targets (case-insensitive)
+    - ``rd /s ...`` / ``rmdir /s ...`` (cmd's recursive delete)
+
+    The dangerous-target set mirrors the rm check: drive roots, ~, globs.
+    """
+    tokens = command.split()
+    # Strip quotes per token: inside a -Command wrapper the whole payload is
+    # one quoted string, so tokens arrive like '"remove-item' — the quote
+    # must not hide the cmdlet from detection.
+    low_tokens = [t.lower().strip("\"'") for t in tokens]
+
+    # Remove-Item -Recurse (flag may appear in any position, case-insensitive;
+    # -Force is not required for the destructive part). Aliases rm/del/erase
+    # and the flag prefix -r/-rec also bind to -Recurse in PowerShell.
+    delete_aliases = {"remove-item", "ri", "rm", "del", "erase"}
+    if any(t in delete_aliases for t in low_tokens):
+        has_recurse = any(t.startswith("-") and t.lstrip("-").startswith("r") for t in low_tokens)
+        if has_recurse:
+            args = [t for t, lt in zip(tokens, low_tokens) if not lt.startswith("-")]
+            dangerous = any(
+                a.lower().rstrip("\\/") in ("c:", "c:\\", "\\\\", "~", "*")
+                or a.lower().startswith(("c:\\", "c:/", "~", "*"))
+                or a == "*"
+                for a in args
+            )
+            if dangerous:
+                return "PowerShell recursive delete of system/home directory (Remove-Item -Recurse)"
+
+    # cmd builtins: rd /s, rmdir /s — recursive directory removal.
+    # Dangerous-target filter MIRRORS the rm/Remove-Item checks (audit finding
+    # #7: an unfiltered rd /s hard-blocked legitimate build cleanup like
+    # `rd /s /q .\build`). Relative targets pass; roots/home block.
+    if low_tokens and low_tokens[0] in ("rd", "rmdir"):
+        if "/s" in low_tokens:
+            args = [t for t, lt in zip(tokens, low_tokens) if not lt.startswith("/") and not lt.startswith("-")]
+            dangerous = any(
+                a.lower().rstrip("\\/") in ("c:", "~") or a.lower().startswith(("c:\\", "\\\\")) or a in ("/", "\\")
+                for a in args
+            )
+            if dangerous or not args:
+                return "cmd recursive directory delete (rd /s)"
+
+    return None
+
+
 def _extract_command_name(command: str) -> str:
     """Extract the first token of a command (the executable name).
 
@@ -386,15 +513,24 @@ class CommandPolicy:
         """
         if not command:
             return None
-        # Python-level check for rm recursive flags (handles permutations
-        # that regex can't express, like rm -fr / or --recursive --force).
-        py_reason = _check_recursive_rm(command)
-        if py_reason is not None:
-            return py_reason
         self._ensure_compiled()
+        # PASS 1 — whole-string regex: some patterns (fork bomb) span shell
+        # separators and would be destroyed by segment splitting. Never split
+        # before this pass.
         for pattern, reason in self._compiled:
             if pattern.search(command):
                 return reason
+        # PASS 2 — per-segment command-name checks (rm / PowerShell delete):
+        # a separator starts a NEW command whose first token is meaningful
+        # again (`echo / | xargs rm -rf` has xargs as a segment head — the
+        # whole-string check never saw the rm as a command name).
+        for segment in _iter_shell_segments(command):
+            py_reason = _check_recursive_rm(segment)
+            if py_reason is not None:
+                return py_reason
+            win_reason = _check_recursive_windows_delete(segment)
+            if win_reason is not None:
+                return win_reason
         return None
 
     def check_whitelist(self, command: str) -> str | None:

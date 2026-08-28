@@ -403,3 +403,44 @@ def test_blacklist_chmod_mode_before_flag():
     assert p.check_command("chmod 777 -R /home") is not None
     # Normal chmod should not be blocked.
     assert p.check_command("chmod -R 755 ./deploy") is None
+
+
+# ------------------------------------------------- adversarial bypass vectors
+# 2026-08-28 audit: 8 real bypass vectors against the OLD first-token-only rm
+# check. All must be BLOCKED now (segment split + wrapper unwrap + PowerShell
+# patterns). `python -c "shutil.rmtree(...)"` is deliberately NOT in this
+# list — arbitrary-language code is a documented boundary (anti-footgun, not
+# anti-adversary).
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        'sh -c "rm -rf /"',
+        'bash -c "rm -rf /"',
+        "echo / | xargs rm -rf",
+        "find / -exec rm -rf {} +",
+        "find / -name '*.log' -execdir rm -rf {} +",
+        "Remove-Item -Recurse -Force C:\\",
+        "Remove-Item -recurse *",
+        r'powershell -Command "Remove-Item -Recurse -Force C:\Users"',
+        "rd /s /q C:\\",
+        "echo hi\nrm -rf /",
+        "cd /tmp\nrm -rf /",
+        "echo hi\r\nrm -rf /",
+    ],
+)
+def test_adversarial_bypass_vectors_blocked(cmd):
+    reason = CommandPolicy.default().check_command(cmd)
+    assert reason is not None, f"bypass vector NOT blocked: {cmd!r}"
+
+
+def test_safe_pipelines_still_pass():
+    """The segment split must not break legitimate pipelines."""
+    assert CommandPolicy.default().check_command("cat log.txt | grep ERROR | head -5") is None
+    assert CommandPolicy.default().check_command("ls -la && echo done") is None
+    assert CommandPolicy.default().check_command("pytest -q; echo finished") is None
+    assert CommandPolicy.default().check_command("git log | head") is None
+
+
+def test_wrapper_recursion_depth():
+    """Nested wrappers unwrap fully: sh -c bash -c 'rm -rf /' is blocked."""
+    assert CommandPolicy.default().check_command("sh -c \"bash -c 'rm -rf /'\"") is not None

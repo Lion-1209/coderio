@@ -67,9 +67,11 @@ jobs:
 
       - name: Audit dependencies for known vulnerabilities
         # Scans installed packages against the PyPI advisory database.
-        # Non-blocking (continue-on-error) — reports issues without failing CI.
+        # BLOCKING since 2026-08-28 (audit finding: continue-on-error made the
+        # scan decorative — known CVEs could never turn CI red). If a flagged
+        # vuln is a false positive / unfixable, add an explicit --ignore-vuln
+        # with a comment rather than re-adding continue-on-error.
         shell: bash
-        continue-on-error: true
         run: |
           uv pip install pip-audit
           uv run pip-audit

@@ -41,7 +41,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
     """
 
     BINDINGS = [
-        Binding("escape", "cancel", "取消", show=True),
+        Binding("escape", "cancel", "Cancel", show=True),
     ]
 
     def __init__(self) -> None:
@@ -74,7 +74,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard-box"):
-            yield Static("[bold magenta]coderio 配置向导[/bold magenta]", id="onboard-title")
+            yield Static("[bold magenta]coderio Setup Wizard[/bold magenta]", id="onboard-title")
             yield Static("", id="onboard-hint")
             yield ListView(id="onboard-list")
             yield Input(id="onboard-input")
@@ -102,7 +102,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
             self._show_provider_step()
 
     def _show_action_step(self) -> None:
-        """Step 0 (only when profiles exist): choose 新建 or 修改 an existing one.
+        """Step 0 (only when profiles exist): choose "create new" or "edit" an existing one.
 
         One row to create a new profile, then one row per existing profile (with
         provider/model as a dim subtitle) to edit it. This is the /setup entry
@@ -110,15 +110,15 @@ class OnboardingScreen(ModalScreen[dict | None]):
         """
         self._step = "action"
         self.query_one("#onboard-input", Input).visible = False
-        self.query_one("#onboard-hint").update("选择操作（↑↓ · Enter 确认 · Esc 取消）")
+        self.query_one("#onboard-hint").update("Choose an action (Up/Down · Enter to confirm · Esc to cancel)")
         lv = self.query_one("#onboard-list", ListView)
         lv.display = True
         lv.clear()
         self._action_items: list = []  # None=new, else the Profile to edit
-        lv.append(ListItem(Static("  [green]➕[/green]  新建配置")))
+        lv.append(ListItem(Static("  [green]➕[/green]  New configuration")))
         self._action_items.append(None)
         for p in self._existing_profiles:
-            lv.append(ListItem(Static(f"  [yellow]✎[/yellow]  修改  {p.name}  [dim]{p.provider_id} · {p.model}[/dim]")))
+            lv.append(ListItem(Static(f"  [yellow]✎[/yellow]  Edit  {p.name}  [dim]{p.provider_id} · {p.model}[/dim]")))
             self._action_items.append(p)
         try:
             lv.index = 0
@@ -174,8 +174,8 @@ class OnboardingScreen(ModalScreen[dict | None]):
         already have a saved key are marked ✓."""
         self._step = "provider"
         configured_count = len(self._configured)
-        hint = "选择模型 provider（↑↓ 选择 · Enter 确认 · Esc 取消）" + (
-            f"   [green]{configured_count} 个已配置[/green]" if configured_count else ""
+        hint = "Select a provider (Up/Down · Enter to confirm · Esc to cancel)" + (
+            f"   [green]{configured_count} configured[/green]" if configured_count else ""
         )
         self.query_one("#onboard-hint").update(hint)
         self.query_one("#onboard-input", Input).visible = False
@@ -186,14 +186,14 @@ class OnboardingScreen(ModalScreen[dict | None]):
 
         # Build a flat list with group labels. Each item is a real provider.
         groups = [
-            ("订阅制", [p for p in self._providers if p.plan]),
+            ("Subscription", [p for p in self._providers if p.plan]),
             (
-                "国内直连",
+                "China direct",
                 [p for p in self._providers if not p.plan and p.id in ("bigmodel_api", "stepfun_api")],
             ),
-            ("国际", [p for p in self._providers if p.id in ("openai", "anthropic")]),
-            ("本地", [p for p in self._providers if p.id == "ollama"]),
-            ("自定义", [p for p in self._providers if p.id == "openai_custom"]),
+            ("International", [p for p in self._providers if p.id in ("openai", "anthropic")]),
+            ("Local", [p for p in self._providers if p.id == "ollama"]),
+            ("Custom", [p for p in self._providers if p.id == "openai_custom"]),
         ]
         for group_name, providers in groups:
             for p in providers:
@@ -214,7 +214,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
             # No preset models (ollama/custom) — text input
             self._step = "model_input"
             self.query_one("#onboard-list", ListView).display = False
-            self.query_one("#onboard-hint").update("输入模型名（例如 qwen2.5-coder / gpt-4o）：")
+            self.query_one("#onboard-hint").update("Enter model name (e.g. qwen2.5-coder / gpt-4o):")
             inp = self.query_one("#onboard-input", Input)
             inp.visible = True
             inp.password = False
@@ -239,14 +239,14 @@ class OnboardingScreen(ModalScreen[dict | None]):
             lv.index = start_idx
         except Exception:
             pass
-        self.query_one("#onboard-hint").update(f"选择模型（{p.label}）— ★ = 推荐（↑↓ · Enter）")
+        self.query_one("#onboard-hint").update(f"Pick a model ({p.label}) — star = recommended (Up/Down · Enter)")
         lv.focus()
 
     def _show_base_url_step(self) -> None:
         """Step 2b: base_url input (openai_custom only)."""
         self._step = "base_url"
         self.query_one("#onboard-list", ListView).display = False
-        self.query_one("#onboard-hint").update("输入 base_url（例如 https://api.example.com/v1）：")
+        self.query_one("#onboard-hint").update("Enter base URL (e.g. https://api.example.com/v1):")
         inp = self.query_one("#onboard-input", Input)
         inp.visible = True
         inp.password = False
@@ -268,9 +268,11 @@ class OnboardingScreen(ModalScreen[dict | None]):
 
             existing = get_key(p.id) or ""
             self._api_key = existing  # carry over until the user types a new one
-            self.query_one("#onboard-hint").update(f"输入新 API key（留空保留现有 key）— {p.api_key_hint}：")
+            self.query_one("#onboard-hint").update(
+                f"Enter a new API key (leave empty to keep the current one) — {p.api_key_hint}:"
+            )
         else:
-            self.query_one("#onboard-hint").update(f"输入 API key（{p.api_key_hint}）：")
+            self.query_one("#onboard-hint").update(f"Enter API key ({p.api_key_hint}):")
         inp = self.query_one("#onboard-input", Input)
         inp.visible = True
         inp.password = True  # masked — shows dots
@@ -293,13 +295,15 @@ class OnboardingScreen(ModalScreen[dict | None]):
         # Editing: show the current name; new: default to the provider label.
         inp.value = self._profile_name or p.label
         inp.focus()
-        self.query_one("#onboard-hint").update("给这套配置起个名字（回车确认，稍后可用 /profile 切换）：")
+        self.query_one("#onboard-hint").update(
+            "Name this configuration (Enter to confirm; switch later with /profile):"
+        )
 
     def _start_verification(self) -> None:
         """Step 4: verify the key via a minimal API request + probe context_limit."""
         self._step = "verifying"
         self.query_one("#onboard-input", Input).visible = False
-        self.query_one("#onboard-hint").update("[bold cyan]正在验证连接...[/bold cyan]")
+        self.query_one("#onboard-hint").update("[bold cyan]Verifying connection...[/bold cyan]")
 
         def _verify():
             from coderio.cli.onboarding import _verify_and_probe
@@ -324,7 +328,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         else:
             self.query_one("#onboard-status").update(f"[red]❌ {msg}[/red]")
             self._step = "key"
-            self.query_one("#onboard-hint").update("验证失败，重新输入 API key（或 Esc 取消）：")
+            self.query_one("#onboard-hint").update("Verification failed — re-enter the API key (or Esc to cancel):")
             inp = self.query_one("#onboard-input", Input)
             inp.password = True
             inp.visible = True
@@ -351,7 +355,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
         config_path = creds_path.parent / "config.toml"
         name = self._profile_name or self._chosen_provider.label
         _save_profile_to_config(result, name, config_path)
-        self.query_one("#onboard-status").update("[green]配置完成！[/green]")
+        self.query_one("#onboard-status").update("[green]Setup complete![/green]")
         self.set_timer(
             0.8,
             lambda: self.dismiss(
@@ -408,14 +412,14 @@ class OnboardingScreen(ModalScreen[dict | None]):
                 self._base_url = val
                 self._show_model_step()
             else:
-                self.query_one("#onboard-status").update("[red]请输入 base_url[/red]")
+                self.query_one("#onboard-status").update("[red]Please enter a base URL[/red]")
         elif self._step == "model_input":
             if val:
                 self._chosen_model = val
                 self.query_one("#onboard-status").update("")
                 self._show_key_step()
             else:
-                self.query_one("#onboard-status").update("[red]请输入模型名[/red]")
+                self.query_one("#onboard-status").update("[red]Please enter a model name[/red]")
         elif self._step == "key":
             if val:
                 self._api_key = val
@@ -427,11 +431,11 @@ class OnboardingScreen(ModalScreen[dict | None]):
                 self.query_one("#onboard-status").update("")
                 self._show_name_step()
             else:
-                self.query_one("#onboard-status").update("[red]请输入 API key[/red]")
+                self.query_one("#onboard-status").update("[red]Please enter an API key[/red]")
         elif self._step == "name":
             self._profile_name = val or self._chosen_provider.label
             self.query_one("#onboard-input", Input).visible = False
-            self.query_one("#onboard-hint").update("[bold cyan]正在保存...[/bold cyan]")
+            self.query_one("#onboard-hint").update("[bold cyan]Saving...[/bold cyan]")
             self._finish()
 
     def action_cancel(self) -> None:

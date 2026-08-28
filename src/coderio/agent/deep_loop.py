@@ -555,8 +555,15 @@ def _build_inputs(checkpointer, user_input: str | list[dict[str, Any]], session:
     return {"messages": _build_history_messages(session.messages)}
 
 
-def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen_ids, turn_writes):
-    """Drive the deepagents graph with three stream modes. Returns final text."""
+def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen_ids, turn_writes, should_abort=None):
+    """Drive the deepagents graph with three stream modes. Returns final text.
+
+    ``should_abort``: optional zero-arg callable, polled between stream chunks
+    (cost: one call per chunk). Returning True raises InterruptedError so the
+    TUI's Esc/interrupt actually stops the ENGINE mid-turn — before this was
+    wired up, the TUI's is_interrupted flag had no engine-side consumer and
+    interrupting relied entirely on worker.cancel() semantics (audit
+    2026-08-28, finding C3: graceful interrupt was dead code)."""
     config = {
         "recursion_limit": recursion_limit,
         "configurable": {"thread_id": thread_id},
@@ -569,6 +576,8 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
     # not real backpressure.
     chunk_iter = iter(agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]))
     while True:
+        if should_abort is not None and should_abort():
+            raise InterruptedError("interrupted by user")
         try:
             mode, event = next(chunk_iter)
         except StopIteration:
@@ -838,9 +847,30 @@ def run_deep_agent(
         inputs = _build_inputs(checkpointer, user_input, session)
         if hasattr(stream, "on_step_start"):
             stream.on_step_start()
+        # Bridge the stream handler's interrupt flag into the stream loop:
+        # Esc sets it, the loop raises InterruptedError at the next chunk.
+        abort_hook = getattr(stream, "is_interrupted", None)
+        abort = (lambda: bool(abort_hook())) if callable(abort_hook) else None
         final_text = _run_stream(
-            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes
+            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes, abort
         )
+    except InterruptedError:
+        # Esc/interrupt: the graph may have stopped right after a model turn
+        # emitted tool_calls but BEFORE the tool node completed — resuming
+        # from that checkpoint next turn would replay a dangling tool_calls
+        # state (provider 400 or surprise re-execution). Drop the thread's
+        # checkpoint: the next turn falls back to full session history, which
+        # is always consistent (audit finding #9).
+        if checkpointer is not None:
+            try:
+                checkpointer.delete_thread(thread_id)
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                _log.warning("checkpointer.delete_thread failed after interrupt")
+        # Interrupt must still surface the file-change summary (audit #10):
+        # the user needs to know what the agent already changed.
+        if hasattr(stream, "on_turn_end"):
+            stream.on_turn_end(_turn_writes)
+        raise
     finally:
         if _db_conn is not None:
             try:
@@ -897,15 +927,21 @@ def _try_create_checkpointer(session: Session):
         db_path = session.path.parent / f"{session.id}.sqlite"
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
     except ImportError:
+        _log.warning("langgraph-checkpoint-sqlite not installed — no graph state persistence")
         return None, None
-    except Exception:
+    except Exception as e:
+        # Silent None was an audit finding (2026-08-28): without a checkpointer
+        # every turn replays the FULL session history — a linearly growing
+        # cost the user can't see. Say why it degraded.
+        _log.warning("checkpointer unavailable (%s: %s) — turns will replay full history", type(e).__name__, e)
         return None, None
     # conn is now open. If SqliteSaver() or setup() fails, close it.
     try:
         checkpointer = SqliteSaver(conn)
         checkpointer.setup()
         return checkpointer, conn
-    except Exception:
+    except Exception as e:
+        _log.warning("checkpointer setup failed (%s) — turns will replay full history", e)
         try:
             conn.close()
         except Exception:  # noqa: S110

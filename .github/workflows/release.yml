@@ -28,7 +28,18 @@ jobs:
   # workflow covers pushes/PRs, but a tag could be cut from a commit that
   # predates a fix; this gate makes the release itself fail loudly instead.
   test:
-    runs-on: ubuntu-latest
+    # Runs on ubuntu AND windows: windows-latest is the priority platform and
+    # a tag could otherwise ship a Windows-only regression (2026-08-28 audit).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Mirror ci.yml: Windows runners default to cp1252 and CJK output
+      # crashes with UnicodeEncodeError (audit finding #11).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -94,15 +105,30 @@ jobs:
           /tmp/sdist-test-venv/bin/coderio --help
 
       - name: Create GitHub Release + attach artifacts
+        # Restored (2026-08-28 audit #3): the artifact refactor
+        # accidentally dropped Release creation while the header still
+        # promised it. dist/ is still in this job's workspace; the publish
+        # job downloads the same artifacts separately.
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          # v3 treats the whole input as ONE glob — space-separated patterns
-          # silently match nothing (v0.4.3/v0.4.4 shipped empty assets while
-          # the step stayed green). Multiline = one pattern per line.
           files: |
             dist/*.whl
             dist/*.tar.gz
+
+      - name: Upload verified artifacts for publishing
+        # Pass the EXACT artifacts that were verified in the clean venvs to
+        # the publish job — the old flow REBUILT in publish-pypi, so PyPI
+        # could receive a different byte stream than the one verified above
+        # (2026-08-28 audit: non-deterministic build gap).
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 3
 
   publish-pypi:
     # PyPI via Trusted Publishing (OIDC) — no API token to manage or leak.
@@ -113,14 +139,13 @@ jobs:
     permissions:
       id-token: write  # OIDC token for Trusted Publishing
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Download verified artifacts
+        # No rebuild: publish EXACTLY the wheel/sdist verified in the release
+        # job (2026-08-28 audit fix). No checkout needed either.
+        uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-      - name: Build (same commit as the verified artifacts)
-        run: |
-          pip install build
-          python -m build
+          name: dist
+          path: dist
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

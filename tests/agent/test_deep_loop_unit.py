@@ -452,3 +452,46 @@ def test_win_shell_backend_existing_workspace_runs_normally(tmp_path):
     result = backend.execute("echo workspace-ok")
     out = getattr(result, "output", "") or ""
     assert "workspace-ok" in out, f"existing workspace should run normally, got: {out!r}"
+
+
+def test_run_stream_aborts_midstream_when_should_abort_fires():
+    """P1-5: wire the TUI's is_interrupted flag into the engine. should_abort
+    returning True must raise InterruptedError at the next chunk boundary —
+    the stream stops pulling before draining, and the caller sees the
+    exception (Esc actually stops the engine instead of relying on
+    worker.cancel() semantics)."""
+    import pytest
+
+    from coderio.agent.deep_loop import _run_stream
+    from coderio.agent.stream import NullStream
+
+    seen: list[int] = []
+
+    class FakeAgent:
+        def stream(self, *a, **k):
+            for i in range(100):
+                seen.append(i)
+                yield ("custom", {"type": f"m{i}"})
+
+    def abort() -> bool:
+        return len(seen) >= 3  # abort once 3 chunks are out
+
+    with pytest.raises(InterruptedError):
+        _run_stream(FakeAgent(), {}, "t", 50, NullStream(), None, set(), [], abort)
+    assert len(seen) == 3, f"loop should stop at the abort boundary, got {len(seen)}"
+
+
+def test_run_stream_runs_to_completion_without_abort():
+    from coderio.agent.deep_loop import _run_stream
+    from coderio.agent.stream import NullStream
+
+    seen: list[int] = []
+
+    class FakeAgent:
+        def stream(self, *a, **k):
+            for i in range(5):
+                seen.append(i)
+                yield ("custom", {"type": f"m{i}"})
+
+    _run_stream(FakeAgent(), {}, "t", 50, NullStream(), None, set(), [], None)
+    assert seen == [0, 1, 2, 3, 4]
