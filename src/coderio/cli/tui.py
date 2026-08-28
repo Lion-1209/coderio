@@ -47,20 +47,25 @@ class CoderioTUI(App):
     Screen { layout: vertical; }
     #history { border: round $accent; height: 1fr; min-height: 10; padding: 0 1; }
     #history Static { height: auto; }
-    #input-bar { height: auto; dock: bottom; border-top: solid $accent; }
-    #input-bar Input { border: none; }
-    #status-row { height: auto; }
-    #status-row StatusBar { width: 1fr; }
-    /* interrupt-btn + send-btn live in #input-row, ALWAYS rendered (zcode
-       style: the send slot morphs ➤ → ⏸/▶ while running; ⏹ appears only
-       while running via -visible). The row is pinned to EXACTLY one line —
-       Input included — so the buttons sit bottom-right ON the input line
-       itself, flush with the input-bar's bottom edge, with no leftover rows
-       below: the old auto-height row let the 3-row Input stretch the line,
-       leaving the button top-aligned with a black strip under it (user
-       feedback 2026-08-27: "占住右上角、下方还有黑色区域"). */
-    #input-row { height: 1; }
-    #input-row Input { width: 1fr; height: 1; border: none; padding: 0; }
+    /* INPUT PANEL — "floating on the surface" (user spec 2026-08-28):
+       ONE seamless rounded canvas. The status text and the send/stop
+       buttons are painted DIRECTLY ON the panel — no element carries its
+       own background band, so nothing reads as a separate stacked "row".
+       Panel padding gives the border breathing room on BOTH sides
+       (symmetric 2 columns — the old 1-column padding let the send
+       button's tint sit flush against the right border and visually eat
+       it). */
+    #input-panel {
+        height: auto; dock: bottom; margin-bottom: 1;
+        border: round $accent; padding: 0 2;
+    }
+    #input-panel Input { border: none; background: transparent; padding: 0; }
+    /* Toolbar row is transparent: status + buttons float on the panel. */
+    #input-toolbar { height: 1; background: transparent; }
+    #input-toolbar StatusBar {
+        width: 1fr; height: 1; padding: 0;
+        background: transparent;
+    }
     #interrupt-btn,
     #send-btn {
         width: auto; min-width: 4; height: 1; padding: 0 1;
@@ -185,27 +190,22 @@ class CoderioTUI(App):
         from coderio.cli.commands import slash_completions, slash_descriptions
 
         yield VerticalScroll(id="history")
-        # input-bar holds the CommandMenu + StatusBar + ConfirmMenu + input row.
-        # The send/stop controls live IN THE INPUT ROW permanently (zcode
-        # style): idle shows "➤ 发送", running morphs the same slot to
-        # "⏸/▶" with ⏹ beside it. The earlier status-row buttons only
-        # materialized mid-stream — controls that pop in and out read as
-        # broken (user feedback 2026-08-27). The bar is dock:bottom; #history
-        # is 1fr and shrinks to fit.
-        with Vertical(id="input-bar"):
+        # INPUT PANEL (replicates the ZCode app's input box, 2026-08-28):
+        # one rounded panel = text area on top + a one-row TOOLBAR below
+        # (status left, send/stop right). The buttons are toolbar members —
+        # never squeezed into the text line, so no alignment gaps, no dead
+        # black strips, and the text area keeps its natural height.
+        with Vertical(id="input-panel"):
             yield CommandMenu(slash_completions(self._extra_completions), slash_descriptions())
-            with Horizontal(id="status-row"):
-                yield StatusBar()
+            yield Input(
+                placeholder="输入消息, /help 看命令, Esc 中断任务",
+                id="msg",
+            )
             # Vertical permission-confirmation menu (zcode/codex style): floats
-            # above the input box, ↑↓ to choose, Enter to confirm. Replaces the
-            # old three-button #confirm-row whose Button borders inflated the
-            # layout and left a black gap.
+            # above the input, ↑↓ to choose, Enter to confirm.
             yield ConfirmMenu()
-            with Horizontal(id="input-row"):
-                yield Input(
-                    placeholder="输入消息, /help 看命令, Esc 中断任务",
-                    id="msg",
-                )
+            with Horizontal(id="input-toolbar"):
+                yield StatusBar()
                 yield Button("⏹", id="interrupt-btn", variant="error", tooltip="中断本轮任务 (Esc)")
                 yield Button("➤", id="send-btn", variant="primary", tooltip="发送 (Enter) / 运行中: 暂停⏸·继续▶")
 
