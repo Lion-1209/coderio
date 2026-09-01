@@ -1011,20 +1011,6 @@ class CoderioTUI(App):
             flat = flat[:160] + "…"
         self._render_q.append(("static", f"  ↳ {name}: {flat}" if flat else f"  ↳ {name}: (空)", "dim"))
 
-    def on_truncated(self, stop_reason: str) -> None:
-        self._flush_round_thinking()
-        self._flush_buffer()
-        self._render_q.append(
-            (
-                "panel",
-                Panel(
-                    Text(f"⚠ 输出被截断 (stop_reason: {stop_reason})。"),
-                    title="截断警告",
-                    border_style="yellow",
-                ),
-            )
-        )
-
     def on_harness_warn(self, message: str) -> None:
         """Escalation release: the harness allowed a sketchy answer through.
 

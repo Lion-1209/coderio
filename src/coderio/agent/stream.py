@@ -74,9 +74,6 @@ class NullStream:
     def on_thinking(self, text: str) -> None:
         pass
 
-    def on_truncated(self, stop_reason: str) -> None:
-        pass
-
     def on_harness_warn(self, message: str) -> None:
         pass
 

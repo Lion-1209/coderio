@@ -109,39 +109,6 @@ def test_missing_cli_section_uses_defaults(tmp_path):
     assert cfg.skills.repo_url == "https://github.com/Lion-1209/Lion-Skills"
 
 
-def test_missing_context_section_uses_defaults(tmp_path):
-    """A config with no [context] section gets the compaction defaults."""
-    cfg = load_config(search_from="nohome", user_dir=tmp_path)
-    assert cfg.context.enabled is True
-    assert cfg.context.trigger_ratio == 0.6
-    assert cfg.context.keep_recent == 8
-    # 200K is the conservative floor for modern models (Claude, GPT-4o, step);
-    # the real per-model value comes from probe_context_limit at setup time,
-    # stored on the Profile as context_limit.
-    assert cfg.context.model_context_limit == 200_000
-
-
-def test_parses_context_section(tmp_path):
-    """A [context] section overrides the defaults."""
-    user_cfg = tmp_path / "userhome" / "config.toml"
-    write(
-        user_cfg,
-        """
-        [context]
-        enabled = false
-        trigger_ratio = 0.8
-        keep_recent = 12
-        model_context_limit = 200000
-    """,
-    )
-    proj = tmp_path / "proj"
-    cfg = load_config(search_from=proj, user_dir=tmp_path / "userhome")
-    assert cfg.context.enabled is False
-    assert cfg.context.trigger_ratio == 0.8
-    assert cfg.context.keep_recent == 12
-    assert cfg.context.model_context_limit == 200_000
-
-
 def test_model_section_context_limit_legacy_path(tmp_path):
     """REGRESSION: the legacy [model] single-config path must also persist
     and load context_limit (probe-time discovery).

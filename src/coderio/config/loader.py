@@ -8,7 +8,6 @@ from pathlib import Path
 from coderio.config.models import (
     CliConfig,
     Config,
-    ContextConfig,
     ModelConfig,
     Profile,
     SandboxFsConfig,
@@ -79,7 +78,7 @@ def _parse_profiles(data: dict) -> list:
             continue  # incomplete profile — skip silently
         # context_limit is optional and best-effort: a missing/non-int value
         # just means "not probed yet" (0), don't raise — the runtime falls back
-        # to ContextConfig.model_context_limit.
+        # to the model_context_limit default.
         cl_raw = entry.get("context_limit", 0)
         context_limit = cl_raw if isinstance(cl_raw, int) and not isinstance(cl_raw, bool) else 0
         out.append(
@@ -152,7 +151,6 @@ def _from_dict(data: dict) -> Config:
     s = data.get("skills", {})
     se = data.get("session", {})
     cl = data.get("cli", {})
-    cx = data.get("context", {})
 
     # Validate int fields — TOML may give strings/bools if the user mis-types.
     def _int(section: dict, key: str, default: int, section_name: str) -> int:
@@ -235,12 +233,6 @@ def _from_dict(data: dict) -> Config:
             theme=cl.get("theme", cfg.cli.theme),
             show_tool_output=cl.get("show_tool_output", cfg.cli.show_tool_output),
         ),
-        context=ContextConfig(
-            enabled=cx.get("enabled", cfg.context.enabled),
-            trigger_ratio=cx.get("trigger_ratio", cfg.context.trigger_ratio),
-            keep_recent=_int(cx, "keep_recent", cfg.context.keep_recent, "context"),
-            model_context_limit=_int(cx, "model_context_limit", cfg.context.model_context_limit, "context"),
-        ),
         profiles=_parse_profiles(data),
         active_profile=_resolve_active_profile(data),
         hooks=_parse_hooks(data),
@@ -303,7 +295,6 @@ def _apply_env(cfg: Config) -> Config:
         skills=cfg.skills,
         session=cfg.session,
         cli=cfg.cli,
-        context=cfg.context,
         profiles=cfg.profiles,
         active_profile=cfg.active_profile,
         hooks=cfg.hooks,

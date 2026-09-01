@@ -170,18 +170,6 @@ class RichStream:
             shown += f"\n…({len(lines) - 3} more lines)"
         self.console.print(Text(shown, style="dim"))
 
-    def on_truncated(self, stop_reason: str) -> None:
-        self._flush_round_thinking()
-        self._stop_live()
-        self._stop_busy()
-        self.console.print(
-            Panel(
-                f"⚠ 输出被截断 (stop_reason: {stop_reason})。内容可能不完整 —— 可能需要分多次完成或调大 max_tokens。",
-                title="截断警告",
-                border_style="yellow",
-            )
-        )
-
     def on_harness_warn(self, message: str) -> None:
         self._flush_round_thinking()
         self._stop_live()

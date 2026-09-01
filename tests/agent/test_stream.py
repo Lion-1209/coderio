@@ -99,13 +99,6 @@ class TestNullStreamProtocolMethods:
     def test_on_thinking_text(self, stream: NullStream) -> None:
         assert stream.on_thinking("planning the approach...") is None
 
-    def test_on_truncated(self, stream: NullStream) -> None:
-        assert stream.on_truncated("max_tokens") is None
-
-    def test_on_truncated_other_reasons(self, stream: NullStream) -> None:
-        assert stream.on_truncated("stop_sequence") is None
-        assert stream.on_truncated("length") is None
-
     def test_on_harness_warn(self, stream: NullStream) -> None:
         assert stream.on_harness_warn("unverified write detected") is None
 
@@ -160,7 +153,6 @@ class TestNullStreamFullLifecycle:
         """The harness warn / continue / truncated paths must also be safe."""
         stream.on_step_start(step=1)
         stream.on_token("partial answer")
-        stream.on_truncated("length")
         stream.on_harness_continue("claim unverified, continuing")
         stream.on_harness_warn("retries exhausted")
         stream.on_finish()
@@ -217,7 +209,6 @@ class TestNullStreamMissingHooks:
             "on_tool_end",
             "on_finish",
             "on_thinking",
-            "on_truncated",
             "on_harness_warn",
             "on_harness_continue",
             "on_phase_change",

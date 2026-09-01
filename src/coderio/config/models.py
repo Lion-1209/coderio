@@ -146,32 +146,6 @@ class SessionConfig:
 
 
 @dataclass
-class ContextConfig:
-    """Context-window compaction settings (spec: harness phase 2).
-
-    When the provider-reported input_tokens exceeds ``trigger_ratio`` of
-    ``model_context_limit``, old messages are summarized into a single system
-    message and the most recent ``keep_recent`` are kept verbatim. Disabled
-    when ``enabled=False`` (no compaction attempts, original behavior).
-    """
-
-    enabled: bool = True
-    trigger_ratio: float = 0.6  # compact at 60% of the context window (lowered
-    # from 0.75 — a 30-read_file analysis session
-    # hit 61k tokens without triggering; 60% gives
-    # earlier, healthier compaction)
-    keep_recent: int = 8  # messages preserved verbatim at the tail
-    model_context_limit: int = 200_000  # assumed window size when the active
-    # profile has no probed context_limit.
-    # Raised from 128K (too aggressive — a
-    # 256K model was compacting at 76K) to
-    # 200K, the floor for modern models
-    # (Claude, GPT-4o, step-3.7). The real
-    # value comes from probe_context_limit
-    # at setup time, stored per-profile.
-
-
-@dataclass
 class Config:
     # All sub-config fields default to None and are populated in __post_init__.
     # The `Type = None` default is a dataclass idiom: the field IS declared as
@@ -183,7 +157,6 @@ class Config:
     skills: SkillsConfig = None  # type: ignore[assignment]
     session: SessionConfig = None  # type: ignore[assignment]
     cli: CliConfig = None  # type: ignore[assignment]
-    context: ContextConfig = None  # type: ignore[assignment]
     # Named profiles (multi-config). Empty list = legacy single-config mode:
     # build_chat_model falls through to the [model] section's 3-layer path,
     # so existing users with no profiles are unaffected.
@@ -203,8 +176,6 @@ class Config:
             object.__setattr__(self, "session", SessionConfig())
         if self.cli is None:
             object.__setattr__(self, "cli", CliConfig())
-        if self.context is None:
-            object.__setattr__(self, "context", ContextConfig())
         if self.profiles is None:
             object.__setattr__(self, "profiles", [])
         if self.hooks is None:
