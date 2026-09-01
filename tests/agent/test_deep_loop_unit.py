@@ -70,17 +70,28 @@ def test_resolve_system_prompt_passthrough_override():
     assert _resolve_system_prompt("my custom prompt", None, None) == "my custom prompt"
 
 
-def test_resolve_system_prompt_translates_bash_to_execute():
+def test_resolve_system_prompt_translates_bash_to_execute(tmp_path):
     """The default coderio prompt mentions 'bash'; deepagents' shell tool is
     'execute'. _resolve_system_prompt must translate the standalone word so the
-    model calls the tool that actually exists."""
-    sp = _resolve_system_prompt(None, None, None)
+    model calls the tool that actually exists. workdir points at an empty tmp
+    dir — otherwise the REAL repo's AGENTS.md gets injected (the feature works
+    so well it broke its own test)."""
+    sp = _resolve_system_prompt(None, None, None, workdir=tmp_path)
     assert "execute" in sp, "default prompt should reference 'execute' after translation"
     # The word 'bash' should not appear as a standalone token (it may appear
     # inside another word, but \bbash\b matches should be gone).
     import re
 
     assert not re.search(r"\bbash\b", sp), f"standalone 'bash' should be gone, got: {sp!r}"
+
+
+def test_resolve_system_prompt_injects_project_instructions(tmp_path):
+    """P2-7 wiring guard (adversarial review: removing the injection or the
+    workdir pass-through left all tests green). A repo AGENTS.md under
+    workdir MUST reach the system prompt."""
+    (tmp_path / "AGENTS.md").write_text("USE UV NOT PIP MARKER", encoding="utf-8")
+    sp = _resolve_system_prompt(None, None, None, workdir=tmp_path)
+    assert "USE UV NOT PIP MARKER" in sp, "project instructions must be injected"
 
 
 # ----------------------------------------------------- _build_extra_tools

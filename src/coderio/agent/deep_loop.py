@@ -317,11 +317,12 @@ class _WinLocalShellBackend:
         return inst
 
 
-def _resolve_system_prompt(system_prompt, skill_store, active_skills):
+def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=None):
     """Build coderio's system prompt, adapting tool names for deepagents."""
     if system_prompt is not None:
         return system_prompt
     from coderio.agent.prompts import ActiveSkills, build_system_prompt
+    from coderio.config.loader import _find_project_dir
     from coderio.skills.store import SkillStore
 
     store = skill_store or SkillStore()
@@ -333,19 +334,33 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills):
     # changes (same pattern as _BASH_TO_EXECUTE in harness_middleware.py).
     import re
 
-    return re.sub(r"\bbash\b", "execute", sp)
+    sp = re.sub(r"\bbash\b", "execute", sp)
+    # Project instruction files (AGENTS.md / CLAUDE.md) — user conventions for
+    # THIS repo, appended after coderio's own instructions (2026-08-28 audit:
+    # feature gap; multi-agent users already maintain these files).
+    from coderio.agent.project_instructions import instructions_block
+
+    # Nearest-wins: walk up from the LAUNCH dir (workdir), stopping at the
+    # project root — a monorepo subpackage's AGENTS.md beats the root's, and
+    # nothing above the root can leak in (2026-08-28 adversarial review #3).
+    sp += instructions_block(
+        search_from=workdir or Path.cwd(),
+        stop_at=_find_project_dir(workdir) if workdir else None,
+    )
+    return sp
 
 
 def _build_extra_tools(tools, skill_store, active_skills):
     """Collect coderio tools not already provided by deepagents."""
     from coderio.tools.base import to_langchain_tool as _adapt
+    from coderio.tools.taxonomy import LEGACY_ENGINE_TOOLS
 
     # These are CODERIO's own tool names (bash, todo, list_dir — the old ReAct
     # names), NOT deepagents' names (execute, write_todos, ls). We skip them
     # because deepagents already provides equivalents with its own naming.
     # The name translation between the two namespaces lives in
     # harness_middleware._to_coderio_name and _BASH_TO_EXECUTE.
-    _SKIP = frozenset({"read_file", "write_file", "edit_file", "glob", "grep", "bash", "todo", "list_dir"})
+    _SKIP = LEGACY_ENGINE_TOOLS  # tools/taxonomy.py — one registry (audit A2)
     extra: list = []
     if tools:
         for t in tools:
@@ -722,7 +737,7 @@ def run_deep_agent(
 
     session.append(Message.user(user_input))
 
-    sp = _resolve_system_prompt(system_prompt, skill_store, active_skills)
+    sp = _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=workdir)
     # HooksMiddleware OUTERMOST: PreToolUse can deny before the permission
     # prompt appears, and observes the exact args the rest of the chain sees.
     middleware: list[Any] = []

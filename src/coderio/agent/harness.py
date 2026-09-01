@@ -27,12 +27,16 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+# Tool names/categories: single source of truth in tools/taxonomy.py
+# (2026-08-28 audit A2 — six ad-hoc copies had drifted apart).
+from coderio.tools.taxonomy import LEGACY_SHELL as VERIFY_TOOL
+from coderio.tools.taxonomy import WRITE_TOOLS
+
 if TYPE_CHECKING:
     from coderio.tools.todo import TodoStore
 
 # Tools that mutate files on disk. A successful one of these creates an
 # "unverified write" that the VerifyGate watches.
-WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit"})
 
 # Read-only tools that "ground" a claim about a file — if the model cited a path
 # and one of these tools touched it, the citation is evidence-backed.
@@ -47,7 +51,6 @@ CONTENT_READ_TOOLS: frozenset[str] = frozenset({"read_file"})
 # Running a shell command counts as a verification attempt — even a failing one
 # means the agent tried to run its code, so we stop nagging. This avoids both
 # "wrote then claimed done" and infinite "it errored, keep trying" loops.
-VERIFY_TOOL: str = "bash"
 
 # After this many forced-continues a gate gives up and releases with a warning.
 _MAX_GATE_ATTEMPTS: int = 2

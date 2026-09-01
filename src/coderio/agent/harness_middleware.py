@@ -31,16 +31,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from coderio.agent._deepagents_compat import get_state_todos
 from coderio.agent.harness import Harness, HarnessState
-from coderio.tools.todo import TodoStore
 
-# deepagents tool-name mapping. deepagents uses 'execute' for shell (coderio
-# used 'bash'), and write_file/edit_file (no multi_edit). We translate so the
-# existing Harness logic works without modification.
-_DEEP_VERIFY_TOOL = "execute"
-_DEEP_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
-# deepagents' planning tool is 'write_todos' (coderio used 'todo'). The
-# CompletionGate checks for pending todos — map deepagents' todo tool too.
-_DEEP_TODO_TOOL = "write_todos"
+# Engine↔harness tool-name mapping. Single source of truth:
+# tools/taxonomy.py (2026-08-28 audit A2 — six ad-hoc copies drifted apart).
+from coderio.tools.taxonomy import to_harness_name as _to_harness_name
+from coderio.tools.todo import TodoStore
 
 # Translate "bash" → "execute" in harness injection prose. Word-boundary regex
 # (robust to prose changes) instead of a chain of literal .replace() calls that
@@ -61,11 +56,7 @@ def _stream_supports_phase(stream: Any) -> bool:
 
 def _to_coderio_name(name: str) -> str:
     """Translate a deepagents tool name to the coderio name Harness expects."""
-    if name == _DEEP_VERIFY_TOOL:
-        return "bash"
-    if name == _DEEP_TODO_TOOL:
-        return "todo"
-    return name
+    return _to_harness_name(name)
 
 
 def _result_to_text(result: Any) -> str:

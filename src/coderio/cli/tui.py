@@ -38,6 +38,8 @@ from coderio.cli.tui_widgets import (  # noqa: E402
     ConfirmMenu,
     StatusBar,
 )
+from coderio.tools.taxonomy import TASK as TASK_TOOL
+from coderio.tools.taxonomy import WRITE_TOOLS
 
 
 class CoderioTUI(App):
@@ -952,7 +954,7 @@ class CoderioTUI(App):
         # synchronously inside the tools node — the main agent blocks until it
         # finishes, which can take minutes. Without this notice the user sees
         # a frozen "执行 task(…)" with no indication that a subagent is working.
-        if name == "task":
+        if name == TASK_TOOL:
             subagent = args.get("subagent_type", "general-purpose")
             desc = args.get("description", "") or args.get("instructions", "")
             desc_short = desc.split("\n")[0][:80] if desc else ""
@@ -965,7 +967,8 @@ class CoderioTUI(App):
 
     # Tools that modify files — shown with a prominent yellow line so the user
     # always knows what changed, even in auto mode (where there's no confirmation).
-    _WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit"})
+    # From the taxonomy registry (single source of truth, audit A2).
+    _WRITE_TOOLS: frozenset[str] = WRITE_TOOLS
 
     def on_tool_end(self, name: str, result: str) -> None:
         self._set_phase("thinking")
