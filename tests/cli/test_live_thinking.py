@@ -62,7 +62,8 @@ async def test_subsequent_chunks_append_live():
         cols = list(app.query(Collapsible))
         assert len(cols) == 1  # still ONE block, not two
         # Both chunks accumulated in the round thinking buffer
-        assert "第一段" in app._round_thinking and "第二段" in app._round_thinking
+        # (agent-thread state lives in the stream controller since P2-3).
+        assert "第一段" in app._stream._round_thinking and "第二段" in app._stream._round_thinking
 
 
 @pytest.mark.asyncio
@@ -114,7 +115,7 @@ async def test_live_body_cleared_after_flush():
         app._drain_render_queue()
         await pilot.pause()
         assert app._live_think_body is None
-        assert app._round_thinking == ""
+        assert app._stream._round_thinking == ""
         # second round
         app.on_step_start()
         await pilot.pause()

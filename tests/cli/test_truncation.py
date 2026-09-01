@@ -114,7 +114,7 @@ async def test_streaming_output_appends_and_scrolls():
         buffer = ""
         for i in range(50):
             buffer += f"line {i}\n"
-            app._render_q.append(("text", buffer))
+            app._stream.render_q.append(("text", buffer))
             await asyncio.sleep(0.07)  # just past the 60ms drain interval
             await pilot.pause()
         await pilot.pause()

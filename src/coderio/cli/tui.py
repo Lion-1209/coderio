@@ -12,7 +12,7 @@ render queue drained by a main-thread timer (see _drain_render_queue).
 
 from __future__ import annotations
 
-import time
+import logging
 from typing import Any
 
 from rich.markdown import Markdown
@@ -26,6 +26,9 @@ from textual.widgets import Button, Collapsible, Input, RichLog, Static
 # Single-source version (read from pyproject.toml via importlib.metadata).
 from coderio import __version__  # noqa: E402
 
+# StreamHandler protocol + agent-thread state + render-queue drain (P2-3).
+from coderio.cli.stream_controller import ChatStreamController  # noqa: E402
+
 # OnboardingScreen, _OnboardingApp, and _run_onboarding_tui have been extracted
 # to tui_onboarding.py for modularity.
 from coderio.cli.tui_onboarding import _run_onboarding_tui  # noqa: E402
@@ -38,8 +41,8 @@ from coderio.cli.tui_widgets import (  # noqa: E402
     ConfirmMenu,
     StatusBar,
 )
-from coderio.tools.taxonomy import TASK as TASK_TOOL
-from coderio.tools.taxonomy import WRITE_TOOLS
+
+_log = logging.getLogger(__name__)
 
 
 class CoderioTUI(App):
@@ -110,69 +113,47 @@ class CoderioTUI(App):
         # Custom command completions (/name form), discovered by the caller at
         # startup — compose() runs later and has no project context of its own.
         self._extra_completions = extra_completions or []
-        # StreamHandler state
-        self.buffer = ""
-        self.usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
-        self._round_thinking = ""
-        self._round_think_start = 0.0
-        self._last_collapsible = None  # the most recent thinking Collapsible widget
+        # StreamHandler protocol + agent-thread streaming state + render queue
+        # live in the controller (P2-3); this App owns widgets and user events.
+        # Created here so tests and the engine can drive the TUI through the
+        # same StreamHandler duck-type as before (forwarders below).
+        self._stream = ChatStreamController(self)
+        # The most recent thinking Collapsible (MAIN-THREAD widget reference,
+        # used by Ctrl+O toggle and /think).
+        self._last_collapsible = None
         # Live thinking: the Static body of the IN-PROGRESS thinking block. While
-        # non-None, on_thinking appends to it in real time (the user sees thinking
-        # stream live, not dumped all at once when it ends). Set to None when a
-        # round's thinking is flushed/folded.
+        # non-None, the main thread appends to it in real time (the user sees
+        # thinking stream live, not dumped all at once when it ends). Set to None
+        # when a round's thinking is flushed/folded. MAIN-THREAD state (the
+        # controller only clears the reference from the agent thread).
         self._live_think_body: Static | None = None
-        self._live_think_chars = 0  # chars shown so far (to append only the delta)
-        # Agent-thread-local flag: has a think_start already been queued for the
-        # CURRENT round? `_live_think_body` is set by the MAIN thread 60ms later
-        # (next _drain_render_queue tick), so reading it from the agent thread is
-        # a race — within one drain window many on_thinking chunks arrive before
-        # the main thread has had a chance to mount the Collapsible, and each one
-        # would otherwise queue a SEPARATE think_start, fragmenting one continuous
-        # thinking stream into N tiny Collapsibles ("The" / "The user is" / ...).
-        # This flag is owned entirely by the agent thread (set in on_thinking,
-        # cleared in _flush_round_thinking / on_finish), so there's no race.
-        self._round_think_started: bool = False
+        # Cached StatusBar reference: query_one() is a main-thread DOM query, but
+        # the controller's callbacks run on the agent's BACKGROUND thread. Cache
+        # the widget once (on_mount, main thread) and read the plain attribute
+        # thereafter (GIL-safe from any thread).
+        self._status_bar: StatusBar | None = None
+        # Worker handle (Textual worker managing the agent turn) + UI-side
+        # running flag driving the morphing send/stop button.
+        self._agent_worker = None
+        self._is_running: bool = False
+
         # Live output: a RichLog widget for streaming the answer as it arrives.
         # RichLog is append-only — each token chunk is written once, avoiding the
         # full-widget layout recompute that Static.update(Text(full_buffer)) would
         # trigger on every batch. On finish, the RichLog is replaced by the final
         # Markdown Panel.
-        self._live_output: Static | None = None
-        self._live_output_chars = 0
-        self._live_output_last_flush: float = 0.0  # throttle: only flush >=80ms apart
-        # Cached StatusBar reference: query_one() is a main-thread DOM query, but
-        # _set_phase runs on the agent's BACKGROUND thread. Cache the widget once
-        # (on_mount, main thread) and read the plain attribute thereafter
-        # (GIL-safe from any thread).
-        self._status_bar: StatusBar | None = None
-        # Interrupt support: when the user clicks "中断" or presses Esc during
-        # an agent turn, _interrupted is set. The agent checks it between rounds
-        # (via stream.is_interrupted()) and exits gracefully. The worker ref is
-        # held so we can also call .cancel() as a backup.
-        self._interrupted: bool = False
-        self._agent_worker = None
-        self._is_running: bool = False  # True while the agent worker is active
-
-        # Inline confirmation state: when _confirm_event is non-None, the
-        # agent thread is blocked waiting for the user to allow/deny a write.
-        self._confirm_event = None
-        self._confirm_result: bool | str = False
-        self._confirm_custom_mode = False  # True when user clicked "其他"
-        # RENDER QUEUE: the agent's background thread pushes render instructions
-        # here (thread-safe deque append/popleft). A main-thread set_interval
-        # timer drains the queue and executes the instructions on the main thread.
-        # This avoids call_from_thread, whose callbacks are not reliably delivered
-        # in a real terminal. The deque + timer pattern matches the StatusBar
-        # heartbeat approach.
-        import collections
-
-        self._render_q: collections.deque = collections.deque()
-        self._live_out_widget: RichLog | None = None  # streaming output RichLog (main thread)
+        self._live_out_widget: RichLog | None = None
         self._live_rendered_len: int = 0  # chars already written to the RichLog
         # Dynamic TODO widget: mounted once on first write_todos, updated
         # in-place on subsequent calls (Claude Code style). Reset to None on
         # on_finish so the next turn gets a fresh widget.
         self._todo_widget: Static | None = None
+
+    @property
+    def usage(self) -> dict[str, int]:
+        """Turn token totals (lives in the controller since P2-3; the /cost
+        command reads this)."""
+        return self._stream.usage
 
     # ----------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -221,61 +202,26 @@ class CoderioTUI(App):
         self.set_interval(0.06, self._drain_render_queue)
 
     # ----------------------------------------------------- cross-thread confirmation
+    # The wait/result state lives in the controller (P2-3 — it is agent-thread
+    # state); this App only owns the ConfirmMenu DOM, shown/hidden from the
+    # main thread via call_from_thread.
+
     def request_confirmation(self, tool_name: str, args: dict) -> bool | str:
-        """Ask the user to allow/deny/custom-respond to a write operation.
+        """Agent thread: block until the user allows/denies/custom-responds.
 
-        Called from the AGENT's background thread. Shows an inline confirmation
-        row with three options: ✓ 允许 / ✗ 拒绝 / ✎ 其他.
-        - 允许 → True (execute the tool)
-        - 拒绝 → False (block, "Permission denied")
-        - 其他 → user types free text → str (block, but feed user's instruction
-          to the model as a tool result so it can adjust)
-
-        The "其他" mode hides the buttons and turns #msg into a custom-reply
-        input. The user types their instruction and presses Enter to submit.
+        Forwarder — see ChatStreamController.request_confirmation for the
+        three-option contract (✓ 允许 / ✗ 拒绝 / ✎ 其他): 允许 → True,
+        拒绝 → False, 其他 → str (the user's free-text instruction).
         """
-        import threading
-
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-        if len(args_str) > 120:
-            args_str = args_str[:120] + "…"
-        self._confirm_event = threading.Event()
-        self._confirm_result: bool | str = False
-        self._confirm_custom_mode = False
-
-        def _show():
-            try:
-                menu = self.query_one(ConfirmMenu)
-                menu.show(tool_name, args_str)
-            except Exception:
-                pass
-
-        def _hide():
-            try:
-                menu = self.query_one(ConfirmMenu)
-                menu.hide()
-                # Reset #msg placeholder if it was in custom mode.
-                inp = self.query_one("#msg", Input)
-                inp.placeholder = "输入消息, /help 看命令, Esc 中断任务"
-            except Exception:
-                pass
-
-        self.call_from_thread(_show)
-        self._confirm_event.wait(timeout=120)
-        self.call_from_thread(_hide)
-        self._confirm_event = None
-        self._confirm_custom_mode = False
-        return self._confirm_result
+        return self._stream.request_confirmation(tool_name, args)
 
     def _resolve_confirmation(self, result: bool | str) -> None:
         """MAIN THREAD: resolve the pending confirmation and wake the agent."""
-        self._confirm_result = result
-        if self._confirm_event is not None:
-            self._confirm_event.set()
+        self._stream.resolve_confirmation(result)
 
     def _enter_custom_mode(self) -> None:
         """MAIN THREAD: switch the input bar to custom-reply mode for '自定义回复'."""
-        self._confirm_custom_mode = True
+        self._stream.enter_custom_mode()
         try:
             # Hide the menu, turn #msg into a custom-reply input.
             self.query_one(ConfirmMenu).hide()
@@ -283,121 +229,72 @@ class CoderioTUI(App):
             inp.placeholder = "输入自定义回复，回车提交..."
             inp.value = ""
             inp.focus()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — custom-mode UI is best-effort
+            _log.debug("custom-reply mode switch failed", exc_info=True)
+
+    def _show_confirm_menu(self, tool_name: str, args_str: str) -> None:
+        """MAIN THREAD: display the inline permission menu."""
+        self.query_one(ConfirmMenu).show(tool_name, args_str)
+
+    def _hide_confirm_menu(self) -> None:
+        """MAIN THREAD: hide the menu and reset #msg's placeholder."""
+        self.query_one(ConfirmMenu).hide()
+        # Reset #msg placeholder if it was in custom mode.
+        inp = self.query_one("#msg", Input)
+        inp.placeholder = "输入消息, /help 看命令, Esc 中断任务"
 
     def _drain_render_queue(self) -> None:
         """MAIN THREAD (set_interval): drain the render queue and execute all
         pending instructions, then scroll to bottom.
 
-        Dispatch is a dict lookup (self._RENDER_DISPATCH) mapping action name
-        to a handler method. Each handler returns a scroll category:
-          - "streaming": lightweight live update → single deferred scroll.
-          - "final": new widget mounted → multi-stage delayed scroll (layout
-            passes need time to settle on large Panels).
-          - "none": no scroll trigger (clear_live, exit).
-
-        This replaces a 9-branch if/elif chain (cyclomatic complexity ~18)
-        with a flat table lookup — same behavior, far easier to extend (add a
-        new render action by adding one dict entry + one method).
+        The queue + dispatch table live in ChatStreamController (P2-3); this
+        method only runs the drain and applies the scroll strategy:
+          - "final" → multi-stage delayed scroll (large Panels need multiple
+            layout passes to settle).
+          - "streaming" → single deferred scroll — runs after this tick's
+            layout settles, without piling up timers across 60ms cycles.
         """
-        did_streaming = False
-        did_final = False
-        while self._render_q:
-            action, *args = self._render_q.popleft()
-            handler = self._RENDER_DISPATCH.get(action)
-            if handler is None:
-                continue
-            try:
-                category = handler(self, args)
-                if category == "streaming":
-                    did_streaming = True
-                elif category == "final":
-                    did_final = True
-            except Exception:
-                pass
-        # Scroll strategy: streaming = single deferred scroll; final = multi-stage
-        # delayed scroll (large Panels need multiple layout passes to settle).
+        did_streaming, did_final = self._stream.drain_ui()
         if did_final:
             try:
                 self.set_timer(0.15, self._scroll_history_end)
                 self.set_timer(0.3, self._scroll_history_end)
                 self.set_timer(0.5, self._scroll_history_end)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 — timer scheduling is best-effort
+                _log.debug("scroll timer scheduling failed", exc_info=True)
         elif did_streaming:
             try:
-                # Single deferred scroll — runs after this tick's layout settles,
-                # without piling up timers across 60ms cycles.
                 self.call_after_refresh(self._scroll_history_end)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                _log.debug("deferred scroll scheduling failed", exc_info=True)
 
-    # --- render-action handlers (each returns "streaming"|"final"|"none") ---
-    # Kept as small staticmethod-like functions so the dispatch table can
-    # reference them without constructing lambdas on every drain cycle.
-
-    @staticmethod
-    def _h_text(self, args):
-        self._render_live_output(args[0])
-        return "streaming"
-
-    @staticmethod
-    def _h_finalize(self, args):
-        self._render_finalize(*args)
-        return "final"
-
-    @staticmethod
-    def _h_think_start(self, args):
-        self._render_think_start(args[0])
-        return "streaming"
-
-    @staticmethod
-    def _h_think_update(self, args):
-        self._render_think_update(args[0])
-        return "streaming"
-
-    @staticmethod
-    def _h_think_fold(self, args):
-        self._render_think_fold(*args)
-        return "final"
-
-    @staticmethod
-    def _h_static(self, args):
-        self._add_text_main(args[0], args[1] if len(args) > 1 else "")
-        return "final"
-
-    @staticmethod
-    def _h_panel(self, args):
-        self._add_static_main(args[0])
-        return "final"
-
-    @staticmethod
-    def _h_clear_live(self, args):
+    def _clear_live_output(self) -> None:
+        """MAIN THREAD: remove the streaming RichLog (if any)."""
         if self._live_out_widget is not None:
             try:
                 self._live_out_widget.remove()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 — widget may already be detached
+                _log.debug("live output widget removal failed", exc_info=True)
             self._live_out_widget = None
             self._live_rendered_len = 0
-        return "none"
 
-    @staticmethod
-    def _h_exit(self, args):
+    def _exit_app(self) -> None:
+        """MAIN THREAD: quit the app (queued by the worker on SystemExit)."""
         self.exit()
-        return "none"
 
-    @staticmethod
-    def _h_todo_update(self, args):
+    def _render_todos(self, todos: list[dict]) -> None:
         """Render todos as a dynamic checklist in the output area (main thread).
 
         Claude Code style: a SINGLE checklist widget is mounted on first
         write_todos, then updated in-place on subsequent calls. Tool output
         (edit_file, execute, etc.) appears BELOW it. The widget stays in
         history as a record of the task's progress.
+
+        Returns the scroll category for drain_ui: "none" for an empty list
+        and for in-place updates (no new widget → no final scroll), "final"
+        when a fresh widget is mounted — matching the pre-P2-3 dynamic
+        behavior of the old _h_todo_update handler.
         """
-        todos = args[0] if args else []
         if not todos:
             return "none"
         done = sum(1 for t in todos if t.get("status") == "completed")
@@ -425,37 +322,26 @@ class CoderioTUI(App):
                 try:
                     self._todo_widget.update(panel)
                     return "none"
-                except Exception:
-                    pass  # update failed → fall through and mount a new one
+                except Exception:  # noqa: BLE001 — update failed → mount a new one
+                    _log.debug("todo widget in-place update failed", exc_info=True)
             self._todo_widget = None  # detached: remount below
         # First call or widget lost → mount new.
-        from textual.widgets import Static
-
         # FIX (2026-08-28 audit C2): mount THE tracked widget. The old code
         # assigned Static(panel) to self._todo_widget but mounted a SECOND
         # instance via _add_static_main(panel) — the tracked widget was an
         # orphan, so every in-place .update() silently no-op'd and each
-        # write_todos silently froze the panel content in place (the tracked
-        # widget was never mounted, so .update() was a no-op).
+        # write_todos silently froze the panel content in place.
         self._todo_widget = Static(panel)
         self._mount_widget_main(self._todo_widget)
         return "final"
 
-    # Dispatch table: action name -> handler. Built once at class definition.
-    # Handlers are staticmethods taking (self, args) so they can live in the
-    # table without binding overhead.
-    _RENDER_DISPATCH = {
-        "text": _h_text,
-        "finalize": _h_finalize,
-        "think_start": _h_think_start,
-        "think_update": _h_think_update,
-        "think_fold": _h_think_fold,
-        "static": _h_static,
-        "panel": _h_panel,
-        "clear_live": _h_clear_live,
-        "exit": _h_exit,
-        "todo_update": _h_todo_update,
-    }
+    def _render_static(self, text: str, style: str = "") -> None:
+        """MAIN THREAD: render a queued ("static", text[, style]) line.
+
+        Tolerates the 1-element tuple form (no style) — the old _h_static
+        handler did, and queue producers must not silently lose lines to an
+        unpack TypeError inside drain_ui."""
+        self._add_text_main(text, style if style else "")
 
     # ----------------------------------------------------- render methods (MAIN THREAD, called by _drain_render_queue)
     def _scroll_history_end(self) -> None:
@@ -463,8 +349,8 @@ class CoderioTUI(App):
         try:
             h = self.query_one("#history", VerticalScroll)
             h.scroll_end(animate=False)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — pane may not be mounted yet
+            _log.debug("history scroll failed", exc_info=True)
 
     def _clear_history(self) -> None:
         """Wipe all widgets from the history pane (used by /clear).
@@ -475,8 +361,8 @@ class CoderioTUI(App):
         try:
             h = self.query_one("#history", VerticalScroll)
             h.remove_children()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            _log.debug("history clear failed", exc_info=True)
         # The tracked todo widget died with the pane — without this reset the
         # next turn's write_todos would .update() a detached widget (a silent
         # no-op) and the todo list would stay invisible for the whole session
@@ -553,8 +439,8 @@ class CoderioTUI(App):
             if self._live_out_widget is not None:
                 try:
                     self._live_out_widget.remove()
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001 — already detached
+                    _log.debug("live output removal failed", exc_info=True)
                 self._live_out_widget = None
                 self._live_rendered_len = 0
             self.call_after_refresh(self._mount_final_panel, buf)
@@ -610,15 +496,16 @@ class CoderioTUI(App):
             else:
                 btn.label = "➤"
                 btn.remove_class("running")
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — button may not be mounted yet
+            _log.debug("send/stop button morph failed", exc_info=True)
 
     def _submit_current_input(self) -> None:
         """Send-button submit: dispatch whatever is in #msg, exactly as Enter
         would (same echo, same worker). No-op on empty input."""
         try:
             inp = self.query_one("#msg", Input)
-        except Exception:
+        except Exception:  # noqa: BLE001 — input not mounted yet
+            _log.debug("send-button submit: input not found", exc_info=True)
             return
         line = inp.value.strip()
         if not line:
@@ -645,7 +532,7 @@ class CoderioTUI(App):
     def on_key(self, event) -> None:
         """Handle command-menu navigation + inline confirmation keys."""
         # Custom-reply mode: Enter submits the user's text as a str result.
-        if self._confirm_custom_mode:
+        if self._stream.confirm_custom_mode:
             # Let normal input editing happen; only intercept Enter/Esc.
             if event.key == "enter":
                 inp = self.query_one("#msg", Input)
@@ -686,8 +573,8 @@ class CoderioTUI(App):
                     self._resolve_confirmation(False)
                     event.prevent_default()
                     return
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — menu may not be mounted yet
+            _log.debug("confirm menu key handling failed", exc_info=True)
         # Command-menu navigation (only when menu is visible).
         menu = self.query_one(CommandMenu)
         if not menu.visible():
@@ -736,32 +623,22 @@ class CoderioTUI(App):
         # completes — a raw daemon thread would not.
         def _run():
             self._is_running = True
-            self._interrupted = False
+            self._stream.begin_turn()
             self.call_from_thread(self._show_interrupt_btn, True)
             try:
                 self._on_input(line)
             except SystemExit:
-                self._render_q.append(("exit",))
+                self._stream.queue_exit()
             except InterruptedError:
                 # User pressed Esc / clicked 中断. Show a notice and clean up.
-                self._round_thinking = ""
-                self._round_think_start = 0.0
-                self._live_think_body = None
-                self._live_think_chars = 0
-                self._round_think_started = False
-                self.buffer = ""
-                self._live_output_last_flush = 0.0
+                self._stream.reset_stream_state()
                 if self._status_bar:
                     self._status_bar.set_phase("idle")
-                self._render_q.append(
-                    (
-                        "panel",
-                        Panel(
-                            "用户已中断当前任务。已完成的中间结果保留在历史中。\n"
-                            "输入新消息继续，或按 ↑ 恢复上一条输入。",
-                            title="⚠ 已中断",
-                            border_style="yellow",
-                        ),
+                self._stream.queue_panel(
+                    Panel(
+                        "用户已中断当前任务。已完成的中间结果保留在历史中。\n输入新消息继续，或按 ↑ 恢复上一条输入。",
+                        title="⚠ 已中断",
+                        border_style="yellow",
                     )
                 )
             except Exception as e:
@@ -769,23 +646,16 @@ class CoderioTUI(App):
                 # get stuck in 'thinking' phase when the agent errors out
                 # (e.g. API auth failure, network error). on_finish is never
                 # called when run_deep_agent raises, so we must clean up here.
-                self._round_thinking = ""
-                self._round_think_start = 0.0
-                self._live_think_body = None
-                self._live_think_chars = 0
-                self._round_think_started = False
-                self.buffer = ""
-                self._live_output_last_flush = 0.0
+                self._stream.reset_stream_state()
                 if self._status_bar:
                     self._status_bar.set_phase("idle")
-                self._render_q.append(
+                self._stream.queue_panel(
                     (
-                        "panel",
                         Panel(
                             Text(f"⚠ {type(e).__name__}: {e}\n\n你的输入已保留在输入框，按 Enter 可重试。"),
                             title="⚠ 运行错误",
                             border_style="red",
-                        ),
+                        )
                     )
                 )
 
@@ -794,8 +664,8 @@ class CoderioTUI(App):
                         inp = self.query_one("#msg", Input)
                         inp.value = line
                         inp.focus()
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001 — input may not exist yet
+                        _log.debug("input refill failed", exc_info=True)
 
                 self.call_from_thread(_refill_input)
             finally:
@@ -844,15 +714,15 @@ class CoderioTUI(App):
         """
         if not self._is_running:
             return  # nothing to interrupt
-        self._interrupted = True
+        self._stream.request_interrupt()
         # Cancel the worker as a backup — this unblocks subprocess.run calls
         # and model.stream() that might be waiting on I/O. The flag handles
         # the clean exit; cancel handles the "stuck in I/O" case.
         if self._agent_worker is not None:
             try:
                 self._agent_worker.cancel()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 — worker may have just finished
+                _log.debug("worker cancel on interrupt failed", exc_info=True)
 
     def _focused_collapsible(self):
         """Find the Collapsible enclosing the currently-focused widget, if any."""
@@ -868,69 +738,24 @@ class CoderioTUI(App):
         return None
 
     # ----------------------------------------------------- StreamHandler protocol
-    # ALL callbacks run on the agent's BACKGROUND thread. They ONLY push render
-    # instructions to self._render_q (a thread-safe deque). The main-thread timer
-    # _drain_render_queue (set_interval 60ms) pops and executes them — no
-    # call_from_thread here.
+    # Thin forwarders to ChatStreamController (P2-3): the protocol logic and
+    # agent-thread streaming state live there; CoderioTUI stays a StreamHandler
+    # duck-type so the engine (run_deep_agent(stream=self.tui)) and the tests
+    # keep a stable surface. All of these run on the agent's BACKGROUND thread;
+    # the controller only queues render instructions and writes plain
+    # attributes — no call_from_thread anywhere.
+
     def on_step_start(self, step: int = 1) -> None:
-        self._flush_round_thinking()
-        # Reset turn token counter at the start of each turn (step 1 = new turn).
-        if step == 1:
-            self.usage = {"input_tokens": 0, "output_tokens": 0}
-            if self._status_bar:
-                self._status_bar.set_turn_tokens(0)
-        self._set_phase("thinking", step=step)
+        self._stream.on_step_start(step)
 
     def is_interrupted(self) -> bool:
-        """Check if the user requested an interrupt (agent thread calls this).
-
-        Called between ReAct rounds by _execute_turn. When True, the turn ends
-        gracefully — the user gets whatever partial output exists, plus a
-        '⚠ 已中断' panel. The agent thread does NOT raise or crash; it just
-        stops looping and returns.
-        """
-        return self._interrupted
+        return self._stream.is_interrupted()
 
     def on_token(self, text: str) -> None:
-        self._flush_round_thinking()
-        bar = self._status_bar
-        if bar is None or bar.phase != "responding":
-            self._set_phase("responding")
-        # Accumulate in buffer (agent thread). Push a "text" render instruction
-        # with the FULL buffer so the main thread can update the live widget.
-        # Throttle: only push at most once per ~60ms to avoid flooding the queue.
-        self.buffer += text
-        now = time.monotonic()
-        if self._live_output_last_flush == 0.0 or (now - self._live_output_last_flush) >= 0.06:
-            self._live_output_last_flush = now
-            self._render_q.append(("text", self.buffer))
+        self._stream.on_token(text)
 
     def on_thinking(self, text: str) -> None:
-        if not self._round_thinking:
-            self._round_think_start = time.monotonic()
-        self._round_thinking += text
-        now = time.monotonic()
-        # Decide think_start vs think_update using an AGENT-THREAD-LOCAL flag,
-        # NOT `_live_think_body`. The latter is set by the main thread only after
-        # the next _drain_render_queue tick (60ms away), so reading it here is a
-        # race: within one drain window many on_thinking chunks arrive, each one
-        # would re-enter the "first chunk" branch and queue another think_start,
-        # fragmenting one continuous thinking stream into many tiny Collapsibles.
-        if not self._round_think_started:
-            # First chunk of this round: queue think_start with the FULL text so
-            # far, and mark the round as started. The main thread will mount ONE
-            # Collapsible; subsequent chunks queue think_update against that same
-            # widget.
-            self._round_think_started = True
-            self._live_think_chars = len(self._round_thinking)
-            self._render_q.append(("think_start", self._round_thinking))
-            self._live_output_last_flush = now  # reuse throttle timer for thinking
-        else:
-            delta_len = len(self._round_thinking) - self._live_think_chars
-            if delta_len > 0 and (now - self._live_output_last_flush) >= 0.06:
-                self._live_think_chars = len(self._round_thinking)
-                self._live_output_last_flush = now
-                self._render_q.append(("think_update", self._round_thinking))
+        self._stream.on_thinking(text)
 
     def on_tool_start(
         self,
@@ -940,218 +765,33 @@ class CoderioTUI(App):
         tool_index: int = 0,
         tool_total: int = 0,
     ) -> None:
-        self._flush_round_thinking()
-        self._flush_buffer()
-        self._set_phase(
-            "tool",
-            tool_name=name,
-            step=step,
-            tool_index=tool_index,
-            tool_total=tool_total,
-        )
-        # Special-case the `task` tool (subagent delegation): show a friendly
-        # notice instead of the raw (very long) args. The subagent runs
-        # synchronously inside the tools node — the main agent blocks until it
-        # finishes, which can take minutes. Without this notice the user sees
-        # a frozen "执行 task(…)" with no indication that a subagent is working.
-        if name == TASK_TOOL:
-            subagent = args.get("subagent_type", "general-purpose")
-            desc = args.get("description", "") or args.get("instructions", "")
-            desc_short = desc.split("\n")[0][:80] if desc else ""
-            self._render_q.append(("static", f"🔄 委派子 agent [{subagent}]：{desc_short}…（执行中，请稍候）", "cyan"))
-            return
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-        if len(args_str) > 100:
-            args_str = args_str[:100] + "…"
-        self._render_q.append(("static", f"⏺ {name}({args_str})", "green"))
-
-    # Tools that modify files — shown with a prominent yellow line so the user
-    # always knows what changed, even in auto mode (where there's no confirmation).
-    # From the taxonomy registry (single source of truth, audit A2).
-    _WRITE_TOOLS: frozenset[str] = WRITE_TOOLS
+        self._stream.on_tool_start(name, args, step=step, tool_index=tool_index, tool_total=tool_total)
 
     def on_tool_end(self, name: str, result: str) -> None:
-        self._set_phase("thinking")
-        # Write tools get a prominent yellow line so the user sees what was
-        # modified — matching the "always show file changes" UX of claude code /
-        # zcode. Other tools keep the existing dim/grey output.
-        if name in self._WRITE_TOOLS and not result.startswith(("Error", "Permission denied")):
-            self._render_q.append(
-                ("static", f"  📝 {result.splitlines()[0] if result.splitlines() else name}", "yellow bold")
-            )
-            return
-        if name == "_empty_response":
-            # Empty-response exhaustion is a hard interruption, not a normal
-            # tool result — show it as a red panel (like on_harness_warn) so
-            # it's visible instead of buried in dim grey text.
-            self._flush_round_thinking()
-            self._flush_buffer()
-            self._render_q.append(
-                (
-                    "panel",
-                    Panel(
-                        Text(f"⚠ {result}\n\n建议用 /clear 清理上下文后重试，或检查模型状态。"),
-                        title="⚠ 会话中断",
-                        border_style="red",
-                    ),
-                )
-            )
-            return
-        if not self.show_tool_output:
-            first = result.splitlines()[0][:60] if result.splitlines() else ""
-            self._render_q.append(("static", f"  → {first}{'…' if len(result) > 60 else ''}", "dim"))
-            return
-        # Labeled, CHAR-capped preview. The old code truncated by LINE count,
-        # so a tool returning one huge line (list_dir's 57-entry Python repr,
-        # web_fetch HTML) soft-wrapped into a ~17-row unlabeled wall mid-
-        # transcript (2026-08-27 live TUI audit). Collapse ALL whitespace and
-        # cap by characters instead — one compact, attributable line.
-        flat = " ".join(result.split())
-        if len(flat) > 160:
-            flat = flat[:160] + "…"
-        self._render_q.append(("static", f"  ↳ {name}: {flat}" if flat else f"  ↳ {name}: (空)", "dim"))
+        self._stream.on_tool_end(name, result)
 
     def on_harness_warn(self, message: str) -> None:
-        """Escalation release: the harness allowed a sketchy answer through.
-
-        IMPORTANT: do NOT call _flush_buffer() here. on_harness_warn is always
-        followed by on_finish (see loop.py), which renders self.buffer as the
-        final blue 'coderio' Panel. Flushing here would instead render it as a
-        cyan '中间输出' Panel AND clear the buffer, so on_finish would have
-        nothing left to show — the model's real final answer would appear as
-        misleading intermediate output (the exact bug we fixed). Just clear the
-        live streaming widget so on_finish can mount the final Panel cleanly."""
-        self._flush_round_thinking()
-        self._render_q.append(("clear_live",))
-        self._render_q.append(
-            (
-                "panel",
-                Panel(
-                    Text(f"⚠ {message}\n\n产出可能未经验证，请人工复核。"),
-                    title="⚠ harness 警告",
-                    border_style="red",
-                ),
-            )
-        )
+        self._stream.on_harness_warn(message)
 
     def on_harness_continue(self, reason: str) -> None:
-        """Surface a harness force-continue as a dim notice line.
-
-        The model produced what looked like a final answer but the harness found
-        unfinished work and demanded more. Flush the first output as an
-        intermediate panel (user can see it) then show a dim notice.
-        """
-        self._flush_round_thinking()
-        self._flush_buffer()
-        first_line = reason.splitlines()[0] if reason else ""
-        if len(first_line) > 120:
-            first_line = first_line[:117] + "…"
-        self._render_q.append(
-            (
-                "static",
-                f"↻ harness 要求继续：{first_line}",
-                "dim italic",
-            )
-        )
+        self._stream.on_harness_continue(reason)
 
     def on_finish(self) -> None:
-        # Capture everything remaining and push ONE finalize instruction.
-        # The main-thread drain will fold thinking + mount the final Markdown Panel.
-        think_text = self._round_thinking
-        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
-        # had_live = a live Collapsible was mounted for this round. Use the
-        # agent-thread flag (truthful at this moment) rather than _live_think_body
-        # (which the main thread owns and may not have updated yet).
-        had_live = self._round_think_started
-        buf = self.buffer
-        # Reset accumulated state.
-        self._round_thinking = ""
-        self._round_think_start = 0.0
-        self._live_think_body = None
-        self._live_think_chars = 0
-        self._round_think_started = False
-        self.buffer = ""
-        self._live_output_last_flush = 0.0
-        # Reset the todo widget so the next turn mounts a fresh one.
-        self._todo_widget = None
-        self._render_q.append(("finalize", buf, think_text, secs, had_live))
-        if self._status_bar:
-            self._status_bar.set_phase("idle")
-            self._status_bar.set_turn_tokens(0)
+        self._stream.on_finish()
 
     def on_turn_end(self, writes: list[str]) -> None:
-        """Turn-end summary: show a panel listing all files modified this turn.
-
-        Called after on_finish. If the turn modified any files (write_file /
-        edit_file / multi_edit), render a compact summary so the user always
-        knows what changed — even in auto mode where there's no confirmation.
-        Matches the 'always show file changes' UX of claude code / zcode.
-        """
-        if not writes:
-            return
-        body = "\n".join(f"📝 {w}" for w in writes)
-        self._render_q.append(
-            (
-                "panel",
-                Panel(body, title="本轮修改的文件", border_style="yellow"),
-            )
-        )
+        self._stream.on_turn_end(writes)
 
     def add_usage(self, meta: dict[str, int]) -> None:
-        for k in ("input_tokens", "output_tokens"):
-            if k in meta:
-                self.usage[k] += meta[k]
-        # Push the turn total to the StatusBar so it shows live token consumption.
-        if self._status_bar:
-            total = self.usage["input_tokens"] + self.usage["output_tokens"]
-            self._status_bar.set_turn_tokens(total)
+        self._stream.add_usage(meta)
 
     def on_todos_update(self, todos: list[dict]) -> None:
-        """Push a todo list update to the render queue (agent background thread).
-
-        Called when deepagents' write_todos tool fires. The whole list is
-        replaced each call. The main-thread drain renders it as a Markdown
-        checklist in the output area (Claude Code style).
-        """
-        self._render_q.append(("todo_update", todos))
+        self._stream.on_todos_update(todos)
 
     def on_phase_change(self, state: str, step: int, hint: str) -> None:
-        """Task-level phase change (explore/plan/implement/verify/...).
-
-        Called from Harness._track_phase on the agent's background thread. Just
-        forwards to StatusBar.set_task_phase (plain attribute write, GIL-safe);
-        the heartbeat repaints within ~100ms. 'complete' clears the tag.
-        """
-        if self._status_bar:
-            self._status_bar.set_task_phase("" if state == "complete" else state)
+        self._stream.on_phase_change(state, step, hint)
 
     # ----------------------------------------------------- thinking fold (true fold/unfold)
-    def _flush_round_thinking(self) -> None:
-        """Push a think_fold instruction to the render queue (agent thread).
-
-        Called whenever a round's thinking needs to be sealed off: before each
-        tool call, before non-thinking output begins, and at turn end. Clears
-        the agent-thread `_round_think_started` flag so the NEXT round's first
-        on_thinking chunk queues a fresh think_start (one Collapsible per round,
-        never per-chunk)."""
-        if not self._round_thinking.strip():
-            # Even if there's no text, drop the started flag so the next round
-            # gets a clean start (a stray True here with no body to fold would
-            # make the next on_thinking skip think_start).
-            self._round_think_started = False
-            return
-        text = self._round_thinking
-        secs = time.monotonic() - self._round_think_start if self._round_think_start else 0.0
-        # had_live = a live Collapsible was mounted for THIS round. Read the
-        # agent-thread flag, not _live_think_body (main-thread state, races).
-        had_live = self._round_think_started
-        self._round_thinking = ""
-        self._round_think_start = 0.0
-        self._live_think_body = None
-        self._live_think_chars = 0
-        self._round_think_started = False
-        self._render_q.append(("think_fold", text, secs, had_live))
-
     def show_last_thinking(self) -> bool:
         """Expand the most recent thinking (compat with /think command)."""
         if self._last_collapsible is None:
@@ -1161,41 +801,18 @@ class CoderioTUI(App):
         return True
 
     # ----------------------------------------------------- helpers: add content to history
-    def _flush_buffer(self) -> None:
-        """Push the accumulated output to the render queue, replacing the live
-        streaming RichLog with a Markdown Panel.
-
-        Marked as an INTERMEDIATE panel (distinct title + dim cyan border) so the
-        user can visually tell this is mid-process output, NOT the final answer.
-        The final answer is mounted by _mount_final_panel with title "coderio"
-        and a blue border. Without this distinction, a model that emits text then
-        continues with more tool calls looks like it "finished, then restarted"."""
-        # Remove the live streaming widget first (if present).
-        self._render_q.append(("clear_live",))
-        if self.buffer.strip():
-            self._render_q.append(
-                (
-                    "panel",
-                    Panel(
-                        Markdown(self.buffer),
-                        border_style="cyan",
-                        title="[dim]中间输出 · agent 仍在运行…[/dim]",
-                    ),
-                )
-            )
-        self.buffer = ""
 
     def _add_text(self, text: str, style: str = "") -> None:
         """Push a text line to the render queue."""
-        self._render_q.append(("static", text, style))
+        self._stream.queue_static(text, style)
 
     def _add_text_main(self, text: str, style: str = "") -> None:
         try:
             history = self.query_one("#history", VerticalScroll)
             history.mount(Static(Text(text, style=style) if style else Text(text)))
             history.call_after_refresh(history.scroll_end, animate=False)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — pane may not be mounted yet
+            _log.debug("history mount failed", exc_info=True)
 
     def _add_static(self, renderable) -> None:
         """Thread-safe: add a Rich renderable (Panel/Markdown) to history."""
@@ -1217,8 +834,8 @@ class CoderioTUI(App):
             # bottom. call_after_refresh defers the scroll until the layout pass
             # finishes.
             history.call_after_refresh(history.scroll_end, animate=False)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — pane may not be mounted yet
+            _log.debug("history mount failed", exc_info=True)
 
     def _mount_widget(self, widget) -> None:
         """Thread-safe: mount an arbitrary widget (e.g. Collapsible) to history."""
@@ -1234,8 +851,8 @@ class CoderioTUI(App):
             history = self.query_one("#history", VerticalScroll)
             history.mount(widget)
             history.call_after_refresh(history.scroll_end, animate=False)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — pane may not be mounted yet
+            _log.debug("history mount failed", exc_info=True)
 
 
 def run_tui(

@@ -585,7 +585,7 @@ class TestSendStopButton:
             app._is_running = True
             app._show_interrupt_btn(True)
             await pilot.pause()
-            assert app._interrupted is False
+            assert app._stream._interrupted is False
             await pilot.click("#send-btn")
             await pilot.pause()
-            assert app._interrupted is True, "⏹ click must raise the interrupt flag"
+            assert app._stream._interrupted is True, "⏹ click must raise the interrupt flag"
