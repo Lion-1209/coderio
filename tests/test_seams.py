@@ -1207,7 +1207,7 @@ def test_seamSA3_engine_subagent_name_contract(tmp_path):
 
 def _capture_run_deep_agent(monkeypatch, tmp_path, workdir=None):
     """Run real run_deep_agent with create_deep_agent stubbed; return spec names."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.session.store import Session
 
     captured = {}
@@ -1223,15 +1223,17 @@ def _capture_run_deep_agent(monkeypatch, tmp_path, workdir=None):
     monkeypatch.setattr("deepagents.create_deep_agent", fake_create_deep_agent)
     session = Session.create(str(tmp_path / "sessions"), {})
     run_deep_agent(
-        user_input="hi",
-        model=object(),
-        session=session,
+        "hi",
+        TurnSpec(
+            model=object(),
+            gate=None,
+            skill_store=None,
+            active_skills=None,
+            tools=None,
+            workdir=workdir,
+        ),
+        session,
         stream=None,
-        gate=None,
-        skill_store=None,
-        active_skills=None,
-        tools=None,
-        workdir=workdir,
     )
     return [s["name"] for s in captured.get("subagents", [])]
 

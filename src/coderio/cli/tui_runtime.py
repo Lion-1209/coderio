@@ -277,7 +277,7 @@ class TuiRuntime:
     # ----------------------------------------------------------------- engine
 
     def _send_to_engine(self, line: str) -> None:
-        from coderio.agent.deep_loop import run_deep_agent
+        from coderio.agent.deep_loop import TurnSpec, run_deep_agent
         from coderio.cli.multimodal import build_user_content, extract_images
         from coderio.tools.command_policy import CommandPolicy
 
@@ -297,11 +297,10 @@ class TuiRuntime:
             whitelist_mode=rt["cfg"].tools.whitelist_mode,
             allowed_commands=rt["cfg"].tools.allowed_commands,
         )
-        run_deep_agent(
-            user_input=user_content,
+        # Rebuilt per turn: /model and /clear swap rt["model"]/rt["session"]
+        # between turns, so a cached spec would run on stale objects.
+        spec = TurnSpec(
             model=rt["model"],
-            session=rt["session"],
-            stream=self.tui,
             gate=rt["gate"],
             skill_store=self.store,
             active_skills=self.active,
@@ -314,6 +313,12 @@ class TuiRuntime:
             fs_config=rt["cfg"].tools.sandbox_fs,
             bash_shell=rt["cfg"].tools.bash_shell,
             hooks=rt["cfg"].hooks,
+        )
+        run_deep_agent(
+            user_input=user_content,
+            spec=spec,
+            session=rt["session"],
+            stream=self.tui,
         )
 
     # ------------------------------------------------------- session lifecycle

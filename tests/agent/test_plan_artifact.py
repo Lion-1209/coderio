@@ -164,12 +164,16 @@ def test_subagent_middleware_has_no_artifact_by_default(tmp_path):
 
 def test_run_deep_agent_anchor_walks_up_to_project_root():
     """SA-4 lesson pinned at source level: the plan anchor must use
-    _find_project_dir (walk-up), NOT the literal runtime dir."""
+    _find_project_dir (walk-up), NOT the literal runtime dir.
+
+    P2-2: the anchor lives in _prepare_plan_artifact (extracted from
+    run_deep_agent's body) — pin the helper the wiring actually goes through.
+    """
     import inspect
 
     from coderio.agent import deep_loop
 
-    src = inspect.getsource(deep_loop.run_deep_agent)
+    src = inspect.getsource(deep_loop._prepare_plan_artifact)
     assert '_find_project_dir(project_dir) / ".coderio"' in src, "plan artifact anchor must walk up to the project root"
 
 

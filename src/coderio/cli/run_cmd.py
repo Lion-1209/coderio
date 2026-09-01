@@ -190,7 +190,7 @@ def run_headless(
         typer.secho(f"Runtime setup failed: {e}", err=True, fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.command_policy import CommandPolicy
 
     cmd_policy = CommandPolicy(
@@ -200,24 +200,28 @@ def run_headless(
         allowed_commands=cfg.tools.allowed_commands,
     )
 
+    spec = TurnSpec(
+        model=chat_model,
+        gate=gate,
+        skill_store=store,
+        active_skills=active,
+        tools=tools,
+        workdir=cfg.tools.workspace_root or None,
+        harness_enabled=cfg.skills.harness,
+        command_policy=cmd_policy,
+        sandbox_mode=cfg.tools.sandbox_mode,
+        network_allowed=cfg.tools.network_allowed,
+        fs_config=cfg.tools.sandbox_fs,
+        bash_shell=cfg.tools.bash_shell,
+        hooks=cfg.hooks,
+    )
+
     def _execute() -> str:
         return run_deep_agent(
             user_input=task,
-            model=chat_model,
+            spec=spec,
             session=session,
             stream=HeadlessStream(quiet=quiet),
-            gate=gate,
-            skill_store=store,
-            active_skills=active,
-            tools=tools,
-            workdir=cfg.tools.workspace_root or None,
-            harness_enabled=cfg.skills.harness,
-            command_policy=cmd_policy,
-            sandbox_mode=cfg.tools.sandbox_mode,
-            network_allowed=cfg.tools.network_allowed,
-            fs_config=cfg.tools.sandbox_fs,
-            bash_shell=cfg.tools.bash_shell,
-            hooks=cfg.hooks,
         )
 
     # Wall-clock timeout (v3 audit #14): SIGALRM doesn't exist on Windows, so

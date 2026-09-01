@@ -33,7 +33,7 @@ deepagents = pytest.importorskip("deepagents")
 )
 def test_fake_model_qa(tmp_path):
     """Pure Q&A: model returns text, no tools → session has user + assistant."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     model = make_model(AIMessage(content="你好！我是 coderio。"))
     session = make_session(tmp_path)
@@ -41,11 +41,9 @@ def test_fake_model_qa(tmp_path):
 
     result = run_deep_agent(
         "你好",
-        model,
+        TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
         session,
         stream=stream,
-        harness_enabled=False,
-        workdir=str(tmp_path),
     )
 
     assert "你好" in result or "coderio" in result
@@ -56,7 +54,7 @@ def test_fake_model_qa(tmp_path):
 @pytest.mark.skipif(not deepagents, reason="deepagents not installed")
 def test_permission_plan_mode_blocks_write(tmp_path):
     """PLAN mode blocks write_file → model gets Permission denied error."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.permission import PermissionGate
 
     model = make_model(
@@ -79,12 +77,9 @@ def test_permission_plan_mode_blocks_write(tmp_path):
 
     result = run_deep_agent(
         "write a file",
-        model,
+        TurnSpec(model=model, gate=gate, harness_enabled=False, workdir=str(tmp_path)),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=False,
-        workdir=str(tmp_path),
     )
 
     # The write should have been blocked by the gate.
@@ -96,7 +91,7 @@ def test_permission_plan_mode_blocks_write(tmp_path):
 @pytest.mark.skipif(not deepagents, reason="deepagents not installed")
 def test_full_mode_allows_write(tmp_path):
     """FULL mode allows write_file without prompting."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.permission import AutoPermissionGate
 
     model = make_model(
@@ -119,12 +114,9 @@ def test_full_mode_allows_write(tmp_path):
 
     result = run_deep_agent(
         "write a file",
-        model,
+        TurnSpec(model=model, gate=gate, harness_enabled=False, workdir=str(tmp_path)),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=False,
-        workdir=str(tmp_path),
     )
 
     # The write should NOT have been blocked.
@@ -150,7 +142,7 @@ def test_command_review_blocks_destructive_shell(tmp_path):
     blocks it by content. The model then sees a ToolMessage explaining the
     block. This is the safety-takes-priority-over-FULL-mode contract.
     """
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.command_policy import CommandPolicy
     from coderio.tools.permission import AutoPermissionGate
 
@@ -175,13 +167,15 @@ def test_command_review_blocks_destructive_shell(tmp_path):
 
     run_deep_agent(
         "delete everything",
-        model,
+        TurnSpec(
+            model=model,
+            gate=gate,
+            harness_enabled=False,
+            workdir=str(tmp_path),
+            command_policy=policy,
+        ),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=False,
-        workdir=str(tmp_path),
-        command_policy=policy,
     )
 
     blocked = [r for _, r in stream.tool_ends if "Blocked by command policy" in r]
@@ -196,7 +190,7 @@ def test_command_review_network_disabled_blocks_web_fetch(tmp_path):
     permission gate would allow web_fetch, a CommandPolicy with
     network_allowed=False short-circuits it with a clear ToolMessage.
     """
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.command_policy import CommandPolicy
     from coderio.tools.permission import AutoPermissionGate
 
@@ -224,13 +218,15 @@ def test_command_review_network_disabled_blocks_web_fetch(tmp_path):
 
     run_deep_agent(
         "fetch a url",
-        model,
+        TurnSpec(
+            model=model,
+            gate=gate,
+            harness_enabled=False,
+            workdir=str(tmp_path),
+            command_policy=policy,
+        ),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=False,
-        workdir=str(tmp_path),
-        command_policy=policy,
     )
 
     blocked = [r for _, r in stream.tool_ends if "network access is disabled" in r]
@@ -250,7 +246,7 @@ def test_harness_force_continue_on_unverified_write(tmp_path):
     of messages (user + tool_call + tool_result + final), indicating the
     force-continue injected an extra round.
     """
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.permission import AutoPermissionGate
 
     model = make_model(
@@ -274,12 +270,9 @@ def test_harness_force_continue_on_unverified_write(tmp_path):
 
     run_deep_agent(
         "write app.py",
-        model,
+        TurnSpec(model=model, gate=gate, harness_enabled=True, workdir=str(tmp_path)),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=True,
-        workdir=str(tmp_path),
     )
 
     # The harness must have fired at least one force-continue signal.
@@ -297,7 +290,7 @@ def test_session_persists_tool_calls_and_results(tmp_path):
     assistant tool_call message AND the tool result, so /export and resume can
     reconstruct what happened.
     """
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.permission import AutoPermissionGate
 
     model = make_model(
@@ -320,12 +313,9 @@ def test_session_persists_tool_calls_and_results(tmp_path):
 
     run_deep_agent(
         "write a note",
-        model,
+        TurnSpec(model=model, gate=gate, harness_enabled=False, workdir=str(tmp_path)),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=False,
-        workdir=str(tmp_path),
     )
 
     # Session must have: user msg + assistant(tool_calls) + tool_result + assistant(text)
@@ -349,7 +339,7 @@ def test_harness_enabled_fire_continue_signal(tmp_path):
     asserts the session grows; this one asserts the stream receives the
     custom-mode signal specifically (covering _handle_custom_mode).
     """
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools.permission import AutoPermissionGate
 
     model = make_model(
@@ -373,12 +363,9 @@ def test_harness_enabled_fire_continue_signal(tmp_path):
 
     run_deep_agent(
         "write x.py",
-        model,
+        TurnSpec(model=model, gate=gate, harness_enabled=True, workdir=str(tmp_path)),
         session,
         stream=stream,
-        gate=gate,
-        harness_enabled=True,
-        workdir=str(tmp_path),
     )
 
     # The stream must have recorded the harness_continue signal from custom mode.

@@ -386,9 +386,9 @@ def test_win_shell_backend_off_mode_uses_plain_subprocess(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
-    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="off")
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="off")
     assert getattr(backend, "_sandbox_mode", "off") == "off"
     # echo should work via plain subprocess.
     result = backend.execute("echo off-mode-works")
@@ -405,9 +405,9 @@ def test_win_shell_backend_job_mode_delegates_to_sandbox(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
-    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="job")
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="job")
     assert getattr(backend, "_sandbox_mode", "off") == "job"
     result = backend.execute("echo job-mode-works")
     assert "job-mode-works" in (getattr(result, "output", "") or "")

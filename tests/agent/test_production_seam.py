@@ -49,7 +49,7 @@ def _run(tmp_path, msgs, **kw):
     sys.path.insert(0, "tests")
     from agent.conftest import NoOpStream, make_model, make_session
 
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
     from coderio.tools import build_default_tools
 
     harness = kw.pop("harness_enabled", False)
@@ -59,13 +59,15 @@ def _run(tmp_path, msgs, **kw):
     tools = build_default_tools("")
     run_deep_agent(
         prompt,
-        make_model(*msgs),
+        TurnSpec(
+            model=make_model(*msgs),
+            harness_enabled=harness,
+            workdir=str(tmp_path),
+            tools=tools,
+            **kw,
+        ),
         session,
         stream=stream,
-        harness_enabled=harness,
-        workdir=str(tmp_path),
-        tools=tools,
-        **kw,
     )
     return stream, session
 

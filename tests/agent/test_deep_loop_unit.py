@@ -353,9 +353,9 @@ def test_win_shell_backend_uses_cwd_attr(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
-    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True)
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True)
     # self.cwd should be set by FilesystemBackend.__init__ from root_dir.
     assert getattr(backend, "cwd", None) is not None, "backend.cwd must be set from root_dir"
     # Execute a cwd-reporting command.
@@ -390,10 +390,10 @@ def test_win_shell_backend_truncates_oversized_output(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
     # Use a small max_output_bytes so the test doesn't generate 100KB of output.
-    backend = _WinLocalShellBackend(
+    backend = make_shell_backend(
         root_dir=str(tmp_path),
         virtual_mode=True,
         inherit_env=True,
@@ -431,11 +431,11 @@ def test_win_shell_backend_nonexistent_workspace_clear_error(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
     # A path that definitely doesn't exist.
     bad_ws = str(tmp_path / "never-created-xyz")
-    backend = _WinLocalShellBackend(root_dir=bad_ws, virtual_mode=True, inherit_env=True, sandbox_mode="job")
+    backend = make_shell_backend(root_dir=bad_ws, virtual_mode=True, inherit_env=True, sandbox_mode="job")
     result = backend.execute("echo test")
     ec = getattr(result, "exit_code", None)
     out = getattr(result, "output", "") or ""
@@ -457,9 +457,9 @@ def test_win_shell_backend_existing_workspace_runs_normally(tmp_path):
     if not deepagents:
         return
 
-    from coderio.agent.deep_loop import _WinLocalShellBackend
+    from coderio.agent.deep_loop import make_shell_backend
 
-    backend = _WinLocalShellBackend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="job")
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True, sandbox_mode="job")
     result = backend.execute("echo workspace-ok")
     out = getattr(result, "output", "") or ""
     assert "workspace-ok" in out, f"existing workspace should run normally, got: {out!r}"

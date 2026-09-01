@@ -112,13 +112,18 @@ _ANALYSIS_INPUT_TOKEN_LIMIT = 50_000  # observed: 16K, allow headroom
 
 def test_perf_qa_no_tools(tmp_path):
     """Pure Q&A: greeting should be fast, use zero tools."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     model = _make_model()
     session = _make_session(tmp_path)
     stream = _PerfStream()
 
-    result = run_deep_agent("你好", model, session, stream=stream, harness_enabled=False, workdir=str(tmp_path))
+    result = run_deep_agent(
+        "你好",
+        TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
+        session,
+        stream=stream,
+    )
 
     assert stream.t_finish is not None, "on_finish was not called"
     assert stream.total_time < _QA_TIME_LIMIT, f"QA took {stream.total_time:.1f}s (limit {_QA_TIME_LIMIT}s)"
@@ -128,7 +133,7 @@ def test_perf_qa_no_tools(tmp_path):
 
 def test_perf_analysis_single_read(tmp_path):
     """Analysis task: read one file + summarize should be fast."""
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     # Create a small file to analyze.
     (tmp_path / "data.py").write_text("x = 42\n", encoding="utf-8")
@@ -139,11 +144,9 @@ def test_perf_analysis_single_read(tmp_path):
 
     result = run_deep_agent(
         "读取 /data.py 并简短说明它的功能。",
-        model,
+        TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
         session,
         stream=stream,
-        harness_enabled=False,
-        workdir=str(tmp_path),
     )
 
     assert stream.t_finish is not None

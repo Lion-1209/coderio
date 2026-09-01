@@ -190,7 +190,7 @@ def test_user_prompt_submit_blocked_rejects_turn(tmp_path):
     from agent.conftest import make_model, make_session  # noqa: PLC0415
     from langchain_core.messages import AIMessage
 
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     specs = [HookSpec(event="UserPromptSubmit", command="echo no-deploy-talk-allowed >&2; exit 2")]
     model = make_model(AIMessage(content="should never run"))
@@ -198,11 +198,8 @@ def test_user_prompt_submit_blocked_rejects_turn(tmp_path):
 
     result = run_deep_agent(
         "deploy to prod",
-        model,
+        TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path), hooks=specs),
         session,
-        harness_enabled=False,
-        workdir=str(tmp_path),
-        hooks=specs,
     )
     assert "rejected by hook" in result
     assert "no-deploy-talk-allowed" in result
@@ -221,13 +218,17 @@ def test_user_prompt_submit_context_injected(tmp_path):
     from agent.conftest import make_model, make_session  # noqa: PLC0415
     from langchain_core.messages import AIMessage
 
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     specs = [HookSpec(event="UserPromptSubmit", command="echo always-use-bun")]
     model = make_model(AIMessage(content="ok"))
     session = make_session(tmp_path)
 
-    run_deep_agent("do stuff", model, session, harness_enabled=False, workdir=str(tmp_path), hooks=specs)
+    run_deep_agent(
+        "do stuff",
+        TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path), hooks=specs),
+        session,
+    )
     user_msgs = [m.content for m in session.messages if m.role == "user"]
     assert any("always-use-bun" in c for c in user_msgs), "hook context must land in the persisted user message"
 
@@ -243,17 +244,31 @@ def test_session_start_fires_once_per_session(tmp_path):
     from agent.conftest import make_model, make_session  # noqa: PLC0415
     from langchain_core.messages import AIMessage
 
-    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 
     specs = [HookSpec(event="SessionStart", command="echo sprint-is-auth")]
     session = make_session(tmp_path)
 
     run_deep_agent(
-        "t1", make_model(AIMessage(content="a")), session, harness_enabled=False, workdir=str(tmp_path), hooks=specs
+        "t1",
+        TurnSpec(
+            model=make_model(AIMessage(content="a")),
+            harness_enabled=False,
+            workdir=str(tmp_path),
+            hooks=specs,
+        ),
+        session,
     )
     first = [m.content for m in session.messages if m.role == "user"]
     run_deep_agent(
-        "t2", make_model(AIMessage(content="b")), session, harness_enabled=False, workdir=str(tmp_path), hooks=specs
+        "t2",
+        TurnSpec(
+            model=make_model(AIMessage(content="b")),
+            harness_enabled=False,
+            workdir=str(tmp_path),
+            hooks=specs,
+        ),
+        session,
     )
     second = [m.content for m in session.messages if m.role == "user" and m.content != first[0]]
 

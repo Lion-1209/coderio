@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from coderio.agent.harness_middleware import HarnessMiddleware
-from coderio.agent.permission_middleware import PermissionMiddleware
+from coderio.agent.hooks import HookRunner
 from coderio.agent.stream import NullStream
 from coderio.session import Message
 from coderio.session.store import Session
@@ -56,7 +57,7 @@ def _extract_thinking(content: Any) -> str:
     return "".join(parts)
 
 
-class _WinLocalShellBackend:
+def _shell_backend_cls():
     """LocalShellBackend subclass that decodes subprocess output lossibly on Windows.
 
     deepagents' LocalShellBackend uses subprocess.run(text=True), which decodes
@@ -83,238 +84,255 @@ class _WinLocalShellBackend:
     # Subclass created lazily at instantiation time (deepagents is optional).
     # We can't subclass at module-load time because LocalShellBackend may not
     # be importable. This factory builds a real subclass per instance.
-    _RealCls = None
+    from deepagents.backends import LocalShellBackend
 
-    def __new__(
-        cls, sandbox_mode: str = "off", network_allowed: bool = True, fs_config=None, bash_shell: str = "", **kwargs
-    ):
-        if cls._RealCls is None:
-            from deepagents.backends import LocalShellBackend
+    # deepagents' own context management offloads oversized tool
+    # results and conversation history to <root>/large_tool_results/
+    # and <root>/conversation_history/ THROUGH backend.write/edit —
+    # from the backend they look like ordinary writes. Snapshotting
+    # them poisons /undo: the next undo deletes an offload file the
+    # conversation still references, while the user-visible damage
+    # they wanted to revert stays put (2026-08-27 adversarial review
+    # R2, reproduced on the real graph). Internal scratch, not user
+    # data — never checkpoint them.
+    _internal_prefixes = ("large_tool_results/", "conversation_history/")
 
-            # deepagents' own context management offloads oversized tool
-            # results and conversation history to <root>/large_tool_results/
-            # and <root>/conversation_history/ THROUGH backend.write/edit —
-            # from the backend they look like ordinary writes. Snapshotting
-            # them poisons /undo: the next undo deletes an offload file the
-            # conversation still references, while the user-visible damage
-            # they wanted to revert stays put (2026-08-27 adversarial review
-            # R2, reproduced on the real graph). Internal scratch, not user
-            # data — never checkpoint them.
-            _internal_prefixes = ("large_tool_results/", "conversation_history/")
+    def _internal_artifact_path(file_path) -> bool:
+        p = str(file_path).replace("\\", "/").lstrip("/")
+        return p.startswith(_internal_prefixes)
 
-            def _internal_artifact_path(file_path) -> bool:
-                p = str(file_path).replace("\\", "/").lstrip("/")
-                return p.startswith(_internal_prefixes)
+    def _checkpoint_snapshot(backend, fp):
+        """Snapshot pre-write state; returns a result-checker the
+        caller runs on the backend result, or None (internal path or
+        resolution error — nothing was snapshotted).
 
-            def _checkpoint_snapshot(backend, fp):
-                """Snapshot pre-write state; returns a result-checker the
-                caller runs on the backend result, or None (internal path or
-                resolution error — nothing was snapshotted).
+        deepagents backends REPORT failures as result objects
+        (WriteResult(error=...)) instead of raising, so an
+        except-handler can't see a failed call: without the
+        result-check, a failed edit leaves a ghost snapshot that
+        turns the next /undo into a false "restored" while nothing
+        changed (2026-08-27 adversarial review Y1).
+        discard_if_unchanged keeps the snapshot when the disk DID
+        change (partial write) — that's real damage worth undoing."""
+        from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
 
-                deepagents backends REPORT failures as result objects
-                (WriteResult(error=...)) instead of raising, so an
-                except-handler can't see a failed call: without the
-                result-check, a failed edit leaves a ghost snapshot that
-                turns the next /undo into a false "restored" while nothing
-                changed (2026-08-27 adversarial review Y1).
-                discard_if_unchanged keeps the snapshot when the disk DID
-                change (partial write) — that's real damage worth undoing."""
-                from coderio.tools.checkpoint import DEFAULT_CHECKPOINT
+        if _internal_artifact_path(fp):
+            return None
+        try:
+            DEFAULT_CHECKPOINT.snapshot(backend._resolve_path(fp))
+        except (OSError, RuntimeError):
+            return None  # resolution error → the super() call reports it
 
-                if _internal_artifact_path(fp):
-                    return None
+        def _check(result):
+            if getattr(result, "error", None):
                 try:
-                    DEFAULT_CHECKPOINT.snapshot(backend._resolve_path(fp))
+                    DEFAULT_CHECKPOINT.discard_if_unchanged(backend._resolve_path(fp))
                 except (OSError, RuntimeError):
-                    return None  # resolution error → the super() call reports it
+                    pass  # conservative: keep the snapshot
+            return result
 
-                def _check(result):
-                    if getattr(result, "error", None):
-                        try:
-                            DEFAULT_CHECKPOINT.discard_if_unchanged(backend._resolve_path(fp))
-                        except (OSError, RuntimeError):
-                            pass  # conservative: keep the snapshot
-                    return result
+        return _check
 
-                return _check
+    class _Sub(LocalShellBackend):
+        """Real subclass overriding execute for Windows GBK safety.
 
-            class _Sub(LocalShellBackend):
-                """Real subclass overriding execute for Windows GBK safety.
+        Overrides the upstream execute (local_shell.py:238-384) to read
+        bytes and decode with errors='replace'. Preserves upstream's
+        cwd=self.cwd, env=self._env, stdin=DEVNULL, max_output_bytes
+        truncation, and timeout semantics that the prior coderio
+        override had dropped.
 
-                Overrides the upstream execute (local_shell.py:238-384) to read
-                bytes and decode with errors='replace'. Preserves upstream's
-                cwd=self.cwd, env=self._env, stdin=DEVNULL, max_output_bytes
-                truncation, and timeout semantics that the prior coderio
-                override had dropped.
+        When sandbox_mode is "job" or "write", delegates to the sandbox
+        module (win_sandbox / linux_sandbox) for OS-level isolation
+        instead of plain subprocess.run. See config ToolsConfig.sandbox_mode.
+        """
 
-                When sandbox_mode is "job" or "write", delegates to the sandbox
-                module (win_sandbox / linux_sandbox) for OS-level isolation
-                instead of plain subprocess.run. See config ToolsConfig.sandbox_mode.
-                """
+        # Set per-instance via __init__ below. Default "off" keeps the
+        # legacy subprocess path for existing users.
+        _sandbox_mode: str = "off"
+        # Network policy + filesystem config forwarded to the sandbox
+        # runner. Set per-instance so the shell backend can pass them
+        # without changing LocalShellBackend's own __init__ signature.
+        _network_allowed: bool = True
+        _fs_config = None
+        # Explicit bash path ([tools].bash_shell config, empty = auto-detect).
+        # Windows NEEDS this: shell=True on win32 routes to COMSPEC
+        # (cmd.exe), but the system prompt tells the model it's talking
+        # to Git Bash — cmd.exe mangles single-quoted args, so
+        # python -c 'print(42)' silently returns EMPTY output with
+        # exit 0 (2026-08-14 report P0-4: the model thinks the command
+        # succeeded and cannot self-correct).
+        _bash_shell: str = ""
 
-                # Set per-instance via __init__ below. Default "off" keeps the
-                # legacy subprocess path for existing users.
-                _sandbox_mode: str = "off"
-                # Network policy + filesystem config forwarded to the sandbox
-                # runner. Set per-instance so the shell backend can pass them
-                # without changing LocalShellBackend's own __init__ signature.
-                _network_allowed: bool = True
-                _fs_config = None
-                # Explicit bash path ([tools].bash_shell config, empty = auto-detect).
-                # Windows NEEDS this: shell=True on win32 routes to COMSPEC
-                # (cmd.exe), but the system prompt tells the model it's talking
-                # to Git Bash — cmd.exe mangles single-quoted args, so
-                # python -c 'print(42)' silently returns EMPTY output with
-                # exit 0 (2026-08-14 report P0-4: the model thinks the command
-                # succeeded and cannot self-correct).
-                _bash_shell: str = ""
+        # PRODUCTION CHECKPOINT HOOK (2026-08-26 review P0): the
+        # /undo feature snapshotted only coderio's own write tools,
+        # but the production engine's write_file/edit_file/delete are
+        # deepagents' (coderio's are _SKIPped in _build_extra_tools)
+        # — so every production write bypassed the checkpoint and
+        # /undo was a no-op on all real paths. Fix at the BACKEND
+        # layer (below every tool): every STRUCTURED write through
+        # write/edit/delete snapshots the resolved disk file first,
+        # whichever tool invoked it. Honest scope: shell redirects
+        # (echo x > f, sed -i) still bypass this — see
+        # tools/checkpoint.py for that documented boundary — and
+        # deepagents' internal offload paths are excluded (R2 below).
+        def write(self, file_path, content):
+            check = _checkpoint_snapshot(self, file_path)
+            result = super().write(file_path, content)
+            return check(result) if check else result
 
-                # PRODUCTION CHECKPOINT HOOK (2026-08-26 review P0): the
-                # /undo feature snapshotted only coderio's own write tools,
-                # but the production engine's write_file/edit_file/delete are
-                # deepagents' (coderio's are _SKIPped in _build_extra_tools)
-                # — so every production write bypassed the checkpoint and
-                # /undo was a no-op on all real paths. Fix at the BACKEND
-                # layer (below every tool): every STRUCTURED write through
-                # write/edit/delete snapshots the resolved disk file first,
-                # whichever tool invoked it. Honest scope: shell redirects
-                # (echo x > f, sed -i) still bypass this — see
-                # tools/checkpoint.py for that documented boundary — and
-                # deepagents' internal offload paths are excluded (R2 below).
-                def write(self, file_path, content):
-                    check = _checkpoint_snapshot(self, file_path)
-                    result = super().write(file_path, content)
-                    return check(result) if check else result
+        def edit(self, file_path, old_string, new_string, replace_all=False):  # noqa: FBT002
+            check = _checkpoint_snapshot(self, file_path)
+            result = super().edit(file_path, old_string, new_string, replace_all)
+            return check(result) if check else result
 
-                def edit(self, file_path, old_string, new_string, replace_all=False):  # noqa: FBT002
-                    check = _checkpoint_snapshot(self, file_path)
-                    result = super().edit(file_path, old_string, new_string, replace_all)
-                    return check(result) if check else result
+        def delete(self, file_path):
+            check = _checkpoint_snapshot(self, file_path)
+            result = super().delete(file_path)
+            return check(result) if check else result
 
-                def delete(self, file_path):
-                    check = _checkpoint_snapshot(self, file_path)
-                    result = super().delete(file_path)
-                    return check(result) if check else result
+        def _resolve_bash(self) -> str | None:
+            """Find a bash executable, or None to fall back to shell=True.
 
-                def _resolve_bash(self) -> str | None:
-                    """Find a bash executable, or None to fall back to shell=True.
+            Cached at module level after the first successful probe —
+            the probe does filesystem checks we don't want per-command.
+            """
+            if sys.platform != "win32":
+                return None  # POSIX shell=True is /bin/sh -c — already correct
+            cached = _Sub._bash_cache
+            if cached is not None:
+                return cached or None
+            try:
+                from coderio.tools.bash import detect_shell
 
-                    Cached at module level after the first successful probe —
-                    the probe does filesystem checks we don't want per-command.
-                    """
-                    if sys.platform != "win32":
-                        return None  # POSIX shell=True is /bin/sh -c — already correct
-                    cached = _Sub._bash_cache
-                    if cached is not None:
-                        return cached or None
-                    try:
-                        from coderio.tools.bash import detect_shell
+                path = detect_shell(getattr(self, "_bash_shell", "") or "")
+                _Sub._bash_cache = path
+                return path
+            except FileNotFoundError:
+                _log.warning(
+                    "bash not found (Git Bash not installed?) — falling back to "
+                    "cmd.exe. Single-quoted args and POSIX syntax will misbehave; "
+                    "install Git Bash or set [tools].bash_shell."
+                )
+                _Sub._bash_cache = ""
+                return None
 
-                        path = detect_shell(getattr(self, "_bash_shell", "") or "")
-                        _Sub._bash_cache = path
-                        return path
-                    except FileNotFoundError:
-                        _log.warning(
-                            "bash not found (Git Bash not installed?) — falling back to "
-                            "cmd.exe. Single-quoted args and POSIX syntax will misbehave; "
-                            "install Git Bash or set [tools].bash_shell."
-                        )
-                        _Sub._bash_cache = ""
-                        return None
+        _bash_cache: str | None = None
 
-                _bash_cache: str | None = None
+        def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
+            import subprocess
 
-                def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
-                    import subprocess
+            from deepagents.backends.protocol import ExecuteResponse
 
-                    from deepagents.backends.protocol import ExecuteResponse
+            # Sandbox path: delegate to win_sandbox / linux_sandbox when
+            # configured. The sandbox module handles cwd/env/timeout/
+            # truncation internally, so we skip the subprocess block below.
+            mode = getattr(self, "_sandbox_mode", "off")
+            if mode in ("job", "write"):
+                from coderio.tools.sandbox_runner import run_with_sandbox
 
-                    # Sandbox path: delegate to win_sandbox / linux_sandbox when
-                    # configured. The sandbox module handles cwd/env/timeout/
-                    # truncation internally, so we skip the subprocess block below.
-                    mode = getattr(self, "_sandbox_mode", "off")
-                    if mode in ("job", "write"):
-                        from coderio.tools.sandbox_runner import run_with_sandbox
+                cwd_val = getattr(self, "cwd", None) or Path.cwd()
+                cwd_str = str(cwd_val)
+                # Workspace existence check: CreateProcessAsUserW (Win) and
+                # bwrap (Linux) both fail opaquely when cwd doesn't exist
+                # (Win: "CreateProcessAsUserW failed err=0"; bwrap: cryptic
+                # mount error). A clear error here lets the model understand
+                # the root cause (misconfigured workspace_root) and surface
+                # it to the user, instead of a chain of mystery failures.
+                # We check self.cwd (a Path) rather than the resolved string
+                # so symlinked paths still pass.
+                if not Path(cwd_str).is_dir():
+                    return ExecuteResponse(
+                        output=(
+                            f"Error: workspace_root points to a non-existent "
+                            f"directory: {cwd_str}. Update [tools].workspace_root "
+                            f"in config.toml to point to your project directory, "
+                            f"or leave it empty to use the current working directory."
+                        ),
+                        exit_code=1,
+                    )
+                exit_code, output = run_with_sandbox(
+                    command,
+                    cwd=cwd_str,
+                    mode=mode,
+                    timeout=timeout or 120,
+                    env=getattr(self, "_env", None),
+                    network_allowed=getattr(self, "_network_allowed", True),
+                    fs_config=getattr(self, "_fs_config", None),
+                )
+                return ExecuteResponse(output=output, exit_code=exit_code)
 
-                        cwd_val = getattr(self, "cwd", None) or Path.cwd()
-                        cwd_str = str(cwd_val)
-                        # Workspace existence check: CreateProcessAsUserW (Win) and
-                        # bwrap (Linux) both fail opaquely when cwd doesn't exist
-                        # (Win: "CreateProcessAsUserW failed err=0"; bwrap: cryptic
-                        # mount error). A clear error here lets the model understand
-                        # the root cause (misconfigured workspace_root) and surface
-                        # it to the user, instead of a chain of mystery failures.
-                        # We check self.cwd (a Path) rather than the resolved string
-                        # so symlinked paths still pass.
-                        if not Path(cwd_str).is_dir():
-                            return ExecuteResponse(
-                                output=(
-                                    f"Error: workspace_root points to a non-existent "
-                                    f"directory: {cwd_str}. Update [tools].workspace_root "
-                                    f"in config.toml to point to your project directory, "
-                                    f"or leave it empty to use the current working directory."
-                                ),
-                                exit_code=1,
-                            )
-                        exit_code, output = run_with_sandbox(
-                            command,
-                            cwd=cwd_str,
-                            mode=mode,
-                            timeout=timeout or 120,
-                            env=getattr(self, "_env", None),
-                            network_allowed=getattr(self, "_network_allowed", True),
-                            fs_config=getattr(self, "_fs_config", None),
-                        )
-                        return ExecuteResponse(output=output, exit_code=exit_code)
+            # Plain subprocess path (sandbox_mode="off" or sandbox failure).
+            cwd = str(getattr(self, "cwd", None) or Path.cwd())
+            effective_timeout = timeout if timeout is not None else getattr(self, "_default_timeout", 120)
+            max_output = getattr(self, "_max_output_bytes", 100_000)
+            env = getattr(self, "_env", None)
+            # Windows: run through Git Bash explicitly ([bash, '-c', cmd])
+            # instead of shell=True→cmd.exe. cmd.exe doesn't process single
+            # quotes, so `python -c 'print(42)'` returned EMPTY output with
+            # exit 0 — the model believed broken commands succeeded
+            # (2026-08-14 report P0-4). POSIX keeps shell=True (/bin/sh -c,
+            # semantically identical to bash -c for our purposes).
+            bash_path = self._resolve_bash()
+            run_args = [bash_path, "-c", command] if bash_path else command
+            try:
+                proc = subprocess.run(
+                    run_args,
+                    shell=(bash_path is None),
+                    capture_output=True,
+                    cwd=cwd,
+                    timeout=effective_timeout,
+                    text=False,  # bytes — decode ourselves (Windows GBK safety)
+                    stdin=subprocess.DEVNULL,  # prevent stdin-reading cmds from hanging
+                    env=env,
+                )
+                stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+                stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+                exit_code = proc.returncode
+            except subprocess.TimeoutExpired:
+                return ExecuteResponse(output=f"Command timed out after {effective_timeout}s", exit_code=124)
+            except Exception as e:  # noqa: BLE001
+                return ExecuteResponse(output=f"Execution error: {e}", exit_code=1)
+            output = stdout
+            if stderr:
+                output += f"\n[stderr]\n{stderr}"
+            # Truncate oversized output (restores upstream behavior that
+            # the old override dropped — without this, a `find /` or
+            # verbose build log can OOM the agent's context window).
+            if len(output) > max_output:
+                output = output[:max_output] + f"\n\n... Output truncated at {max_output} bytes."
+            return ExecuteResponse(output=output, exit_code=exit_code)
 
-                    # Plain subprocess path (sandbox_mode="off" or sandbox failure).
-                    cwd = str(getattr(self, "cwd", None) or Path.cwd())
-                    effective_timeout = timeout if timeout is not None else getattr(self, "_default_timeout", 120)
-                    max_output = getattr(self, "_max_output_bytes", 100_000)
-                    env = getattr(self, "_env", None)
-                    # Windows: run through Git Bash explicitly ([bash, '-c', cmd])
-                    # instead of shell=True→cmd.exe. cmd.exe doesn't process single
-                    # quotes, so `python -c 'print(42)'` returned EMPTY output with
-                    # exit 0 — the model believed broken commands succeeded
-                    # (2026-08-14 report P0-4). POSIX keeps shell=True (/bin/sh -c,
-                    # semantically identical to bash -c for our purposes).
-                    bash_path = self._resolve_bash()
-                    run_args = [bash_path, "-c", command] if bash_path else command
-                    try:
-                        proc = subprocess.run(
-                            run_args,
-                            shell=(bash_path is None),
-                            capture_output=True,
-                            cwd=cwd,
-                            timeout=effective_timeout,
-                            text=False,  # bytes — decode ourselves (Windows GBK safety)
-                            stdin=subprocess.DEVNULL,  # prevent stdin-reading cmds from hanging
-                            env=env,
-                        )
-                        stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
-                        stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
-                        exit_code = proc.returncode
-                    except subprocess.TimeoutExpired:
-                        return ExecuteResponse(output=f"Command timed out after {effective_timeout}s", exit_code=124)
-                    except Exception as e:  # noqa: BLE001
-                        return ExecuteResponse(output=f"Execution error: {e}", exit_code=1)
-                    output = stdout
-                    if stderr:
-                        output += f"\n[stderr]\n{stderr}"
-                    # Truncate oversized output (restores upstream behavior that
-                    # the old override dropped — without this, a `find /` or
-                    # verbose build log can OOM the agent's context window).
-                    if len(output) > max_output:
-                        output = output[:max_output] + f"\n\n... Output truncated at {max_output} bytes."
-                    return ExecuteResponse(output=output, exit_code=exit_code)
+    return _Sub
 
-            cls._RealCls = _Sub
-        inst = cls._RealCls(**kwargs)
-        inst._sandbox_mode = sandbox_mode
-        inst._network_allowed = network_allowed
-        inst._fs_config = fs_config
-        inst._bash_shell = bash_shell
-        return inst
+
+_SHELL_BACKEND_CLS = None
+
+
+def make_shell_backend(
+    root_dir,
+    virtual_mode=True,
+    inherit_env=True,
+    sandbox_mode: str = "off",
+    network_allowed: bool = True,
+    fs_config=None,
+    bash_shell: str = "",
+    **kwargs,
+):
+    """Module-level factory for the production shell backend (P2-2: was
+    _WinLocalShellBackend.__new__). Same lazy subclass build, same
+    per-instance config attributes — a plain function instead of a class
+    whose __new__ did all the work. Extra kwargs pass through to
+    LocalShellBackend.__init__ (e.g. max_output_bytes)."""
+    global _SHELL_BACKEND_CLS
+    if _SHELL_BACKEND_CLS is None:
+        _SHELL_BACKEND_CLS = _shell_backend_cls()
+    inst = _SHELL_BACKEND_CLS(root_dir=root_dir, virtual_mode=virtual_mode, inherit_env=inherit_env, **kwargs)
+    inst._sandbox_mode = sandbox_mode
+    inst._network_allowed = network_allowed
+    inst._fs_config = fs_config
+    inst._bash_shell = bash_shell
+    return inst
 
 
 def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=None):
@@ -350,8 +368,23 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=No
     return sp
 
 
-def _build_extra_tools(tools, skill_store, active_skills):
-    """Collect coderio tools not already provided by deepagents."""
+def _build_extra_tools(tools, skill_store, active_skills, anchor_dir=None):
+    """Collect coderio tools not already provided by deepagents.
+
+    ANCHOR PARITY for multi_edit (seam probe T4): deepagents' own write/edit
+    tools resolve relative paths against the backend root_dir; MultiEditTool
+    used to resolve against process cwd — a launch whose cwd differs from the
+    workspace (subdirectory + workspace_root) wrote the SAME relative input
+    into two different files depending on which tool the model picked.
+    Rewire every MultiEditTool to the workspace BEFORE conversion so one
+    anchor governs all structured edits.
+    """
+    if anchor_dir is not None:
+        from coderio.tools.multi_edit import MultiEditTool
+
+        for t in tools or []:
+            if isinstance(t, MultiEditTool):
+                t.anchor = anchor_dir
     from coderio.tools.base import to_langchain_tool as _adapt
     from coderio.tools.taxonomy import LEGACY_ENGINE_TOOLS
 
@@ -606,80 +639,139 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
     return final_text
 
 
-def run_deep_agent(
-    # str OR multimodal content-block list (docstring below) — build_user_content
-    # returns either depending on whether images are attached.
-    user_input: str | list[dict[str, Any]],
-    model,
-    session: Session,
-    stream=None,
-    *,
-    gate=None,
-    skill_store=None,
-    active_skills=None,
-    tools: list | None = None,
-    system_prompt: str | None = None,
-    workdir: str | Path | None = None,
-    harness_enabled: bool = True,
-    recursion_limit: int = 200,
-    command_policy=None,
-    sandbox_mode: str = "off",
-    network_allowed: bool = True,
-    fs_config=None,
-    bash_shell: str = "",
-    hooks: list | None = None,
-) -> str:
-    """Run a deepagents-backed agent turn (coderio's production engine).
+@dataclass
+class TurnSpec:
+    """One agent turn's configuration (P2-2: replaces run_deep_agent's 15 kwargs).
 
-    Builds a create_deep_agent with coderio's middleware stack (harness +
-    permission), a Windows-safe shell backend, and coderio's extra tools.
-    Streams events to coderio's StreamHandler protocol via three stream modes.
-    Returns the final assistant text (also persisted to the session).
-
-    Args:
-        user_input: the user's message (str or multimodal content-block list).
-        model: a langchain BaseChatModel.
-        session: coderio Session (messages persisted here).
-        stream: coderio StreamHandler (NullStream if None).
-        gate: coderio PermissionGate (wrapped in PermissionMiddleware). None = no gate.
-        skill_store: SkillStore (for build_system_prompt). None = empty store.
-        active_skills: ActiveSkills (for build_system_prompt). None = empty.
-        tools: extra coderio tools beyond deepagents' built-in FS/shell set.
-        system_prompt: optional override (defaults to coderio's build_system_prompt).
-        workdir: root dir for the shell backend (defaults to CWD).
-        harness_enabled: if False, the verification harness is disabled.
-        recursion_limit: langgraph recursion limit. Harness force-continues and
-            middleware hooks each consume recursion budget; 200 is a safe default
-            (harness escalates after 2 force-continues, each round uses ~5-10 recursions).
-        command_policy: a CommandPolicy for the command-review middleware (blocks
-            destructive shell commands like rm -rf /, mkfs, fork bombs, and
-            optionally disables web tools). None = use CommandPolicy.default()
-            (built-in blacklist active, network allowed). Pass an explicit policy
-            to customize via config.toml [tools].blocked_commands / network_allowed.
+    Everything except the per-turn payload (user_input, session, stream) lives
+    here as plain data: build_middleware / build_backend / build_subagents
+    consume it. Fields are SNAPSHOTS taken at construction — when a runtime
+    swaps an underlying object between turns (e.g. the TUI's /model replaces
+    the model, /clear replaces the session), rebuild the spec; do not cache it
+    across turns.
     """
-    stream = stream or NullStream()
-    from deepagents import create_deep_agent
 
-    # Neutralize deepagents' BASE_AGENT_PROMPT via compat layer (graceful
-    # degradation if the internal API changes).
-    from coderio.agent._deepagents_compat import neutralize_base_prompt
+    model: Any  # a langchain BaseChatModel
+    gate: Any = None  # PermissionGate; None = no permission middleware
+    skill_store: Any = None  # SkillStore (for build_system_prompt); None = empty store
+    active_skills: Any = None  # ActiveSkills (for build_system_prompt); None = empty
+    tools: list | None = None  # extra coderio tools beyond deepagents' FS/shell set
+    system_prompt: str | None = None  # None = coderio's build_system_prompt
+    workdir: str | Path | None = None  # root dir for the shell backend; None = CWD
+    harness_enabled: bool = True  # False disables the verification harness
+    recursion_limit: int = 200  # harness force-continues + middleware each consume budget
+    command_policy: Any = None  # None = CommandPolicy.default() (blacklist active)
+    sandbox_mode: str = "off"  # "off" | "job" | "write" — see win_sandbox/linux_sandbox
+    network_allowed: bool = True
+    fs_config: Any = None
+    bash_shell: str = ""  # explicit bash path ([tools].bash_shell); empty = auto-detect
+    hooks: list | None = None  # HookSpec list (agent/hooks.py)
 
-    neutralize_base_prompt()
 
-    # --- User hooks (agent/hooks.py): turn-level events fire here, tool-level
-    # events ride HooksMiddleware below. All fail-open except explicit exit 2.
-    from coderio.agent.hooks import HookRunner
+def build_middleware(spec: TurnSpec, stream, hook_runner, plan_artifact) -> list:
+    """Main-agent middleware stack, outermost first.
 
-    project_dir = str(Path(workdir).resolve() if workdir else Path.cwd())
-    hook_runner = HookRunner(
-        hooks or [],
-        project_dir=project_dir,
-        session_id=session.id,
-        permission_mode=getattr(gate, "mode", "") if gate is not None else "",
+    HooksMiddleware OUTERMOST: PreToolUse can deny before the permission
+    prompt appears, and observes the exact args the rest of the chain sees.
+    Harness next: it observes every tool call the permission/command layers
+    let through.
+    """
+    middleware: list[Any] = []
+    if hook_runner.specs:
+        from coderio.agent.hooks import HooksMiddleware
+
+        middleware.append(HooksMiddleware(hook_runner))
+
+    middleware.append(
+        HarnessMiddleware(
+            stream=stream,
+            enabled=spec.harness_enabled,
+            todos=plan_artifact.store if plan_artifact is not None else None,
+            plan_artifact=plan_artifact,
+        )
+    )
+    # Planning middleware (write_todos tool): deepagents 0.7.6 REMOVED it from
+    # the default graph (graph.py only mentions TodoListMiddleware in a stale
+    # comment) — without re-adding it, the model's write_todos calls fail with
+    # "not a valid tool" and the plan.md artifact's agent→file direction is
+    # dead while the system prompt still teaches the tool (2026-08-26 review).
+    from langchain.agents.middleware import TodoListMiddleware
+
+    middleware.append(TodoListMiddleware(system_prompt=""))
+    if spec.gate is not None:
+        from coderio.agent.permission_middleware import PermissionMiddleware
+
+        middleware.append(PermissionMiddleware(spec.gate))
+    # Command-content review: always active (even in FULL mode). Blocks rm -rf /,
+    # mkfs, fork bombs, etc. before they reach subprocess.run(shell=True).
+    # This is NOT a real OS sandbox — see command_policy.py for limitations.
+    # The gate reference lets the whitelist (if enabled) degrade based on mode
+    # (FULL allows, others prompt) rather than hard-blocking unknown commands.
+    from coderio.agent.command_review import CommandReviewMiddleware
+    from coderio.tools.command_policy import CommandPolicy
+
+    policy = spec.command_policy or CommandPolicy.default()
+    middleware.append(CommandReviewMiddleware(policy, gate=spec.gate))
+    return middleware
+
+
+def build_backend(spec: TurnSpec):
+    """Shell backend rooted at the workspace (spec.workdir or CWD)."""
+    return make_shell_backend(
+        root_dir=str(spec.workdir or Path.cwd()),
+        virtual_mode=True,
+        inherit_env=True,
+        sandbox_mode=spec.sandbox_mode,
+        network_allowed=spec.network_allowed,
+        fs_config=spec.fs_config,
+        bash_shell=spec.bash_shell,
     )
 
-    # SessionStart (once per session id, lazy — covers resume): stdout injects
-    # context into THIS turn's user message.
+
+def build_subagents(spec: TurnSpec, stream, hook_runner, project_dir: str) -> list[dict]:
+    """Trusted (research / general-purpose) + discovered custom subagent specs.
+
+    Custom user/project subagents (.coderio/agents/*.md). Layer dirs joined
+    HERE (not inside discovery) mirroring load_skill_store's caller-joins
+    convention — passing the bare project root would glob every root *.md
+    into an agent definition (same trap the custom-commands audit caught).
+
+    ANCHOR PARITY (seam SA-4): skills/config/trust all anchor at
+    _find_project_dir(search_from) which WALKS UP to the project root;
+    agents used to anchor at the literal runtime dir (workdir or cwd), so a
+    launch from a repo subdirectory silently loaded zero project-layer
+    agents while project-layer skills still loaded — the exact
+    discovery-vs-loading scope asymmetry of incident #3. Walk up with the
+    same rule; workspace_root stays the starting point when set.
+    """
+    from coderio.agent.custom_agents import discover_custom_agents
+    from coderio.config.loader import _find_project_dir
+
+    trusted_specs = [
+        _build_research_subagent(command_policy=spec.command_policy, hook_runner=hook_runner),
+        _build_general_purpose_subagent(spec.gate, spec.command_policy, stream=stream, hook_runner=hook_runner),
+    ]
+    custom_specs = [
+        _build_custom_subagent(ca, command_policy=spec.command_policy, hook_runner=hook_runner)
+        for ca in discover_custom_agents(
+            project_dir=_find_project_dir(project_dir) / ".coderio" / "agents",
+            user_dir=Path.home() / ".coderio" / "agents",
+        ).values()
+    ]
+    # Defense in depth at wiring time — see _drop_trusted_name_collisions.
+    custom_specs = _drop_trusted_name_collisions(custom_specs, trusted_specs)
+    return [*trusted_specs, *custom_specs]
+
+
+def _apply_turn_hooks(hook_runner, user_input, model, session, stream):
+    """Fire SessionStart (once per session, lazy — covers resume) and
+    UserPromptSubmit turn-level hooks.
+
+    Returns (user_input, early_text). early_text is not None when a hook
+    blocked the prompt: the rejected user + assistant messages are already
+    appended to the session, and the caller returns early_text as the turn
+    result.
+    """
     if hook_runner.has_event("SessionStart") and session.id not in HookRunner._sessions_started:
         HookRunner._sessions_started.add(session.id)
         ss = hook_runner.fire("SessionStart", {"source": "startup", "model": getattr(model, "model_name", "")})
@@ -697,24 +789,31 @@ def run_deep_agent(
             session.append(Message.assistant(f"Prompt rejected by hook: {ups.reason}"))
             if hasattr(stream, "on_finish"):
                 stream.on_finish()
-            return f"Prompt rejected by hook: {ups.reason}"
+            return prompt_text, f"Prompt rejected by hook: {ups.reason}"
         if ups.context:
             user_input = f"{prompt_text}\n\n[hook context]\n{ups.context}"
+    return user_input, None
 
-    # Plan artifact (.coderio/plan.md, S5): the harness's todo list mirrored to
-    # an editable file. Anchor walks up like skills/config/trust (SA-4 lesson —
-    # a literal runtime dir would miss project plans when launched from a
-    # subdirectory). The SAME TodoStore instance feeds both the middleware
-    # mirror and the artifact, so write_todos → materialize and turn-start
-    # adopt stay in sync. Subagent HarnessMiddleware gets neither: the plan has
-    # exactly one owner. Adoption runs BEFORE the hooks/session append below so
-    # the injected note lands inside this turn's user message.
+
+def _prepare_plan_artifact(harness_enabled: bool, project_dir: str, user_input):
+    """Plan artifact (.coderio/plan.md, S5): the harness's todo list mirrored
+    to an editable file. Anchor walks up like skills/config/trust (SA-4
+    lesson — a literal runtime dir would miss project plans when launched
+    from a subdirectory). The SAME TodoStore instance feeds both the
+    middleware mirror and the artifact, so write_todos → materialize and
+    turn-start adopt stay in sync. Subagent HarnessMiddleware gets neither:
+    the plan has exactly one owner. Adoption runs BEFORE the hooks/session
+    append so the injected note lands inside this turn's user message.
+
+    If the user edited plan.md between turns, their version already replaced
+    the todo store — append a note telling the model so it doesn't keep
+    executing a stale plan. Returns (plan_artifact, user_input).
+    """
     from coderio.agent.plan_artifact import AdoptionNote, PlanArtifact
     from coderio.config.loader import _find_project_dir
     from coderio.tools.todo import TodoStore
 
     plan_artifact = None
-    adoption_note = ""
     if harness_enabled:
         plan_artifact = PlanArtifact(
             anchor=_find_project_dir(project_dir) / ".coderio",
@@ -722,141 +821,140 @@ def run_deep_agent(
         )
         adopted = plan_artifact.adopt_if_edited()
         if adopted:
-            adoption_note = AdoptionNote(count=adopted, path=plan_artifact.path).render()
+            note = AdoptionNote(count=adopted, path=plan_artifact.path).render()
+            if isinstance(user_input, str):
+                user_input = f"{user_input}\n\n{note}"
+            else:
+                # Multimodal content blocks: append as an extra text block so
+                # attached images survive (same concern as the hook context).
+                user_input = [*user_input, {"type": "text", "text": note}]
+    return plan_artifact, user_input
 
-    # Plan artifact adoption (S5): if the user edited .coderio/plan.md between
-    # turns, their version already replaced the todo store above — tell the
-    # model so it doesn't keep executing a stale plan.
-    if adoption_note:
-        if isinstance(user_input, str):
-            user_input = f"{user_input}\n\n{adoption_note}"
-        else:
-            # Multimodal content blocks: append as an extra text block so
-            # attached images survive (same concern as the hook context above).
-            user_input = [*user_input, {"type": "text", "text": adoption_note}]
 
+def _handle_interrupt(checkpointer, thread_id, stream, turn_writes) -> None:
+    """Esc/interrupt cleanup: drop dangling checkpoint state + surface writes.
+
+    The graph may have stopped right after a model turn emitted tool_calls but
+    BEFORE the tool node completed — resuming from that checkpoint next turn
+    would replay a dangling tool_calls state (provider 400 or surprise
+    re-execution). Drop the thread's checkpoint: the next turn falls back to
+    full session history, which is always consistent (audit finding #9).
+    """
+    if checkpointer is not None:
+        try:
+            checkpointer.delete_thread(thread_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            _log.warning("checkpointer.delete_thread failed after interrupt")
+    # Interrupt must still surface the file-change summary (audit #10):
+    # the user needs to know what the agent already changed.
+    if hasattr(stream, "on_turn_end"):
+        stream.on_turn_end(turn_writes)
+
+
+def _close_checkpointer_conn(conn) -> None:
+    """Close the checkpointer's sqlite conn (leaked handles block file
+    deletion on Windows)."""
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # noqa: S110
+            pass
+
+
+def _finish_turn(hook_runner, stream, session, final_text: str, turn_writes: list[str]) -> str:
+    """Stop hook + stream teardown + assistant-message persistence."""
+    # Stop event (notification-only v1): the harness owns force-continue, so a
+    # user Stop hook observes the turn end but cannot extend it. stdout is
+    # ignored; exit 2 is logged — blocking here would fight the harness gates.
+    if hook_runner.has_event("Stop"):
+        try:
+            hook_runner.fire("Stop", {"last_assistant_message": final_text[:2000]})
+        except Exception as e:  # noqa: BLE001 — never let a hook break turn completion
+            _log.warning("Stop hook failed (ignored): %s", e)
+    if hasattr(stream, "on_finish"):
+        stream.on_finish()
+    if hasattr(stream, "on_turn_end"):
+        stream.on_turn_end(turn_writes)
+    if final_text and not _final_already_persisted(session):
+        session.append(Message.assistant(final_text))
+    return final_text
+
+
+def run_deep_agent(
+    user_input: str | list[dict[str, Any]],
+    spec: TurnSpec,
+    session: Session,
+    stream=None,
+) -> str:
+    """Run a deepagents-backed agent turn (coderio's production engine).
+
+    Builds a create_deep_agent from ``spec`` with coderio's middleware stack
+    (hooks + harness + permission + command review), a Windows-safe shell
+    backend, subagents, and coderio's extra tools. Streams events to coderio's
+    StreamHandler protocol via three stream modes. Returns the final assistant
+    text (also persisted to the session).
+
+    Args:
+        user_input: the user's message (str or multimodal content-block list).
+        spec: turn configuration — model, permission gate, tools, workdir,
+            sandbox, command policy, hooks (see TurnSpec field docs).
+        session: coderio Session (messages persisted here).
+        stream: coderio StreamHandler (NullStream if None).
+    """
+    stream = stream or NullStream()
+    from deepagents import create_deep_agent
+
+    from coderio.agent._deepagents_compat import neutralize_base_prompt
+
+    # Neutralize deepagents' BASE_AGENT_PROMPT via compat layer (graceful
+    # degradation if the internal API changes).
+    neutralize_base_prompt()
+
+    project_dir = str(Path(spec.workdir).resolve() if spec.workdir else Path.cwd())
+    # --- User hooks (agent/hooks.py): turn-level events fire here, tool-level
+    # events ride HooksMiddleware inside build_middleware. All fail-open
+    # except explicit exit 2.
+    hook_runner = HookRunner(
+        spec.hooks or [],
+        project_dir=project_dir,
+        session_id=session.id,
+        permission_mode=getattr(spec.gate, "mode", "") if spec.gate is not None else "",
+    )
+    user_input, rejected = _apply_turn_hooks(hook_runner, user_input, spec.model, session, stream)
+    if rejected is not None:
+        return rejected
+
+    plan_artifact, user_input = _prepare_plan_artifact(spec.harness_enabled, project_dir, user_input)
     session.append(Message.user(user_input))
 
-    sp = _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=workdir)
-    # HooksMiddleware OUTERMOST: PreToolUse can deny before the permission
-    # prompt appears, and observes the exact args the rest of the chain sees.
-    middleware: list[Any] = []
-    if hook_runner.specs:
-        from coderio.agent.hooks import HooksMiddleware
-
-        middleware.append(HooksMiddleware(hook_runner))
-
-    middleware.append(
-        HarnessMiddleware(
-            stream=stream,
-            enabled=harness_enabled,
-            todos=plan_artifact.store if plan_artifact is not None else None,
-            plan_artifact=plan_artifact,
-        )
-    )
-    # Planning middleware (write_todos tool): deepagents 0.7.6 REMOVED it from
-    # the default graph (graph.py only mentions TodoListMiddleware in a stale
-    # comment) — without re-adding it, the model's write_todos calls fail with
-    # "not a valid tool" and the plan.md artifact's agent→file direction is
-    # dead while the system prompt still teaches the tool (2026-08-26 review).
-    from langchain.agents.middleware import TodoListMiddleware
-
-    middleware.append(TodoListMiddleware(system_prompt=""))
-    if gate is not None:
-        middleware.append(PermissionMiddleware(gate))
-    # Command-content review: always active (even in FULL mode). Blocks rm -rf /,
-    # mkfs, fork bombs, etc. before they reach subprocess.run(shell=True).
-    # This is NOT a real OS sandbox — see command_policy.py for limitations.
-    # The gate reference lets the whitelist (if enabled) degrade based on mode
-    # (FULL allows, others prompt) rather than hard-blocking unknown commands.
-    from coderio.agent.command_review import CommandReviewMiddleware
-    from coderio.tools.command_policy import CommandPolicy
-
-    policy = command_policy or CommandPolicy.default()
-    middleware.append(CommandReviewMiddleware(policy, gate=gate))
-
-    backend = _WinLocalShellBackend(
-        root_dir=str(workdir or Path.cwd()),
-        virtual_mode=True,
-        inherit_env=True,
-        sandbox_mode=sandbox_mode,
-        network_allowed=network_allowed,
-        fs_config=fs_config,
-        bash_shell=bash_shell,
-    )
-
-    # Custom user/project subagents (.coderio/agents/*.md). Layer dirs joined
-    # HERE (not inside discovery) mirroring load_skill_store's caller-joins
-    # convention — passing the bare project root would glob every root *.md
-    # into an agent definition (same trap the custom-commands audit caught).
-    #
-    # ANCHOR PARITY (seam SA-4): skills/config/trust all anchor at
-    # _find_project_dir(search_from) which WALKS UP to the project root;
-    # agents used to anchor at the literal runtime dir (workdir or cwd), so a
-    # launch from a repo subdirectory silently loaded zero project-layer
-    # agents while project-layer skills still loaded — the exact
-    # discovery-vs-loading scope asymmetry of incident #3. Walk up with the
-    # same rule; workspace_root stays the starting point when set.
-    from coderio.agent.custom_agents import discover_custom_agents
-    from coderio.config.loader import _find_project_dir
-
-    trusted_specs = [
-        _build_research_subagent(command_policy=command_policy, hook_runner=hook_runner),
-        _build_general_purpose_subagent(gate, command_policy, stream=stream, hook_runner=hook_runner),
-    ]
-    custom_specs = [
-        _build_custom_subagent(ca, command_policy=command_policy, hook_runner=hook_runner)
-        for ca in discover_custom_agents(
-            project_dir=_find_project_dir(project_dir) / ".coderio" / "agents",
-            user_dir=Path.home() / ".coderio" / "agents",
-        ).values()
-    ]
-    # Defense in depth at wiring time — see _drop_trusted_name_collisions.
-    custom_specs = _drop_trusted_name_collisions(custom_specs, trusted_specs)
-
-    # ANCHOR PARITY for multi_edit: deepagents' own write/edit tools resolve
-    # relative paths against the backend root_dir; MultiEditTool used to
-    # resolve against process cwd — a launch whose cwd differs from the
-    # workspace (subdirectory + workspace_root) wrote the SAME relative input
-    # into two different files depending on which tool the model picked.
-    # Rewire every MultiEditTool to the workspace before conversion so one
-    # anchor governs all structured edits (2026-08-27 seam probe T4).
-    from coderio.tools.multi_edit import MultiEditTool
-
-    anchor_dir = str(project_dir)
-    for t in tools or []:
-        if isinstance(t, MultiEditTool):
-            t.anchor = anchor_dir
-
-    extra_lc_tools = _build_extra_tools(tools, skill_store, active_skills)
+    sp = _resolve_system_prompt(spec.system_prompt, spec.skill_store, spec.active_skills, workdir=spec.workdir)
+    middleware = build_middleware(spec, stream, hook_runner, plan_artifact)
+    backend = build_backend(spec)
+    subagents = build_subagents(spec, stream, hook_runner, project_dir)
+    extra_lc_tools = _build_extra_tools(spec.tools, spec.skill_store, spec.active_skills, anchor_dir=project_dir)
 
     build_kwargs: dict[str, Any] = {
-        "model": model,
+        "model": spec.model,
         "middleware": middleware,
         "backend": backend,
-        "subagents": [*trusted_specs, *custom_specs],
+        "subagents": subagents,
     }
     if sp:
         build_kwargs["system_prompt"] = sp
     if extra_lc_tools:
         build_kwargs["tools"] = extra_lc_tools
 
-    # --- Checkpointer: persist graph state across turns (sqlite) ---
-    # Without a checkpointer, each run_deep_agent call starts from scratch —
-    # SummarizationMiddleware's accumulated state resets, and we'd have to
-    # re-pass the full history every turn (expensive + grows linearly).
-    # With a checkpointer, deepagents restores prior state from the sqlite DB
-    # and we only pass the NEW user message. Falls back to full-history mode
-    # if sqlite is unavailable (package missing or DB corrupted).
+    # --- Checkpointer: persist graph state across turns (sqlite). Without one,
+    # each run_deep_agent call starts from scratch and we'd re-pass the full
+    # history every turn; with one, we only pass the NEW user message (see
+    # _try_create_checkpointer for the degradation path).
     thread_id = session.id
     checkpointer, _db_conn = _try_create_checkpointer(session)
     if checkpointer is not None:
         build_kwargs["checkpointer"] = checkpointer
 
-    final_text = ""
     _seen_tool_calls: set[str] = set()
     _turn_writes: list[str] = []
-
     try:
         agent = create_deep_agent(**build_kwargs)
         inputs = _build_inputs(checkpointer, user_input, session)
@@ -867,48 +965,15 @@ def run_deep_agent(
         abort_hook = getattr(stream, "is_interrupted", None)
         abort = (lambda: bool(abort_hook())) if callable(abort_hook) else None
         final_text = _run_stream(
-            agent, inputs, thread_id, recursion_limit, stream, session, _seen_tool_calls, _turn_writes, abort
+            agent, inputs, thread_id, spec.recursion_limit, stream, session, _seen_tool_calls, _turn_writes, abort
         )
     except InterruptedError:
-        # Esc/interrupt: the graph may have stopped right after a model turn
-        # emitted tool_calls but BEFORE the tool node completed — resuming
-        # from that checkpoint next turn would replay a dangling tool_calls
-        # state (provider 400 or surprise re-execution). Drop the thread's
-        # checkpoint: the next turn falls back to full session history, which
-        # is always consistent (audit finding #9).
-        if checkpointer is not None:
-            try:
-                checkpointer.delete_thread(thread_id)
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                _log.warning("checkpointer.delete_thread failed after interrupt")
-        # Interrupt must still surface the file-change summary (audit #10):
-        # the user needs to know what the agent already changed.
-        if hasattr(stream, "on_turn_end"):
-            stream.on_turn_end(_turn_writes)
+        _handle_interrupt(checkpointer, thread_id, stream, _turn_writes)
         raise
     finally:
-        if _db_conn is not None:
-            try:
-                _db_conn.close()
-            except Exception:  # noqa: S110
-                pass
+        _close_checkpointer_conn(_db_conn)
 
-    # Stop event (notification-only v1): the harness owns force-continue, so a
-    # user Stop hook observes the turn end but cannot extend it. stdout is
-    # ignored; exit 2 is logged — blocking here would fight the harness gates.
-    if hook_runner.has_event("Stop"):
-        try:
-            hook_runner.fire("Stop", {"last_assistant_message": final_text[:2000]})
-        except Exception as e:  # noqa: BLE001 — never let a hook break turn completion
-            _log.warning("Stop hook failed (ignored): %s", e)
-
-    if hasattr(stream, "on_finish"):
-        stream.on_finish()
-    if hasattr(stream, "on_turn_end"):
-        stream.on_turn_end(_turn_writes)
-    if final_text and not _final_already_persisted(session):
-        session.append(Message.assistant(final_text))
-    return final_text
+    return _finish_turn(hook_runner, stream, session, final_text, _turn_writes)
 
 
 def _final_already_persisted(session: Session) -> bool:
