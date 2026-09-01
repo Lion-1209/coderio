@@ -196,8 +196,8 @@ def test_concurrent_appends_dont_corrupt_lines(tmp_path):
     # would skip it. Check that ≥90% survived and all have valid content.
     reloaded = Session.load(s.path)
     total_expected = n_threads * n_per_thread
-    assert len(reloaded.messages) >= total_expected * 0.9, (
-        f"too few messages survived: {len(reloaded.messages)}/{total_expected} — concurrent writes lost more than 10%"
+    assert len(reloaded.messages) == total_expected, (
+        f"messages lost under concurrency: {len(reloaded.messages)}/{total_expected}"
     )
     for m in reloaded.messages:
         assert m.content.startswith("t") and "-msg" in m.content

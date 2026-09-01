@@ -4,12 +4,22 @@ import json
 import os
 import random
 import string
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 from coderio.session.message import Message
+
+# In-process mutex for appends: the file lock below is BEST-EFFORT (2s
+# timeout, then an unlocked fall-through). Same-process threads hammering
+# one session exhausted that timeout on fast machines and dropped writes
+# (CI 2026-08-28: 46/60 survived on windows-latest). The critical section
+# is a single write call, so an unbounded in-process lock cannot deadlock.
+# The file lock remains for the cross-process case (two coderio instances
+# appending to one jsonl).
+_APPEND_MUTEX = threading.Lock()
 
 
 @contextmanager
@@ -142,7 +152,7 @@ class Session:
 
     def append(self, msg: Message) -> None:
         self.messages.append(msg)
-        with _locked_append(self.path) as f:
+        with _APPEND_MUTEX, _locked_append(self.path) as f:
             f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + "\n")
 
     @classmethod
