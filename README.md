@@ -33,6 +33,8 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 
 不是提示词软规则，是基于工具调用 ground truth 的系统级控制。开箱即用、带逐级升级与退出码解析的结构化验证——同类终端 agent 中少见。
 
+![harness 拦截：模型声称完成但未验证](docs/images/harness-warn.svg)
+
 ### 原生支持中文 Coding Plan
 
 智谱 **GLM Coding Plan** 和阶跃 **StepFun Step Plan** 开箱即用（Anthropic 协议直连）——你的订阅额度跑本地 agent，不需要转发、不需要中间层。同时支持 OpenAI / Anthropic / Ollama / 任意 OpenAI 兼容端点，多 profile 一键切换。
@@ -47,6 +49,56 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 - 命令黑名单 + 白名单（防手滑）；Linux bubblewrap OS 级沙箱（防越界写）
 - 仓库配置首次信任确认（防克隆恶意仓库）；web_fetch SSRF 防护
 - 黑白名单是**防手滑不是防对抗**——对抗性防护靠沙箱 + 权限，恶意代码请用 VM
+
+confirm 模式下每次写入都是一次按键的选择，不读术语、不猜含义：
+
+![confirm 模式的纵向权限菜单](docs/images/confirm-menu.svg)
+
+## 3 分钟上手：你的第一个任务
+
+安装并完成 onboarding 后，启动 TUI 直接说人话：
+
+```bash
+coderio
+```
+
+输入（示例）：
+
+```
+帮我在 tests/ 里找一个失败的测试，修好它，并运行确认通过
+```
+
+你会看到：
+
+1. **思考流式展开**（Ctrl+O 随时折叠/展开每轮思考）
+2. **工具调用逐行显示**——读了哪些文件、跑了哪些命令，输出截断成一行摘要
+3. **TODO 面板**实时更新任务进度（agent 用 write_todos 计划任务时出现）：
+
+![TODO 面板](docs/images/todo-panel.svg)
+
+4. 结束后是蓝色 **coderio** 面板的最终答复 + 一行"本轮修改的文件"汇总；confirm 模式下每次写盘前会有上面那个纵向菜单
+5. 不放心？`/undo` 逐级回滚 agent 的每次写盘，`/think` 展开它刚才在想什么
+
+不想进 TUI？headless 单发同样可以：
+
+```bash
+coderio run "统计 src/ 下的 Python 行数并总结" --quiet
+```
+
+## 和 Claude Code / aider 的诚实对比
+
+| | coderio | Claude Code | aider |
+|---|---|---|---|
+| 结构化验证门（说"完成"前强制跑验证） | ✅ 核心特性 | ❌ 依赖提示词 | ❌ 无此概念 |
+| 中文 Coding Plan 原生接入（智谱/阶跃订阅直连） | ✅ 开箱即用 | ❌ 需转发层 | ❌ 需转发层 |
+| 开源且可当参考实现读 | ✅ MIT，单仓分层单体 | ❌ 闭源 | ✅ 开源 |
+| 权限分级 + 逐项确认菜单 | ✅ 4 级 | ✅ 类似 | ⚠️ 简化（y/N + auto） |
+| 文件写入自动快照 + /undo | ✅ 内置 | ⚠️ 有检查点概念 | ✅ git 底线 |
+| MCP / hooks / skills 生态 | ✅ 兼容 Claude Code 契约 | ✅ 原生 | ❌ 各自一套 |
+| 多模型自由接入（OpenAI 兼容 / Ollama / 自建端点） | ✅ | ⚠️ 限 Bedrock/Vertex 通道 | ✅ |
+| 成熟度与生态规模 | ⚠️ 早期项目，单人维护 | ✅ 工业级 | ✅ 成熟 |
+
+诚实结论：要稳定性和生态，选 Claude Code；要验证硬约束、国产 plan 直连、或想读一个能跑通的 agent 实现，coderio 值得装一次。
 
 ## 特性一览
 
@@ -83,7 +135,7 @@ matcher = "write_file|edit_file"
 command = "python .hooks/protect.py"   # stdin 收 JSON；exit 2 = 阻断
 ```
 
-MCP、沙箱四元组、更多配置见 [docs/coderio-architecture.md](docs/coderio-architecture.md)。
+MCP、hooks、沙箱四元组等**全部配置字段**见 [docs/CONFIG.md](docs/CONFIG.md)；架构设计见 [docs/coderio-architecture.md](docs/coderio-architecture.md)。
 
 </details>
 

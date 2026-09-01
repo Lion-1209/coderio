@@ -31,6 +31,8 @@ The shared weakness of coding agents: **the model says "I'm done" and you just h
 
 Not a prompt-level soft rule — a system-level control based on tool-call ground truth. Built-in, with escalating enforcement and exit-code parsing — rare among terminal coding agents.
 
+![harness intercept: the model claims done, unverified](docs/images/harness-warn.svg)
+
 ### Native Chinese coding-plan support
 
 Zhipu **GLM Coding Plan** and StepFun **Step Plan** work out of the box (direct Anthropic-protocol connection) — your subscription quota runs a local agent, no proxies, no middle layer. Also supports OpenAI / Anthropic / Ollama / any OpenAI-compatible endpoint, with multi-profile switching.
@@ -41,6 +43,56 @@ Zhipu **GLM Coding Plan** and StepFun **Step Plan** work out of the box (direct 
 - Command blacklist + whitelist (accident prevention); Linux bubblewrap OS sandbox (boundary enforcement)
 - First-use repo-config trust confirmation (hostile-repo protection); web_fetch SSRF protection
 - The blacklist/whitelist are **accident prevention, not adversarial defense** — adversarial protection comes from the sandbox + permissions; use a VM for hostile code
+
+In confirm mode, every write is one keystroke away from allow / deny / custom reply:
+
+![confirm mode's vertical permission menu](docs/images/confirm-menu.svg)
+
+## First task in 3 minutes
+
+After install + onboarding, launch the TUI and just talk:
+
+```bash
+coderio
+```
+
+Try this:
+
+```
+Find the failing test under tests/, fix it, and run the suite to confirm
+```
+
+What you'll see:
+
+1. **Thinking streaming live** (Ctrl+O folds/unfolds each round)
+2. **Every tool call on its own line** — files read, commands run, output capped to one summary line
+3. A live **TODO panel** whenever the agent plans with write_todos:
+
+![TODO panel](docs/images/todo-panel.svg)
+
+4. The final answer in a blue **coderio** panel, plus a one-line "files changed this turn" summary; in confirm mode, every disk write goes through the vertical menu above
+5. Skeptical? `/undo` rolls the agent's writes back step by step; `/think` unfolds what it was thinking
+
+No TUI? Headless works the same:
+
+```bash
+coderio run "count the Python lines under src/ and summarize" --quiet
+```
+
+## Honest comparison: Claude Code / aider
+
+| | coderio | Claude Code | aider |
+|---|---|---|---|
+| Structured verification gates (must verify before claiming done) | ✅ core feature | ❌ prompt-dependent | ❌ no concept |
+| Native Chinese coding-plan access (Zhipu/StepFun subscription, direct) | ✅ out of the box | ❌ needs a proxy layer | ❌ needs a proxy layer |
+| Open source and readable as a reference implementation | ✅ MIT, layered monorepo | ❌ closed source | ✅ open source |
+| Permission tiers + per-action confirm menu | ✅ 4 tiers | ✅ similar | ⚠️ simplified (y/N + auto) |
+| Auto-checkpointed writes + /undo | ✅ built in | ⚠️ checkpoint-ish | ✅ git-backed |
+| MCP / hooks / skills ecosystem | ✅ Claude Code-compatible contracts | ✅ native | ❌ its own way |
+| Free model access (OpenAI-compatible / Ollama / self-hosted) | ✅ | ⚠️ Bedrock/Vertex channels only | ✅ |
+| Maturity and ecosystem | ⚠️ early-stage, single maintainer | ✅ industrial | ✅ mature |
+
+Honest bottom line: for stability and ecosystem, pick Claude Code. For hard verification gates, direct domestic-plan access, or a readable working agent implementation, coderio is worth one install.
 
 ## Feature highlights
 
@@ -77,7 +129,7 @@ matcher = "write_file|edit_file"
 command = "python .hooks/protect.py"   # JSON on stdin; exit 2 = block
 ```
 
-MCP, the sandbox 4-tuple, and more: [docs/coderio-architecture.md](docs/coderio-architecture.md).
+Every config field — MCP, hooks, the sandbox 4-tuple — is documented in [docs/CONFIG.md](docs/CONFIG.md); architecture design in [docs/coderio-architecture.md](docs/coderio-architecture.md).
 
 </details>
 
