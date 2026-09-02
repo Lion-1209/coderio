@@ -444,3 +444,80 @@ def test_safe_pipelines_still_pass():
 def test_wrapper_recursion_depth():
     """Nested wrappers unwrap fully: sh -c bash -c 'rm -rf /' is blocked."""
     assert CommandPolicy.default().check_command("sh -c \"bash -c 'rm -rf /'\"") is not None
+
+
+# ------------------------------------------------- same-family footguns (P1-1, 2026-09-02)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # path-qualified / sudo-wrapped shells are the same wrapper as bare sh
+        '/bin/sh -c "rm -rf /"',
+        'sudo sh -c "rm -rf /"',
+        'env LC=C /bin/bash -c "rm -rf /"',
+        # Windows accepts these spellings and is case-insensitive
+        "rm.exe -rf /",
+        "RM -rf /",
+        "/bin/rm -rf ~",
+    ],
+)
+def test_blocks_rm_spelling_variants(command):
+    """Audit 2026-09-02: `rm.exe`, `RM`, and `/bin/rm` are the same command —
+    the exact-name comparison let them past _check_recursive_rm."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo / | xargs -0 rm -rf",  # xargs flag between xargs and rm
+        "echo / | xargs rm --recursive",  # long-form recursive flag
+        "echo / | xargs rm -rf",  # the classic shape must stay blocked
+    ],
+)
+def test_blocks_xargs_into_recursive_rm(command):
+    """Audit 2026-09-02: the old regex only matched the adjacent
+    `xargs rm -rf` shape — `xargs -0 rm` and `xargs rm --recursive` leaked."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "find /etc -delete",
+        "find ~ -delete",
+        "find $HOME -name x -delete",
+        "find * -delete",
+        "find / -exec rm -rf {} +",
+        "find ~ -exec rm {} +",
+    ],
+)
+def test_blocks_find_deletion_at_dangerous_root(command):
+    """Audit 2026-09-02: the old find patterns anchored only at bare `/`, so
+    the same-family `find /etc -delete` leaked while `rm -rf /etc` was
+    blocked — a double standard at equal danger. Relative starts stay legal:
+    `find . -delete` / `find foo -delete` mirror the rm relative-target rule."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "find . -name '*.tmp' -delete",
+        "find foo -delete",
+        "find . -name '*.pyc' -exec rm {} +",
+        "ls | xargs rm",  # non-recursive rm through xargs stays legal
+        "cat list.txt | xargs rm -f",  # -f alone is not recursive
+        "echo x | xargs rm -v",
+        "sh -c 'echo hello'",
+        "sudo apt install curl",
+    ],
+)
+def test_safe_find_xargs_variants_pass(command):
+    """The tightening must not block legitimate workdir-scoped cleanup."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is None, f"should pass: {command!r}"

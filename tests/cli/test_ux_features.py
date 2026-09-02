@@ -170,3 +170,33 @@ async def test_empty_response_shows_red_panel():
         dim_static_count = sum(1 for a in actions if a[0] == "static" and len(a) > 2 and "dim" in (a[2] or ""))
         assert panel_count >= 1, f"expected panel for empty response, actions: {actions}"
         assert dim_static_count == 0, f"should NOT be dim static: {actions}"
+
+
+@pytest.mark.asyncio
+async def test_second_submit_rejected_while_turn_running():
+    """P1-2 regression (2026-09-02 audit, finding 3): a turn in flight must
+    not accept a second engine submission — run_worker(exclusive=True) only
+    cancels Textual's worker wrapper, the Python thread would keep running
+    and two engines would interleave writes to the same session jsonl."""
+    from textual.widgets import Input
+
+    app = CoderioTUI()
+    async with app.run_test(size=Size(80, 24)) as pilot:
+        await pilot.pause()
+        submits: list[str] = []
+        app._on_input = lambda line: submits.append(line)
+
+        # First submit (idle) → spawns normally, flips _is_running via _spawn_turn.
+        inp = app.query_one("#msg", Input)
+        inp.value = "first prompt"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(submits) == 1, "idle submit must reach the engine"
+
+        # Second submit while the turn is "running" → rejected, input kept.
+        app._is_running = True  # simulate the engine still working
+        inp.value = "second prompt"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(submits) == 1, "second submit while running must NOT spawn another turn"
+        assert inp.value == "second prompt", "input must be kept so the user can resubmit after Esc"

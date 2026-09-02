@@ -45,6 +45,16 @@ import re
 from dataclasses import dataclass, field
 
 
+def _norm_exe(tok: str) -> str:
+    """Normalize an executable token for comparison: strip quotes, take the
+    basename (Windows accepts `/usr/bin/rm`-style and `\\bin\\rm`-style paths),
+    drop a trailing `.exe`, and lowercase (Windows is case-insensitive —
+    `RM -rf /` is the same command as `rm -rf /`).
+    """
+    t = tok.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return t[:-4] if t.endswith(".exe") else t
+
+
 def _check_recursive_rm(command: str) -> str | None:
     """Python-level check for dangerous rm commands with recursive flags.
 
@@ -55,10 +65,12 @@ def _check_recursive_rm(command: str) -> str | None:
     - rm -f /etc/passwd → NOT blocked (no -r/-R recursive indicator)
 
     Only triggers when ``rm`` is the actual command name (not inside echo/cat).
+    Comparison goes through _norm_exe so `RM`, `rm.exe` and `/bin/rm` are all
+    recognized (2026-09-02 audit: 7 same-family footgun spellings leaked).
     Returns a reason string if blocked, or None if safe.
     """
     # Extract the command name — only block when rm is actually executed.
-    name = _extract_command_name(command)
+    name = _norm_exe(_extract_command_name(command))
     if name != "rm":
         return None
 
@@ -73,7 +85,7 @@ def _check_recursive_rm(command: str) -> str | None:
         idx += 2
         while idx < len(tokens) and tokens[idx] in ("&&", "||", ";", "&", "|"):
             idx += 1
-    if idx >= len(tokens) or tokens[idx] != "rm":
+    if idx >= len(tokens) or _norm_exe(tokens[idx]) != "rm":
         return None
 
     rm_tokens = tokens[idx + 1 :]
@@ -141,19 +153,34 @@ def _check_recursive_rm(command: str) -> str | None:
 # regex below only covers the non-recursive `--no-preserve-root` case and
 # all non-rm destructive patterns.
 
+# find -delete / -exec rm rooted at a DANGEROUS start: absolute path,
+# ~, $HOME, or a glob. The old patterns anchored only at bare `/`, so
+# `rm -rf /etc` was blocked while the same-family `find /etc -delete` and
+# `find ~ -delete` leaked (2026-09-02 audit: footgun spellings, not
+# obfuscation). Relative starts (`find . -delete`, `find foo -delete`)
+# stay allowed, mirroring the rm check's relative-target rule.
+_FIND_DANGEROUS_START = r"(?:/(?:\S*)?|~\S*|\$HOME\S*|\*)"
+
 _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     # Recursive rm detection is handled by _check_recursive_rm() (Python-level).
     # The patterns below catch rm --no-preserve-root (defeats coreutils root
     # protection) which should always be blocked regardless of -r/-R flags.
     (r"\brm\b[^|;&]*--no-preserve-root", "rm with --no-preserve-root (removes root-delete protection)"),
-    # find starting at / with -delete: deletes every match under root.
-    # `find / -name x -delete` etc. — any find rooted at / ending in -delete.
-    (r"\bfind\s+/(?:\s|$).*?-delete\b", "find -delete starting at filesystem root"),
-    # find rooted at / whose -exec/-execdir runs rm — the audit's bypass
-    # vector: `find / -exec rm -rf {} +` deletes everything without -delete.
-    (r"\bfind\s+/(?:\s|$).*?-exec(?:dir)?\b.*\brm\b", "find -exec rm starting at filesystem root"),
-    # xargs piping into recursive rm: `echo / | xargs rm -rf`.
-    (r"\bxargs\s+(?:sudo\s+)?rm\s+-[a-zA-Z]*[rR]", "xargs piping into recursive rm"),
+    (r"\bfind\s+" + _FIND_DANGEROUS_START + r"(?:\s[^|;&]*)?-delete\b", "find -delete rooted at a system/home path"),
+    (
+        r"\bfind\s+" + _FIND_DANGEROUS_START + r"(?:\s[^|;&]*)?-exec(?:dir)?\b[^|;&]*\brm\b",
+        "find -exec rm rooted at a system/home path",
+    ),
+    # xargs piping into recursive rm. Flags may sit anywhere after xargs
+    # (`xargs -0 rm -rf`) or be long-form (`xargs rm --recursive`) — the old
+    # pattern only matched the adjacent `xargs rm -rf` shape (2026-09-02 audit).
+    # The single-flag branch requires a whitespace before `-` and no `-` after
+    # it, so `--force`/`--verbose` never satisfy the recursion test.
+    (
+        r"\bxargs\b[^|;&]*\brm\b[^|;&]*"
+        r"(?:\s-(?!-)[a-zA-Z]*[rR][a-zA-Z]*\b|\s--recursive\b|\s--recursive=)",
+        "xargs piping into recursive rm",
+    ),
     # Filesystem format — destroys all data on a device.
     (r"\bmkfs(?:\.\w+)?\s", "filesystem format (destroys all data on target)"),
     # Writing to raw block devices.
@@ -317,14 +344,27 @@ _WRAPPER_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "powershell", "pwsh", "cm
 
 def _unwrap_wrapper(seg: str) -> str | None:
     """If ``seg`` is a shell wrapper (``bash -lc "..."``, ``cmd /c ...``),
-    return everything after the -c/--command//c flag; else None."""
+    return everything after the -c/--command//c flag; else None.
+
+    Prefixes sudo/env/nohup/exec are stepped over (with env's VAR=VALUE
+    assignments), and the shell token is compared via _norm_exe — the
+    audit's `/bin/sh -c "rm -rf /"` and `sudo sh -c "..."` spellings are
+    the same wrapper as bare `sh -c`."""
     tokens = seg.split()
     if not tokens:
         return None
-    shell = tokens[0].lower().strip("\"'") if len(tokens[0]) > 1 else tokens[0]
+    i = 0
+    while i < len(tokens) and _norm_exe(tokens[i]) in ("sudo", "env", "command", "nohup", "exec"):
+        i += 1
+        # `env` may carry VAR=value assignments before the command.
+        while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
+            i += 1
+    if i >= len(tokens):
+        return None
+    shell = _norm_exe(tokens[i])
     if shell not in _WRAPPER_SHELLS:
         return None
-    for j in range(1, len(tokens)):
+    for j in range(i + 1, len(tokens)):
         t = tokens[j].lower()
         if shell == "cmd":
             if t in ("/c", "/k"):

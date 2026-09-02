@@ -506,3 +506,98 @@ def test_run_stream_runs_to_completion_without_abort():
 
     _run_stream(FakeAgent(), {}, "t", 50, NullStream(), None, set(), [], None)
     assert seen == [0, 1, 2, 3, 4]
+
+
+# --------------------------------------------- interrupt → checkpointer cleanup (P1-3)
+
+
+def test_interrupt_drops_thread_checkpoint_and_surfaces_writes(tmp_path, monkeypatch):
+    """P1-3 regression: the InterruptedError handler must (a) drop the thread's
+    checkpoint so the next turn doesn't replay dangling tool_calls state
+    (audit finding #9), (b) still fire on_turn_end with the writes so far
+    (audit finding #10), and (c) close the sqlite conn. The cleanup branch had
+    zero test coverage before 2026-09-02."""
+    import pytest
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+    from coderio.session.store import Session
+
+    session = Session.create(str(tmp_path / "sessions"), {"model": "m"})
+
+    deleted_threads: list[str] = []
+    closed: list[bool] = []
+
+    class FakeCheckpointer:
+        def delete_thread(self, thread_id):
+            deleted_threads.append(thread_id)
+
+    class FakeConn:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr("coderio.agent.deep_loop._try_create_checkpointer", lambda s: (FakeCheckpointer(), FakeConn()))
+
+    turn_ends: list[list[str]] = []
+
+    class AbortStream:
+        """Interrupts after the first streamed chunk (Esc mid-turn)."""
+
+        def __init__(self):
+            self._chunks_seen = 0
+
+        def is_interrupted(self):
+            return self._chunks_seen >= 1
+
+        def on_step_start(self):
+            pass
+
+        def on_token(self, text):
+            pass
+
+        def on_turn_end(self, writes):
+            turn_ends.append(list(writes))
+
+    stream = AbortStream()
+
+    class FakeAgent:
+        def stream(self, inputs, config=None, stream_mode=None):
+            yield (
+                "updates",
+                {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="",
+                                tool_calls=[
+                                    {
+                                        "name": "write_file",
+                                        "args": {"file_path": "/tmp/x.py"},
+                                        "id": "t1",
+                                        "type": "tool_call",
+                                    }
+                                ],
+                            ),
+                            ToolMessage(content="Wrote /tmp/x.py", tool_call_id="t1", name="write_file"),
+                        ]
+                    }
+                },
+            )
+            # the engine's abort gate fires before the NEXT pull — the remaining
+            # chunks must never be reached
+            stream._chunks_seen += 1
+            for _ in range(100):
+                yield ("custom", {"type": "never-reached"})
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **kw: FakeAgent())
+
+    with pytest.raises(InterruptedError):
+        run_deep_agent("do work", TurnSpec(model=object(), workdir=str(tmp_path)), session, stream=stream)
+
+    assert deleted_threads == [session.id], (
+        "interrupt must drop the thread checkpoint to avoid replaying dangling tool_calls state (audit #9)"
+    )
+    assert closed == [True], "sqlite conn must be closed on the interrupt path"
+    assert turn_ends and turn_ends[0] == ["/tmp/x.py"], (
+        f"on_turn_end must still fire with the writes so far (audit #10), got {turn_ends}"
+    )

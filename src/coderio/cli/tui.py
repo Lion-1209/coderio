@@ -606,6 +606,15 @@ class CoderioTUI(App):
         line = event.value.strip()
         if not line:
             return
+        # One engine thread at a time (2026-09-02 audit finding 3): a turn in
+        # flight must not accept a second submission. run_worker(exclusive=True)
+        # only cancels Textual's worker WRAPPER — the Python thread already
+        # inside run_deep_agent runs to completion, so a second submit would
+        # give two engine threads interleaving writes to the same session jsonl
+        # and render queue. Keep the user's text so they can Esc-then-resubmit.
+        if self._is_running:
+            self._stream.queue_static("⏳ 回合进行中——按 Esc 中断当前任务后再提交。", "yellow")
+            return
         event.input.value = ""
         self._spawn_turn(line)
 
