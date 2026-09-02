@@ -349,10 +349,12 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=No
     # deepagents' shell tool is named 'execute', not 'bash'. The system prompt
     # references 'bash' (coderio's original name); translate the standalone word
     # so the model calls the right tool. Word-boundary regex is robust to prose
-    # changes (same pattern as _BASH_TO_EXECUTE in harness_middleware.py).
-    import re
+    # changes (same pattern as harness_middleware.py — one shared regex in the
+    # taxonomy registry so the two call sites can never drift; P2-2, audit
+    # 2026-09-02).
+    from coderio.tools.taxonomy import translate_bash_prose
 
-    sp = re.sub(r"\bbash\b", "execute", sp)
+    sp = translate_bash_prose(sp)
     # Project instruction files (AGENTS.md / CLAUDE.md) — user conventions for
     # THIS repo, appended after coderio's own instructions (2026-08-28 audit:
     # feature gap; multi-agent users already maintain these files).
@@ -363,7 +365,7 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=No
     # nothing above the root can leak in (2026-08-28 adversarial review #3).
     sp += instructions_block(
         search_from=workdir or Path.cwd(),
-        stop_at=_find_project_dir(workdir) if workdir else None,
+        stop_at=_find_project_dir(workdir or Path.cwd()),
     )
     return sp
 

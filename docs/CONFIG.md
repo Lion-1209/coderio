@@ -107,14 +107,20 @@ timeout = 30                     # 秒；超时按失败处理（fail-open）
 
 | 事件 | 触发时机 | stdin 输入 |
 |---|---|---|
-| `SessionStart` | 会话首轮开始 | `{"source", "model"}`；stdout 的 `context` 字段注入该轮 user 消息 |
-| `UserPromptSubmit` | 用户消息入库前 | `{"prompt"}`；**exit 2 = 阻断该消息**；stdout `context` 注入 |
+| `SessionStart` | 会话首轮开始 | `{"source", "model"}`；stdout 原文注入该轮 user 消息 |
+| `UserPromptSubmit` | 用户消息入库前 | `{"prompt"}`；**exit 2 = 阻断该消息**；stdout 原文注入 |
 | `PreToolUse` | 每次工具调用前 | 工具名 + 参数 JSON；**exit 2 = 拒绝该调用** |
 | `PostToolUse` | 工具调用后 | 工具名 + 结果摘要 |
 | `Stop` | agent 回合结束 | `{"last_assistant_message"}`；仅通知，不能延长回合 |
 
-其余约定：所有 hook 失败一律 **fail-open**（只有显式 exit 2 阻断）；stdout 若
-是合法 JSON 且带 `context` 字段，该内容作为上下文注入模型输入。
+其余约定：
+
+- 所有 hook 失败一律 **fail-open**（只有显式 exit 2 阻断）
+- 仅 `SessionStart` / `UserPromptSubmit` 消费 stdout：**stdout 原文整段作为上下文
+  追加到模型输入**——不做 JSON 解析，直接 echo 你想注入的文本即可（与 Claude Code
+  的 prompt 类 hooks 行为一致）。超过 10,000 字符的输出会被整体丢弃并记日志；
+  多个 hook 的输出按序拼接
+- `PreToolUse` / `PostToolUse` / `Stop` 的 stdout 被忽略
 
 ---
 
