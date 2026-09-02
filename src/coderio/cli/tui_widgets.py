@@ -240,11 +240,13 @@ class ConfirmMenu(Vertical):
     DEFAULT_CSS = """
     ConfirmMenu {
         /* Hidden by default. When visible it sits between #status-row and #msg,
-           expanding the input-bar upward (history shrinks to fit). Fixed height
-           = 1 prompt row + 3 option rows; height:auto lets the ListView grow
-           unbounded and fill the whole screen. */
+           expanding the input-bar upward (history shrinks to fit). height:auto
+           adapts: 5 rows bare (prompt + 3 options), taller with a diff preview
+           (P3-1) — bounded by max-height so a huge diff scrolls instead of
+           filling the screen. */
         display: none;
-        height: 5;
+        height: auto;
+        max-height: 30;
         background: $surface;
         border: round $accent;
         padding: 0;
@@ -255,6 +257,16 @@ class ConfirmMenu(Vertical):
     ConfirmMenu ListItem { padding: 0 1; }
     /* Prompt line at the top showing the tool + args. */
     ConfirmMenu #confirm-prompt { color: $text; padding: 0 1; height: 1; }
+    /* Diff preview block (P3-1): hidden unless show(detail=...) has content. */
+    ConfirmMenu #confirm-diff {
+        display: none;
+        height: auto;
+        max-height: 16;
+        padding: 0 1;
+        background: $surface-darken-1;
+        overflow-y: auto;
+    }
+    ConfirmMenu.-has-diff #confirm-diff { display: block; }
     """
 
     # Choice constants — accept() returns one of these.
@@ -264,15 +276,29 @@ class ConfirmMenu(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("⚠", id="confirm-prompt")
+        yield Static("", id="confirm-diff")
         yield ListView(id="confirm-list")
 
     def visible(self) -> bool:
         return self.has_class("-visible")
 
-    def show(self, tool_name: str, args_str: str) -> None:
-        """Populate options and reveal the menu. MAIN THREAD (call_from_thread)."""
+    def show(self, tool_name: str, args_str: str, detail: str | None = None) -> None:
+        """Populate options and reveal the menu. MAIN THREAD (call_from_thread).
+
+        ``detail`` (P3-1): optional unified-diff preview for file-write tools,
+        rendered with Rich's diff syntax highlighting above the options. The
+        menu grows to fit (max-height bounds it)."""
         prompt = self.query_one("#confirm-prompt", Static)
         prompt.update(f"⚠ {tool_name}({args_str})")
+        diff_w = self.query_one("#confirm-diff", Static)
+        if detail:
+            from rich.syntax import Syntax
+
+            diff_w.update(Syntax(detail, "diff", theme="ansi-dark", word_wrap=True))
+            self.add_class("-has-diff")
+        else:
+            diff_w.update("")
+            self.remove_class("-has-diff")
         lv = self.query_one("#confirm-list", ListView)
         lv.clear()
         lv.append(ListItem(Static("✅ 允许执行"), name=self.ALLOW))
@@ -286,6 +312,7 @@ class ConfirmMenu(Vertical):
 
     def hide(self) -> None:
         self.remove_class("-visible")
+        self.remove_class("-has-diff")
         try:
             self.query_one("#confirm-list", ListView).clear()
         except Exception:

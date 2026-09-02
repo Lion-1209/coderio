@@ -93,7 +93,7 @@ class ChatStreamController:
         self.render_q: collections.deque = collections.deque()
 
     # ----------------------------------------------------- cross-thread confirmation
-    def request_confirmation(self, tool_name: str, args: dict) -> bool | str:
+    def request_confirmation(self, tool_name: str, args: dict, detail: str | None = None) -> bool | str:
         """Ask the user to allow/deny/custom-respond to a write operation.
 
         Called from the AGENT's background thread (PermissionMiddleware). Shows
@@ -102,6 +102,9 @@ class ChatStreamController:
         - 拒绝 → False (block, "Permission denied")
         - 其他 → user types free text → str (block, but feed user's instruction
           to the model as a tool result so it can adjust)
+
+        ``detail`` (P3-1) is an optional pre-rendered diff preview for
+        file-write tools, shown between the prompt and the options.
 
         The "其他" mode hides the buttons and turns #msg into a custom-reply
         input. The user types their instruction and presses Enter to submit.
@@ -116,7 +119,7 @@ class ChatStreamController:
 
         def _show():
             try:
-                ui._show_confirm_menu(tool_name, args_str)
+                ui._show_confirm_menu(tool_name, args_str, detail=detail)
             except Exception:  # noqa: BLE001 — confirm UI is best-effort
                 _log.debug("confirm menu show failed", exc_info=True)
 

@@ -250,3 +250,85 @@ async def test_harness_continue_renders_notice():
         widgets = list(history.children)
         # The buffer should be flushed as intermediate + a dim notice rendered.
         assert len(widgets) >= 1, "should have flushed intermediate output"
+
+
+# ------------------------------------------------- confirm diff block (P3-1)
+
+
+@pytest.mark.asyncio
+async def test_confirm_menu_shows_diff_block():
+    """P3-1: ConfirmMenu.show(detail=...) renders the diff preview block and
+    toggles the -has-diff class; hide() clears it."""
+    from textual.geometry import Size
+
+    from coderio.cli.tui import CoderioTUI
+    from coderio.cli.tui_widgets import ConfirmMenu
+
+    app = CoderioTUI()
+    async with app.run_test(size=Size(100, 40)) as pilot:
+        await pilot.pause()
+        menu = app.query_one(ConfirmMenu)
+        menu.show(
+            "write_file",
+            "file_path='src/app.py'",
+            detail="-old line\n+new line",
+        )
+        await pilot.pause()
+        assert menu.has_class("-visible") and menu.has_class("-has-diff")
+        from textual.widgets import Static
+
+        diff_w = menu.query_one("#confirm-diff", Static)
+        from rich.syntax import Syntax as RichSyntax
+
+        assert isinstance(diff_w.content, RichSyntax), "detail must render as highlighted diff"
+        assert "old line" in diff_w.content.code and "new line" in diff_w.content.code
+        menu.hide()
+        await pilot.pause()
+        assert not menu.has_class("-has-diff"), "hide must clear the diff state"
+
+        # no detail → the block stays hidden (menu looks like pre-P3-1)
+        menu.show("execute", "command='pytest'")
+        await pilot.pause()
+        assert menu.has_class("-visible") and not menu.has_class("-has-diff")
+        menu.hide()
+
+
+# ------------------------------------------------- confirm diff preview (P3-1)
+
+
+def test_tui_gate_passes_diff_detail_to_request_confirmation(tmp_path, monkeypatch):
+    """P3-1 wiring: TuiPermissionGate._ask renders a diff preview for file
+    writes and hands it to request_confirmation(detail=...)."""
+    from coderio.cli.repl import TuiPermissionGate
+    from coderio.tools.permission import PermissionMode
+
+    target = tmp_path / "app.py"
+    target.write_text("old\n", encoding="utf-8")
+
+    seen: dict = {}
+
+    class _FakeTui:
+        def request_confirmation(self, tool_name, args, detail=None):
+            seen["detail"] = detail
+            return True
+
+    gate = TuiPermissionGate(PermissionMode.CONFIRM, tui=_FakeTui(), workdir=str(tmp_path))
+    result = gate._ask("write_file", {"file_path": str(target), "content": "new\n"})
+    assert result is True
+    assert seen["detail"] is not None and "-old" in seen["detail"] and "+new" in seen["detail"]
+
+
+def test_tui_gate_non_file_tool_gets_no_detail(tmp_path):
+    from coderio.cli.repl import TuiPermissionGate
+    from coderio.tools.permission import PermissionMode
+
+    seen: dict = {}
+
+    class _FakeTui:
+        def request_confirmation(self, tool_name, args, detail=None):
+            seen["detail"] = detail
+            return False
+
+    gate = TuiPermissionGate(PermissionMode.CONFIRM, tui=_FakeTui(), workdir=str(tmp_path))
+    gate._ask("execute", {"command": "pytest -q"})
+    assert seen["detail"] is None, "shell commands have no diff to preview"

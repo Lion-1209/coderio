@@ -22,7 +22,7 @@ class FakeUI:
     def call_from_thread(self, fn, *a, **kw):
         return fn(*a, **kw)
 
-    def _show_confirm_menu(self, tool_name, args_str):
+    def _show_confirm_menu(self, tool_name, args_str, detail=None):
         self.events.append(("show", tool_name))
 
     def _hide_confirm_menu(self):

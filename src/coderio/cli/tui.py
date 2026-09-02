@@ -206,14 +206,16 @@ class CoderioTUI(App):
     # state); this App only owns the ConfirmMenu DOM, shown/hidden from the
     # main thread via call_from_thread.
 
-    def request_confirmation(self, tool_name: str, args: dict) -> bool | str:
+    def request_confirmation(self, tool_name: str, args: dict, detail: str | None = None) -> bool | str:
         """Agent thread: block until the user allows/denies/custom-responds.
 
         Forwarder — see ChatStreamController.request_confirmation for the
         three-option contract (✓ 允许 / ✗ 拒绝 / ✎ 其他): 允许 → True,
         拒绝 → False, 其他 → str (the user's free-text instruction).
+        ``detail`` (P3-1) is a pre-rendered diff preview shown above the
+        options for file-write tools.
         """
-        return self._stream.request_confirmation(tool_name, args)
+        return self._stream.request_confirmation(tool_name, args, detail=detail)
 
     def _resolve_confirmation(self, result: bool | str) -> None:
         """MAIN THREAD: resolve the pending confirmation and wake the agent."""
@@ -232,9 +234,9 @@ class CoderioTUI(App):
         except Exception:  # noqa: BLE001 — custom-mode UI is best-effort
             _log.debug("custom-reply mode switch failed", exc_info=True)
 
-    def _show_confirm_menu(self, tool_name: str, args_str: str) -> None:
+    def _show_confirm_menu(self, tool_name: str, args_str: str, detail: str | None = None) -> None:
         """MAIN THREAD: display the inline permission menu."""
-        self.query_one(ConfirmMenu).show(tool_name, args_str)
+        self.query_one(ConfirmMenu).show(tool_name, args_str, detail=detail)
 
     def _hide_confirm_menu(self) -> None:
         """MAIN THREAD: hide the menu and reset #msg's placeholder."""

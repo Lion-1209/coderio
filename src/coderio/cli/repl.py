@@ -32,15 +32,28 @@ class TuiPermissionGate(PermissionGate):
 
     Uses a Textual ModalScreen (via request_confirmation) instead of input(),
     which would deadlock against Textual's terminal takeover.
+
+    ``workdir`` is the engine's backend root (workspace_root or launch dir) —
+    relative file_path args in the confirmation's diff preview resolve against
+    it (P3-1, 2026-09-02).
     """
 
-    def __init__(self, mode, tui, auto_allow_execute: bool = False):
+    def __init__(self, mode, tui, auto_allow_execute: bool = False, workdir=None):
         super().__init__(mode, auto_allow_execute=auto_allow_execute)
         self._tui = tui
+        self._workdir = workdir
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         if hasattr(self._tui, "request_confirmation"):
-            return self._tui.request_confirmation(tool_name, args)
+            detail = None
+            try:
+                # Best effort — a preview failure must never block confirmation.
+                from coderio.tools.confirm_diff import build_diff_preview
+
+                detail = build_diff_preview(tool_name, args, self._workdir)
+            except Exception:  # noqa: BLE001
+                detail = None
+            return self._tui.request_confirmation(tool_name, args, detail=detail)
         return True
 
 
@@ -129,7 +142,7 @@ def build_gate(cfg: Config, console=None, tui=None):
     if mode == PermissionMode.PLAN:
         return PermissionGate(PermissionMode.PLAN)
     if tui is not None:
-        return TuiPermissionGate(mode, tui=tui, auto_allow_execute=auto_exec)
+        return TuiPermissionGate(mode, tui=tui, auto_allow_execute=auto_exec, workdir=cfg.tools.workspace_root or None)
     if mode == PermissionMode.AUTO_EDIT:
         return _ReplAutoEditGate(console=console, auto_allow_execute=auto_exec)
     return RichPromptPermissionGate(console=console, auto_allow_execute=auto_exec)
