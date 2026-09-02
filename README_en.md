@@ -79,21 +79,6 @@ No TUI? Headless works the same:
 coderio run "count the Python lines under src/ and summarize" --quiet
 ```
 
-## Honest comparison: Claude Code / aider
-
-| | coderio | Claude Code | aider |
-|---|---|---|---|
-| Structured verification gates (must verify before claiming done) | ✅ core feature | ❌ prompt-dependent | ❌ no concept |
-| Native Chinese coding-plan access (Zhipu/StepFun subscription, direct) | ✅ out of the box | ❌ needs a proxy layer | ❌ needs a proxy layer |
-| Open source and readable as a reference implementation | ✅ MIT, layered monorepo | ❌ closed source | ✅ open source |
-| Permission tiers + per-action confirm menu | ✅ 4 tiers | ✅ similar | ⚠️ simplified (y/N + auto) |
-| Auto-checkpointed writes + /undo | ✅ built in | ⚠️ checkpoint-ish | ✅ git-backed |
-| MCP / hooks / skills ecosystem | ✅ Claude Code-compatible contracts | ✅ native | ❌ its own way |
-| Free model access (OpenAI-compatible / Ollama / self-hosted) | ✅ | ⚠️ Bedrock/Vertex channels only | ✅ |
-| Maturity and ecosystem | ⚠️ early-stage, single maintainer | ✅ industrial | ✅ mature |
-
-Honest bottom line: for stability and ecosystem, pick Claude Code. For hard verification gates, direct domestic-plan access, or a readable working agent implementation, coderio is worth one install.
-
 ## Feature highlights
 
 - **Interactive TUI**: streaming output, foldable thinking (Ctrl+O), collapsible TODO panel, vertical permission menu, task interruption (Esc), slash-command autocomplete, session management

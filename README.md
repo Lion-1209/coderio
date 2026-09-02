@@ -85,21 +85,6 @@ coderio
 coderio run "统计 src/ 下的 Python 行数并总结" --quiet
 ```
 
-## 和 Claude Code / aider 的诚实对比
-
-| | coderio | Claude Code | aider |
-|---|---|---|---|
-| 结构化验证门（说"完成"前强制跑验证） | ✅ 核心特性 | ❌ 依赖提示词 | ❌ 无此概念 |
-| 中文 Coding Plan 原生接入（智谱/阶跃订阅直连） | ✅ 开箱即用 | ❌ 需转发层 | ❌ 需转发层 |
-| 开源且可当参考实现读 | ✅ MIT，单仓分层单体 | ❌ 闭源 | ✅ 开源 |
-| 权限分级 + 逐项确认菜单 | ✅ 4 级 | ✅ 类似 | ⚠️ 简化（y/N + auto） |
-| 文件写入自动快照 + /undo | ✅ 内置 | ⚠️ 有检查点概念 | ✅ git 底线 |
-| MCP / hooks / skills 生态 | ✅ 兼容 Claude Code 契约 | ✅ 原生 | ❌ 各自一套 |
-| 多模型自由接入（OpenAI 兼容 / Ollama / 自建端点） | ✅ | ⚠️ 限 Bedrock/Vertex 通道 | ✅ |
-| 成熟度与生态规模 | ⚠️ 早期项目，单人维护 | ✅ 工业级 | ✅ 成熟 |
-
-诚实结论：要稳定性和生态，选 Claude Code；要验证硬约束、国产 plan 直连、或想读一个能跑通的 agent 实现，coderio 值得装一次。
-
 ## 特性一览
 
 - **交互式 TUI**：流式输出、思考折叠（Ctrl+O）、可折叠 TODO 面板、纵向权限菜单、任务中断（Esc）、slash 命令补全、会话管理
