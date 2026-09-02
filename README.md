@@ -143,7 +143,7 @@ TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、
 
 ## 起源
 
-业余项目，开源目的：给想自己搭 coding agent 的开发者一份能跑的参考。名字是 **code + rio**（作者英文名 Lion，本想叫 codelion）。
+业余项目，开源目的：给想自己搭 coding agent 的开发者一份能跑的参考。名字是 **code + rio**（作者英文名 Lion，本想叫 codelion）。项目方向与维护状态见 [ROADMAP.md](ROADMAP.md)。
 
 ## 贡献与 License
 

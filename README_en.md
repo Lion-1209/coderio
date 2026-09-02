@@ -137,7 +137,7 @@ Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /
 
 ## Origin
 
-A spare-time project, open-sourced as a working reference for developers building their own coding agents. The name is **code + rio** (the author's English name is Lion; "codelion" sounded odd).
+A spare-time project, open-sourced as a working reference for developers building their own coding agents. The name is **code + rio** (the author's English name is Lion; "codelion" sounded odd). Project direction and maintenance status: [ROADMAP.md](ROADMAP.md).
 
 ## Contributing & License
 
