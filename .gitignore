@@ -42,3 +42,23 @@ tmp/
 
 # zcode workspace instructions — local only, not part of the project
 /AGENTS.md
+/AGENTS_EXAMPLE.md
+
+# Local audit/analysis artifacts — single-maintainer working notes (2026-09-02
+# review: 34 untracked items at repo root). Files stay on disk; git just
+# stops listing them. Delete manually when no longer wanted.
+/coderio-*analysis*.md
+/coderio-optimization-checklist-*.md
+/coderio-latest-test-report-*.md
+/coderio-detailed-analysis-*.md
+/coderio-project-analysis.md
+/coderio-vs-mainstream-agents-*.md
+/juejin-post-*.md
+/_test_subagent/
+/docs/blog/
+/hello.py
+/test.py
+
+# Local screenshots / assets at the repo root (not shipped docs images)
+/*.png
+!/docs/images/*.png

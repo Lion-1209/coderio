@@ -6,6 +6,67 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [Unreleased]
+
+### Fixed — audit-driven hardening (2026-08-28 + 2026-09-02 review batches)
+- **Command blacklist**: rebuilt segment/token parsing (multi-line, wrapper
+  shells incl. path-qualified and sudo-prefixed, PowerShell/cmd variants);
+  xargs-into-recursive-rm with flags in any position; `find -delete`/
+  `-exec rm` dangerous-root set widened to any absolute path, ~, $HOME, globs
+  (the `rm -rf /etc` blocked / `find /etc -delete` leaked double standard).
+- **Instruction injection**: the AGENTS.md walk is bounded at the launch dir
+  even when no workspace_root is configured (a parent directory's AGENTS.md
+  could previously leak into every project launched from below it).
+- **Hooks**: subprocess environment is now a whitelist (CODERIO_* + exec
+  resolution + temp/locale) instead of a full os.environ copy — repo hooks
+  can no longer read environment secrets; hooks stdout contract documented
+  (raw stdout injects for SessionStart/UserPromptSubmit, no JSON parsing).
+- **Credentials**: the file is created and ACL-restricted BEFORE any key
+  bytes hit the disk (write-then-restrict window closed); icacls failures
+  are logged; a missing Windows username skips inheritance-stripping
+  instead of producing a file nobody can read.
+- **TUI/engine**: a turn in flight no longer accepts a second submission
+  (concurrent engine threads interleaved session writes); Esc now breaks a
+  pending permission-prompt wait (previously blocked up to 120s); interrupt
+  drops the thread checkpoint (dangling tool_calls state) — now regression
+  tested.
+- **run**: timeout path logs why the daemon thread survives and how
+  `[tools].sandbox_mode = "job"` reaps the process tree; headless stdout
+  writes survive interpreter teardown.
+
+### Changed — structure (P2 decomposition, behavior-preserving)
+- `run_deep_agent` decomposed: `TurnSpec` dataclass (15 kwargs → 1 spec),
+  `build_middleware/build_backend/build_subagents` builders, module-level
+  `make_shell_backend` factory; body ≤80 lines, behavior pinned by the
+  existing suite + adversarial equivalence review.
+- `CoderioTUI` (1380 → 983 lines): StreamHandler protocol, agent-thread
+  state, render queue and confirmation wait extracted to
+  `cli/stream_controller.py`; every bare `except: pass` in tui.py now logs.
+- `build_turn_spec` in cli/repl.py is the single CommandPolicy/TurnSpec
+  construction path for headless and TUI runs (was two field-identical
+  copies).
+- Tool-name registry (`tools/taxonomy.py`) is now the literal single source:
+  web_search registered, permission/harness literals re-pointed, the two
+  bash→execute prose regexes merged, the shim removed.
+- tests/e2e filled (5 black-box CLI tests); app.py coverage 36%→95%,
+  tui_runtime.py 35%→96%.
+
+### Added
+- AGENTS.md / CLAUDE.md project instructions injected into the system
+  prompt (nearest-wins, bounded at the project root).
+- Tool-name registry `tools/taxonomy.py` — one definition of engine/harness
+  names and categories (was 6+ drifting ad-hoc copies, the root cause of
+  several recorded P0s).
+- `--version` flag.
+- docs/CONFIG.md — full config.toml field reference, hooks syntax,
+  .mcp.json fields, custom agents/commands, trust mechanism.
+
+### Deprecated / Removed
+- Removed half-demolished relics: [context] config section, RichStream,
+  phase-timeline dead branches, to_langchain_tools passthrough (P2-8 batch).
+- README: removed the Claude Code / aider comparison table; honest
+  macOS-sandbox disclosure added to Known limitations.
+
 ## [0.4.4] — 2026-08-24
 
 ### Added — extensibility & safety-of-agency features (each adversarially reviewed, mutation-verified)
@@ -606,7 +667,8 @@ All notable changes to coderio are documented here. The format follows
 - Rich stream UI + Textual TUI with foldable thinking.
 - jsonl session persistence with compression truncation.
 
-[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.4
 [0.3.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.1.0

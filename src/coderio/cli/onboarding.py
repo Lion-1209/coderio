@@ -75,13 +75,16 @@ def _choose_model(prompt_fn, p: ProviderInfo) -> str:
     for i, m in enumerate(p.models, 1):
         star = " *" if m == p.default_model else ""
         print(f"  [{i}] {m}{star}")
-    raw = prompt_fn("Pick a model (Enter = default): ").strip()
-    if raw == "" or not raw.isdigit():
+    # P3-2: a non-number answer is taken as a literal model id — the built-in
+    # list ages fast, and a user on a newer plan must not be locked to it.
+    raw = prompt_fn("Pick a number (Enter = default), or type a model name: ").strip()
+    # isdecimal, not isdigit: "²".isdigit() is True but int("²") raises.
+    if raw == "" or raw.isdecimal():
+        i = int(raw) - 1 if raw.isdecimal() else -1
+        if 0 <= i < len(p.models):
+            return p.models[i]
         return p.default_model
-    i = int(raw) - 1
-    if 0 <= i < len(p.models):
-        return p.models[i]
-    return p.default_model
+    return raw
 
 
 def _save_to_config(result: OnboardingResult, config_path: Path) -> None:

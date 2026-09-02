@@ -230,16 +230,27 @@ class OnboardingScreen(ModalScreen[dict | None]):
         for m in p.models:
             star = " ★" if m == p.default_model else ""
             lv.append(ListItem(Static(f"  {m}{star}")))
+        # P3-2: the preset list ages fast — the last item opens a free-text
+        # input so a user on a newer plan isn't locked to stale ids.
+        lv.append(ListItem(Static("  [yellow]✎[/yellow] Type a model name…")))
         # When editing, highlight the profile's current model (if it's in the
         # preset list) so the user can just press Enter to keep it.
         start_idx = 0
-        if self._editing_profile and self._editing_profile.model in self._model_items:
-            start_idx = self._model_items.index(self._editing_profile.model)
+        if self._editing_profile:
+            if self._editing_profile.model in self._model_items:
+                start_idx = self._model_items.index(self._editing_profile.model)
+            else:
+                # Custom model created via the free-text sentinel (P3-2):
+                # highlight the SENTINEL, not the first preset — otherwise
+                # "Enter to keep" silently swapped the model (audit 2026-09-02 P2).
+                start_idx = len(self._model_items)
         try:
             lv.index = start_idx
         except Exception:
             pass
-        self.query_one("#onboard-hint").update(f"Pick a model ({p.label}) — star = recommended (Up/Down · Enter)")
+        self.query_one("#onboard-hint").update(
+            f"Pick a model ({p.label}) — star = recommended (Up/Down · Enter; last item = type your own)"
+        )
         lv.focus()
 
     def _show_base_url_step(self) -> None:
@@ -398,6 +409,18 @@ class OnboardingScreen(ModalScreen[dict | None]):
                     self._base_url = p.base_url
                     self._show_model_step()
         elif self._step == "model":
+            if idx == len(self._model_items):
+                # "Type a model name…" sentinel (P3-2): switch to free text.
+                # Pre-fill when editing so "keep current" is a bare Enter.
+                self._step = "model_input"
+                lv.display = False
+                inp = self.query_one("#onboard-input", Input)
+                inp.visible = True
+                inp.password = False
+                inp.value = self._editing_profile.model if self._editing_profile else ""
+                inp.focus()
+                self.query_one("#onboard-hint").update("Enter model name (any valid id for this provider works):")
+                return
             if idx < len(self._model_items):
                 self._chosen_model = self._model_items[idx]
                 self.query_one("#onboard-status").update("")

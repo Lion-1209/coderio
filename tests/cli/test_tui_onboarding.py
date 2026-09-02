@@ -237,3 +237,56 @@ async def test_action_step_shown_when_profiles_exist(monkeypatch):
         screen = app.screen
         assert screen._step == "action"
         assert len(screen._action_items) == 2  # None (new) + 1 profile
+
+
+# ------------------------------------------------- model free-text sentinel (P3-2)
+
+
+@pytest.mark.asyncio
+async def test_model_step_appends_free_text_sentinel(monkeypatch):
+    """P3-2: the model ListView must offer a "Type a model name…" sentinel —
+    it shipped with zero coverage (a mutation removing it passed the suite)."""
+    from textual.geometry import Size
+    from textual.widgets import ListView
+
+    from coderio.cli.providers import get_provider
+
+    _patch_first_run(monkeypatch)
+    app = _OnboardingApp()
+    async with app.run_test(size=Size(100, 40)) as pilot:
+        await pilot.pause(0.3)
+        screen = app.screen
+        screen._chosen_provider = get_provider("openai")
+        screen._show_model_step()
+        await pilot.pause(0.2)
+        lv = screen.query_one("#onboard-list", ListView)
+        assert lv.display is True
+        assert len(list(lv.children)) == len(screen._model_items) + 1, (
+            "model list must be presets + ONE free-text sentinel; "
+            f"got {len(list(lv.children))} items for {len(screen._model_items)} presets"
+        )
+
+
+@pytest.mark.asyncio
+async def test_selecting_sentinel_switches_to_free_text(monkeypatch):
+    """Selecting the sentinel switches to the model_input step (free text),
+    instead of silently picking the first preset model."""
+    from textual.geometry import Size
+    from textual.widgets import ListView
+
+    from coderio.cli.providers import get_provider
+
+    _patch_first_run(monkeypatch)
+    app = _OnboardingApp()
+    async with app.run_test(size=Size(100, 40)) as pilot:
+        await pilot.pause(0.3)
+        screen = app.screen
+        prov = get_provider("openai")
+        screen._chosen_provider = prov
+        screen._show_model_step()
+        await pilot.pause(0.2)
+        lv = screen.query_one("#onboard-list", ListView)
+        lv.index = len(prov.models)  # the sentinel is the LAST item
+        screen.on_list_view_selected(ListView.Selected(list_view=lv, item=lv.children[lv.index], index=lv.index))
+        await pilot.pause(0.1)
+        assert screen._step == "model_input", "sentinel must open the free-text input"

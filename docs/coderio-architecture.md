@@ -235,14 +235,14 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 
 ## 5. CLI 层与流式 UI
 
-### 6.1 REPL 结构（`cli/repl.py`）
+### 5.1 REPL 结构（`cli/repl.py`）
 
 - `build_runtime(...)` → 8 元组（cfg, store, model, tools, gate, session, active, stream）
 - `_loop(...)`：`▸ you` 提示符 → slash 命令分发 / 普通 agent turn
-- slash 命令：`/help /exit /clear /cost /mode /model /skills /config /resume /list`
+- slash 命令（以 `commands.py` 的内置表为准）：`/help /exit /clear /cost /mode /model /setup /sessions /resume /skills /config /export /think /undo /profile`
 - `/mode`、`/model` 原地重建（保留 session）
 
-### 6.2 流式 UI（`cli/stream.py: RichStream`）
+### 5.2 流式 UI（`cli/stream.py: RichStream`）
 
 实现 `StreamHandler` 协议。核心设计：**单个 always-on busy 指示器**，带已用秒数计时器，覆盖整个模型等待周期（思考 + 生成 + 工具间隙），屏幕永不僵死。
 
@@ -250,11 +250,11 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 - 用 `Live(get_renderable=self._busy_renderable)` 回调（**不是**静态 renderable）——Rich 自动刷新每 tick 重新调用回调，重新读 `time.monotonic()`，所以计时器和 spinner 同步跳动。这是修复"点在转但秒数不动"bug 的关键。
 - assistant 回复用蓝色 Panel（cc 风格），tool 输出折叠 3 行，思考用 spinner + 预览，截断/harness 警告用黄/红 Panel。
 
-### 6.3 on_step_start：消除"卡住"感
+### 5.3 on_step_start：消除"卡住"感
 
 `run_deep_agent` 在 stream 循环开始前调 `stream.on_step_start()`，启动 busy 指示器。
 
-### 6.4 StreamHandler 协议（`agent/stream.py`）
+### 5.4 StreamHandler 协议（`agent/stream.py`）
 
 ```
 on_step_start → on_token / on_thinking → on_tool_start → on_tool_end → ... → on_finish
@@ -268,7 +268,7 @@ is_interrupted()（用户中断检查，agent 线程在每轮开头调用）
 
 `NullStream` 全空实现，用于测试/headless。
 
-### 6.5 TUI 交互（`cli/tui.py` + `cli/tui_runtime.py`）
+### 5.5 TUI 交互（`cli/tui.py` + `cli/tui_runtime.py`）
 
 Textual 8.x App，核心设计：
 
@@ -417,22 +417,22 @@ _execute_turn(harness=h)  循环：
 
 2. **harness 作为 deepagents middleware**：`HarnessMiddleware` 通过 `after_model` 的 `jump_to="model"` 实现 force-continue（需 `@hook_config(can_jump_to=["model"])` 装饰器，否则 langchain factory 不建条件边导致静默失效）。
 
-3. **deepagents 是唯一引擎**：`deepagents >=0.6` 在主 dependencies。旧 ReAct 引擎（`loop.py`）已完全删除——deepagents 是唯一生产引擎，没有 fallback。测试用 fake model + 真实 graph 覆盖，Live 脚本（`scripts/verify_deepagent_live.py`）用真实 provider 验证。
+3. **deepagents 是唯一引擎**：`deepagents >=0.7.6,<0.8` 在主 dependencies（版本下限 2026-08-28 审计后修正）。旧 ReAct 引擎（`loop.py`）已完全删除——deepagents 是唯一生产引擎，没有 fallback。测试用 fake model + 真实 graph 覆盖，Live 脚本（`scripts/verify_deepagent_live.py`）用真实 provider 验证。
 
-4. **文件隔离靠 virtual_mode，shell 无沙箱**：deepagents 后端 `virtual_mode=True` 限制文件工具路径，但 shell（execute）命令内容完全不受控——`rm -rf`、`cat /etc/passwd`、网络请求都能执行。旧的 coderio 自研 `WorkspacePolicy`（路径 resolve + relative_to）已删除（无法处理虚拟路径）。真正的隔离需要 OS 级容器/seccomp（见路线图），当前是"virtual_mode 文件隔离 + 权限门控制工具执行"的折中，**不是安全边界**。
+4. **shell 内容审查是正则级，不是安全边界**：deepagents 后端 `virtual_mode=True` 限制文件工具路径；shell（execute）命令内容走三层——`command_policy` 黑/白名单（防手滑，正则可被混淆绕过）、权限门、以及 **OS 级沙箱**（Linux bubblewrap 真文件写隔离；Windows job 对象仅资源限制，write 档无文件隔离——见 win_sandbox.py 头注释）。macOS 无 OS 级沙箱。对抗性场景仍应使用 VM；hooks 子进程环境走白名单（不透传完整 os.environ）。
 
 5. **ToolResult 非结构化**：bash exit_code 靠正则从 result 字符串提取 `[exit_code: N]`。如果 provider 或工具版本变化导致 marker 格式漂移，解析会断。长期应改为结构化 ToolResult（含 exit_code 字段）。
 
-6. **无依赖锁文件**：`pyproject.toml` 只声明依赖下限，CI 每次装最新兼容版本。上游 break 可能引入非确定性失败。应维护 constraints/lock。
+6. ~~**无依赖锁文件**~~ 已解决（2026-08-14）：`uv.lock` 已入库，CI 用 `uv sync --frozen` 安装，依赖一致性与 pip-audit 阻断均已上 CI。
 
-7. **真实模型 Live eval 缺失**：500 个 mock 测试不证明真实 provider 的 streaming block、tool-call shape、限流恢复兼容性。需建立至少两个 provider 的 nightly Live eval。
+7. **真实模型 Live eval 缺失**：1000+ 个 mock/fake 测试不证明真实 provider 的 streaming block、tool-call shape、限流恢复兼容性。需建立至少两个 provider 的 nightly Live eval。
 
 ---
 
 ## 10. 测试与验证体系
 
-- **500 单元/集成测试**（499 passed + 1 skipped），覆盖所有模块
-- **CI**（GitHub Actions）：lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke
+- **1000+ 单元/集成测试**（2026-09-02：1074 collected，CI 全绿），覆盖所有模块；`tests/e2e/` 以黑盒方式驱动真实 Typer app（LLM 边界 stub）
+- **CI**（GitHub Actions）：lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12，coverage 卡 75% 下限）+ wheel build smoke + pip-audit 阻断 + mypy 硬门
 - **Live 验证脚本**（`scripts/verify_*_live.py`）：连真实智谱/阶跃端点验证
   - `verify_harness_live.py`：4 场景（验证门触发/通过/禁用/工具错误韧性）
   - `verify_deepagent_live.py`：deepagents 引擎验证

@@ -480,3 +480,44 @@ def test_user_and_project_hooks_append_user_first(tmp_path):
     assert commands == ["echo user-hook", "echo repo-hook"], (
         f"both layers must survive, user first (first-blocker-wins priority); got {commands}"
     )
+
+
+# ----------------------------------------------------- env whitelist (P3-6)
+
+
+def test_hook_env_is_whitelisted(tmp_path, monkeypatch):
+    """P3-6: hook subprocesses get a WHITELISTED environment — secrets in the
+    parent env (API keys, tokens) must not leak to repo-configured hooks."""
+    monkeypatch.setenv("MY_SECRET_KEY", "super-secret-value")
+    r = _runner(
+        tmp_path,
+        HookSpec(
+            event="UserPromptSubmit",
+            command="python -c \"import os;print(os.environ.get('MY_SECRET_KEY','NOT-LEAKED'))\"",
+        ),
+    )
+    out = r.fire("UserPromptSubmit", {"prompt": "hi"})
+    assert "super-secret-value" not in out.context, "parent env secrets must not leak to hooks"
+    assert "NOT-LEAKED" in out.context
+
+
+def test_hook_gets_coderio_vars_and_path(tmp_path, monkeypatch):
+    """CODERIO_* variables and PATH stay available: hooks must still resolve
+    executables and see coderio's own context variables."""
+    monkeypatch.setenv("CODERIO_TEST_MARKER", "passed-through")
+    r = _runner(
+        tmp_path,
+        HookSpec(
+            event="UserPromptSubmit",
+            command=(
+                'python -c "import os;'
+                "print('PATH' in os.environ);"
+                "print(os.environ.get('CODERIO_TEST_MARKER','missing'));"
+                "print(os.environ.get('CODERIO_PROJECT_DIR','missing'))\""
+            ),
+        ),
+    )
+    out = r.fire("UserPromptSubmit", {"prompt": "hi"})
+    assert "True" in out.context, "PATH must stay on the whitelist"
+    assert "passed-through" in out.context, "CODERIO_* vars pass through"
+    assert str(tmp_path) in out.context, "CODERIO_PROJECT_DIR must carry the project dir"

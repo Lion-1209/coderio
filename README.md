@@ -98,7 +98,7 @@ coderio run "统计 src/ 下的 Python 行数并总结" --quiet
 - **skills 三层加载**：bundled + 用户 + 项目层，渐进披露省上下文
 - **上下文治理**：自动压缩（60% 窗口触发）、大块 offload、sqlite 检查点跨轮持久化
 - **子 agent**：research（只读，双重强制）+ general-purpose（继承主 agent 全部安全层）
-- **工程纪律**：950+ 测试、82% 覆盖率（CI 卡 75% 下限）、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
+- **工程纪律**：1080+ 测试、覆盖率 CI 卡 75% 下限、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
 
 <details>
 <summary><b>配置示例</b>（点击展开）</summary>
@@ -138,7 +138,7 @@ TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、
 
 ## 已知限制
 
-- Windows 写沙箱当前等价于 job 档（真隔离待 ACL，文档如实标注）
+- Windows 写沙箱当前等价于 job 档（真隔离待 ACL，文档如实标注）；**macOS 无 OS 级沙箱**（bubblewrap 是 Linux 专属，macOS 上沙箱档仅作用于 Linux）——对抗性场景请用 VM
 - 黑白名单为防手滑设计（正则可被混淆绕过），对抗性场景用沙箱 / VM
 
 ## 起源
@@ -147,4 +147,4 @@ TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、
 
 ## 贡献与 License
 
-欢迎 issue / PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。MIT License。
+欢迎 issue / PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。MIT License（捆绑的 Lion-Skills 技能集见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）。

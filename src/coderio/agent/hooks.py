@@ -75,6 +75,44 @@ class HookOutcome:
     error: str = ""
 
 
+# Env whitelist for hook subprocesses (2026-09-02 audit P3-6): hooks are
+# repo-configurable commands — trust.py gates them, but a hostile repo can
+# still ship one, and a full os.environ copy leaks every secret in the
+# environment (API keys, tokens, cloud credentials) to whatever the hook
+# runs. Pass only what a hook reasonably needs: CODERIO_* (ours), the
+# shell's executable-resolution basics per platform, and temp/locale vars.
+_HOOK_ENV_KEYS = frozenset(
+    {
+        # executable resolution / shell basics
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "HOME",
+        "USERPROFILE",
+        "USER",
+        "USERNAME",
+        # temp + locale (hook scripts print localized text)
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+    }
+)
+
+
+def _hook_env(project_dir: str) -> dict[str, str]:
+    """Build the whitelisted environment for a hook subprocess."""
+    import os
+
+    env = {k: v for k, v in os.environ.items() if k.startswith("CODERIO_") or k in _HOOK_ENV_KEYS}
+    env["CODERIO_PROJECT_DIR"] = project_dir
+    return env
+
+
 @dataclass
 class HookSpec:
     """One [[hooks]] entry from config.toml."""
@@ -250,7 +288,6 @@ class HookRunner:
         On Windows prefers Git Bash (via detect_shell, same as the bash tool)
         so POSIX-style commands behave; POSIX uses /bin/sh.
         """
-        import os
 
         from coderio.tools.win_job import kill_process_tree
 
@@ -265,8 +302,7 @@ class HookRunner:
         else:
             argv = ["/bin/sh", "-c", spec.command]
 
-        env = dict(os.environ)
-        env["CODERIO_PROJECT_DIR"] = self.project_dir
+        env = _hook_env(self.project_dir)
 
         # POSIX: the hook MUST get its own process group (start_new_session) —
         # kill_process_tree's POSIX branch kills via os.killpg, and without a

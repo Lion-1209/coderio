@@ -121,6 +121,12 @@ timeout = 30                     # 秒；超时按失败处理（fail-open）
   的 prompt 类 hooks 行为一致）。超过 10,000 字符的输出会被整体丢弃并记日志；
   多个 hook 的输出按序拼接
 - `PreToolUse` / `PostToolUse` / `Stop` 的 stdout 被忽略
+- **环境变量白名单**：hook 子进程不继承完整环境——只传 `CODERIO_*`、可执行解析
+  基础项（`PATH`/`PATHEXT`/`HOME` 等）和临时/语言项，外加 `CODERIO_PROJECT_DIR`。
+  环境里的密钥（API key 等）不会泄漏给 hook；hook 需要凭据时请显式写入配置或在
+  脚本内自行读取。注意白名单外的常见变量**不在** hook 环境里：`VIRTUAL_ENV`/
+  `PYTHONPATH`（`PATH` 仍指向已激活的 venv，`python` 解析不受影响）、`HTTP_PROXY`
+  族（代理后的网络 hook 需自行处理）、npm/npx 缓存相关的 `APPDATA` 路径
 
 ---
 

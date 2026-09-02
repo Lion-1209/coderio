@@ -69,8 +69,11 @@ PROVIDERS: tuple[ProviderInfo, ...] = (
         kind="openai_compatible",
         plan=False,
         base_url="https://api.openai.com/v1",
-        models=("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"),
-        default_model="gpt-4o",
+        # Refreshed 2026-09-02 from OpenAI's model catalog (GPT-5.6 family:
+        # sol = flagship, terra = balanced, luna = fast/cheap). The list ages
+        # fast — onboarding's last item accepts any model id (P3-2).
+        models=("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
+        default_model="gpt-5.6-sol",
         api_key_hint="platform.openai.com → API Keys",
     ),
     ProviderInfo(
@@ -79,8 +82,11 @@ PROVIDERS: tuple[ProviderInfo, ...] = (
         kind="anthropic",
         plan=False,
         base_url="https://api.anthropic.com",
-        models=("claude-sonnet-4-20250514", "claude-haiku-4-20250414"),
-        default_model="claude-sonnet-4-20250514",
+        # Refreshed 2026-09-02 from Anthropic's model overview (Opus 4.8 is
+        # the current Opus-tier id; Sonnet 4.6 the coding workhorse). The
+        # list ages fast — onboarding's last item accepts any model id (P3-2).
+        models=("claude-sonnet-4-6", "claude-opus-4-8", "claude-opus-4-7"),
+        default_model="claude-sonnet-4-6",
         api_key_hint="console.anthropic.com → API Keys",
     ),
     ProviderInfo(

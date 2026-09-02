@@ -200,3 +200,60 @@ async def test_second_submit_rejected_while_turn_running():
         await pilot.pause()
         assert len(submits) == 1, "second submit while running must NOT spawn another turn"
         assert inp.value == "second prompt", "input must be kept so the user can resubmit after Esc"
+
+
+@pytest.mark.asyncio
+async def test_send_button_submit_goes_through_worker_guard():
+    """Audit 2026-09-02 P1: the ➤ button called _on_input DIRECTLY on the main
+    thread — UI froze for the whole turn, _is_running never flipped (button
+    stayed ➤, Esc dead, concurrency guard bypassed). It must go through
+    _spawn_turn like Enter, and the running guard must apply to it too."""
+    from textual.widgets import Input
+
+    app = CoderioTUI()
+    async with app.run_test(size=Size(80, 24)) as pilot:
+        await pilot.pause()
+        submits: list[str] = []
+        seen_flags: list[bool] = []
+
+        def _engine(line):
+            submits.append(line)
+            # sampled INSIDE the worker: _spawn_turn must have flipped the
+            # flag synchronously (the old code flipped it from the worker,
+            # too late to gate a rapid resubmit — TOCTOU)
+            seen_flags.append(app._is_running)
+
+        app._on_input = _engine
+
+        inp = app.query_one("#msg", Input)
+        inp.value = "via button"
+        app._submit_current_input()
+        await pilot.pause()
+        assert len(submits) == 1, "idle button submit must spawn the worker"
+        assert seen_flags == [True], "_spawn_turn must flip the flag synchronously (worker samples it True)"
+        assert inp.value == "", "input cleared on accepted submit"
+
+        # While running, a second button submit must be REJECTED (not run on
+        # the main thread), input kept.
+        app._is_running = True  # simulate the engine still working
+        inp.value = "second via button"
+        app._submit_current_input()
+        await pilot.pause()
+        assert len(submits) == 1, "button submit while running must NOT spawn another turn"
+        assert inp.value == "second via button", "input kept for resubmit"
+
+
+@pytest.mark.asyncio
+async def test_send_button_noop_on_empty_input():
+    from textual.widgets import Input
+
+    app = CoderioTUI()
+    async with app.run_test(size=Size(80, 24)) as pilot:
+        await pilot.pause()
+        submits: list[str] = []
+        app._on_input = lambda line: submits.append(line)
+        inp = app.query_one("#msg", Input)
+        inp.value = "   "
+        app._submit_current_input()
+        await pilot.pause()
+        assert submits == [], "blank input must not spawn a turn"

@@ -92,7 +92,7 @@ coderio run "count the Python lines under src/ and summarize" --quiet
 - **Three-layer skills**: bundled + user + project, progressive disclosure saves context
 - **Context governance**: auto-compaction (60% window trigger), large-block offload, sqlite checkpoints across turns
 - **Subagents**: research (read-only, double-enforced) + general-purpose (inherits the main agent's full security stack)
-- **Engineering discipline**: 950+ tests, 82% coverage (CI floor 75%), mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
+- **Engineering discipline**: 1080+ tests, coverage gated at 75% in CI, mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
 
 <details>
 <summary><b>Config example</b> (click to expand)</summary>
@@ -132,7 +132,7 @@ Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /
 
 ## Known limitations
 
-- The Windows write-sandbox currently equals job mode (true isolation awaits the ACL work — documented honestly)
+- The Windows write-sandbox currently equals job mode (true isolation awaits the ACL work — documented honestly); **macOS has no OS-level sandbox** (bubblewrap is Linux-only, so the sandbox tiers only take effect on Linux) — use a VM for adversarial scenarios
 - Blacklist/whitelist are accident-prevention by design (regex can be bypassed by obfuscation); use the sandbox / a VM for adversarial scenarios
 
 ## Origin

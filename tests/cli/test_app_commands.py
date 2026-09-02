@@ -226,3 +226,21 @@ def test_main_entry_reconfigures_streams(monkeypatch):
     app_mod.main_entry()  # exercises the reconfigure loop; no exception = pass
     # sanity: the loop really touched the streams' encoding attr
     assert sys.stdout is not None
+
+
+def test_version_flag_prints_version():
+    """P3-3: `coderio --version` prints the version without booting the TUI."""
+    from coderio import __version__
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0, result.output
+    assert __version__ in result.output
+
+
+def test_version_flag_beats_subcommand_context():
+    """--version resolves before any subcommand dispatch."""
+    from coderio import __version__
+
+    result = runner.invoke(app, ["--version", "run"])
+    assert result.exit_code == 0, result.output
+    assert __version__ in result.output

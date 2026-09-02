@@ -6,16 +6,22 @@ Thanks for your interest in contributing! This guide covers the basics.
 
 ## Development setup
 
+The project uses [uv](https://docs.astral.sh/uv/) for dependency management
+(locked via `uv.lock`, same as CI). Python 3.11+ required.
+
 ```bash
 git clone <repo-url> coderio
 cd coderio
-python -m venv .venv
+uv sync --frozen                 # creates .venv from the lockfile
+uv run pytest -q                 # run anything inside the managed venv
+```
 
-# Windows (Git Bash)
-.venv/Scripts/python.exe -m pip install -e ".[dev]"
+With the venv activated (`.venv/Scripts/activate` on Windows,
+`.venv/bin/activate` elsewhere) the plain commands work too:
 
-# Linux / macOS
-.venv/bin/python -m pip install -e ".[dev]"
+```bash
+python -m pytest -q
+python -m ruff check src tests
 ```
 
 Set your API key:

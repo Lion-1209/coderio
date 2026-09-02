@@ -501,7 +501,13 @@ class CoderioTUI(App):
 
     def _submit_current_input(self) -> None:
         """Send-button submit: dispatch whatever is in #msg, exactly as Enter
-        would (same echo, same worker). No-op on empty input."""
+        would (same echo, same worker). No-op on empty input.
+
+        MUST go through _spawn_turn (audit 2026-09-02 P1): calling _on_input
+        directly ran the engine on the MAIN thread — the UI froze for the
+        whole turn, _is_running never flipped (button stayed ➤, Esc dead, the
+        concurrency guard bypassed), and call_from_thread inside the turn
+        (permission prompts, slash screens) raised RuntimeError."""
         try:
             inp = self.query_one("#msg", Input)
         except Exception:  # noqa: BLE001 — input not mounted yet
@@ -510,8 +516,10 @@ class CoderioTUI(App):
         line = inp.value.strip()
         if not line:
             return
-        inp.value = ""
-        self._on_input(line)
+        # input is only cleared when the turn was accepted (the in-flight
+        # guard inside _spawn_turn returns False and keeps the text)
+        if self._spawn_turn(line):
+            inp.value = ""
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle the morphing send/stop button: ➤ submits when idle, ⏹
@@ -606,32 +614,40 @@ class CoderioTUI(App):
         line = event.value.strip()
         if not line:
             return
-        # One engine thread at a time (2026-09-02 audit finding 3): a turn in
-        # flight must not accept a second submission. run_worker(exclusive=True)
-        # only cancels Textual's worker WRAPPER — the Python thread already
-        # inside run_deep_agent runs to completion, so a second submit would
-        # give two engine threads interleaving writes to the same session jsonl
-        # and render queue. Keep the user's text so they can Esc-then-resubmit.
-        if self._is_running:
-            self._stream.queue_static("⏳ 回合进行中——按 Esc 中断当前任务后再提交。", "yellow")
-            return
-        event.input.value = ""
-        self._spawn_turn(line)
+        # The in-flight guard lives INSIDE _spawn_turn (shared with the ➤
+        # button); the input is only cleared when the turn was accepted.
+        if self._spawn_turn(line):
+            event.input.value = ""
 
-    def _spawn_turn(self, line: str) -> None:
+    def _spawn_turn(self, line: str) -> bool:
         """Echo + start the agent worker for one user line. Shared by Enter
         (on_input_submitted) and the ➤ send button so both paths stay
-        behaviorally identical."""
+        behaviorally identical.
+
+        Returns False when a turn is already in flight (the caller must keep
+        the user's input for resubmit). One engine thread at a time (audit
+        finding 3): run_worker(exclusive=True) only cancels Textual's worker
+        WRAPPER — the Python thread already inside run_deep_agent runs to
+        completion, so a second submit would give two engine threads
+        interleaving writes to the same session jsonl and render queue.
+        _is_running is set SYNCHRONOUSLY here (not inside the worker) to
+        close the double-Enter TOCTOU window (audit finding: the flag was
+        flipped from the worker thread, too late to gate a rapid resubmit).
+        """
+        if self._is_running:
+            self._stream.queue_static("⏳ 回合进行中——按 Esc 中断当前任务后再提交。", "yellow")
+            return False
+        self._is_running = True
         self._add_text(f"▸ you {line}", style="bold cyan")
         if not self._on_input:
-            return
+            self._is_running = False
+            return True
 
         # Use a Textual WORKER (thread=True), not a raw threading.Thread. A
         # worker is managed by Textual, so the main event loop stays alive and
         # keeps draining pending UI updates while the worker runs AND after it
         # completes — a raw daemon thread would not.
         def _run():
-            self._is_running = True
             self._stream.begin_turn()
             self.call_from_thread(self._show_interrupt_btn, True)
             try:
@@ -688,6 +704,7 @@ class CoderioTUI(App):
             name="agent_turn",
             exit_on_error=False,
         )
+        return True
 
     # ----------------------------------------------------- binding: Ctrl+O
     def action_toggle_thinking(self) -> None:

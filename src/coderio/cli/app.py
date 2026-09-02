@@ -6,6 +6,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+# Single-source version (read from pyproject.toml via importlib.metadata).
+from coderio import __version__  # noqa: E402
 from coderio.config import load_config
 from coderio.config.bootstrap import ensure_user_dirs
 from coderio.skills.store import SkillStore, load_skill_store
@@ -40,12 +42,16 @@ def main(
     continue_last: bool = typer.Option(False, "--continue", help="Resume most recent session."),
     provider: str = typer.Option(None, "--provider", help="Override provider_id."),
     model: str = typer.Option(None, "--model", help="Override model name."),
+    version: bool = typer.Option(False, "--version", help="Print the version and exit."),
 ):
     """coderio — start the interactive TUI or run a subcommand.
 
     Launches the Textual TUI: foldable thinking (Ctrl+O), scrollable history,
     slash-command autocomplete. This is the only interactive entry point.
     """
+    if version:
+        typer.echo(f"coderio {__version__}")
+        raise typer.Exit()
     if ctx.invoked_subcommand is not None:
         return
     ensure_user_dirs()
