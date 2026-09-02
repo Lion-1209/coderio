@@ -8,18 +8,22 @@ They live here now: the controller OWNS the protocol + the render queue;
 CoderioTUI owns widgets and user events.
 
 Threading contract (unchanged by the extraction):
-  - Callbacks run on the agent's BACKGROUND thread. They ONLY push render
-    instructions to ``render_q`` (a thread-safe deque) and write plain
-    attributes (GIL-safe).
-  - The main-thread timer (CoderioTUI.on_mount → set_interval) calls
-    ``drain_ui()`` every 60ms, which pops the queue and invokes the TUI's
-    render methods. This is the only path from background-thread data to
-    main-thread widgets. Deliberately NOT call_from_thread: its callbacks
-    are not reliably delivered in a real terminal.
-  - ``_ui`` is the CoderioTUI instance. The controller touches only a few
-    documented attributes on it (``_status_bar``, ``_todo_widget``,
-    ``_live_think_body``) and calls its render methods; it never queries
-    the DOM itself.
+  - Callbacks run on the agent's BACKGROUND thread. They never touch the
+    Textual DOM and never call call_from_thread (its callbacks are not
+    reliably delivered in a real terminal). Background-thread data reaches
+    main-thread widgets through TWO documented channels:
+      1. render_q + drain_ui(): callbacks push render instructions onto the
+         thread-safe deque; the main-thread timer (CoderioTUI.on_mount →
+         set_interval, 60ms) drains it and invokes the TUI's render methods.
+         This carries all CONTENT (text, panels, thinking, todos).
+      2. Plain-attribute writes, GIL-safe from any thread: the controller
+         reads/writes a few documented attributes on ``_ui`` (``_status_bar``,
+         ``_todo_widget``, ``_live_think_body``, ``show_tool_output``) and
+         StatusBar's set_phase/set_turn_tokens/set_task_phase write plain
+         attributes picked up by the next layout pass. This carries live
+         STATUS only (phase text, token counts) — never content.
+    Any new cross-thread surface must be added to this list, not invented
+    ad hoc.
 """
 
 from __future__ import annotations
@@ -123,10 +127,28 @@ class ChatStreamController:
                 _log.debug("confirm menu hide failed", exc_info=True)
 
         ui.call_from_thread(_show)
-        self._confirm_event.wait(timeout=120)
+        # Sliced wait (2026-09-02 audit finding 6): a full 120s block left the
+        # agent thread un-interruptible — Esc only set a flag nobody polled,
+        # so the TUI froze on the prompt until the user answered or timed out.
+        # Wake every 0.5s to check the interrupt flag; an interrupt resolves
+        # the prompt as DENY (the tool call is refused) and the very next
+        # stream-chunk boundary raises InterruptedError to end the turn.
+        deadline = time.monotonic() + 120
+        interrupted = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if self._confirm_event.wait(timeout=min(remaining, 0.5)):
+                break
+            if self._interrupted:
+                interrupted = True
+                break
         ui.call_from_thread(_hide)
         self._confirm_event = None
         self._confirm_custom_mode = False
+        if interrupted:
+            return False
         return self._confirm_result
 
     def resolve_confirmation(self, result: bool | str) -> None:

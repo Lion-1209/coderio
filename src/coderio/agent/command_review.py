@@ -33,8 +33,12 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 # Tools whose CONTENT this middleware inspects. Note deepagents native names.
-_SHELL_TOOL = "execute"
-_NETWORK_TOOLS = frozenset({"web_fetch", "web_search"})
+# Single source of truth: tools/taxonomy.py (P2-2, 2026-09-02 audit).
+from coderio.tools.taxonomy import SHELL as _SHELL_TOOL
+from coderio.tools.taxonomy import WEB_FETCH as _WEB_FETCH
+from coderio.tools.taxonomy import WEB_SEARCH as _WEB_SEARCH
+
+_NETWORK_TOOLS = frozenset({_WEB_FETCH, _WEB_SEARCH})
 
 
 def _augment_with_whitelist_note(result, note: str):

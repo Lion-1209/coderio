@@ -4,6 +4,8 @@ from enum import StrEnum
 from typing import Any, Callable
 
 from coderio.tools.base import DESTRUCTIVE_TOOLS, FILE_EDIT_TOOLS
+from coderio.tools.taxonomy import NOTE as _NOTE_TOOL
+from coderio.tools.taxonomy import SHELL as _SHELL_TOOL
 
 # Heuristic keywords for classifying MCP tool risk by NAME. MCP tools arrive
 # with server-prefixed names (e.g. "filesystem_write_file", "github_create_pr")
@@ -135,7 +137,7 @@ class PermissionGate:
     def check(self, tool_name: str, args: dict[str, Any]) -> bool | str:
         # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
         # read-only and shouldn't prompt (same as read_file/ls).
-        if tool_name == "note":
+        if tool_name == _NOTE_TOOL:
             action = str(args.get("action", "")).lower()
             if action in ("read", "list"):
                 return True
@@ -158,7 +160,7 @@ class PermissionGate:
         # the user for every shell command becomes noise. Skip the prompt for
         # the execute tool specifically. PLAN mode is excluded — PLAN is always
         # read-only, and sandbox doesn't change that contract.
-        if tool_name == "execute" and self._auto_allow_execute and self._mode != PermissionMode.PLAN:
+        if tool_name == _SHELL_TOOL and self._auto_allow_execute and self._mode != PermissionMode.PLAN:
             return True
         # AUTO_EDIT: auto-allow file edits, shell/web/note still confirm.
         # MCP destructive tools always confirm in AUTO_EDIT (we can't reliably

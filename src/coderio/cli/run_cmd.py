@@ -21,10 +21,13 @@ Design rules:
 
 from __future__ import annotations
 
+import logging
 import sys
 from typing import Any
 
 from coderio.agent.stream import NullStream
+
+_log = logging.getLogger(__name__)
 
 
 class HeadlessStream(NullStream):
@@ -32,6 +35,11 @@ class HeadlessStream(NullStream):
 
     NullStream base keeps every other hook a no-op. ``quiet=True`` disables
     all streaming — the caller only prints the final result.
+
+    stdout writes are guarded: after a ``--timeout`` kill the agent's daemon
+    thread can still be draining the model stream while the interpreter tears
+    down stdout (a closed stream raises ValueError, a closed pipe OSError) —
+    a late write must not crash the thread with a noisy traceback.
     """
 
     def __init__(self, quiet: bool = False) -> None:
@@ -40,8 +48,11 @@ class HeadlessStream(NullStream):
 
     def on_token(self, text: str) -> None:
         if not self.quiet:
-            sys.stdout.write(text)
-            sys.stdout.flush()
+            try:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+            except (ValueError, OSError):  # stdout closed during interpreter teardown
+                pass
 
     def on_tool_start(
         self,
@@ -58,8 +69,11 @@ class HeadlessStream(NullStream):
 
     def on_finish(self) -> None:
         if not self.quiet:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            try:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            except (ValueError, OSError):  # stdout closed during interpreter teardown
+                pass
 
 
 def run_headless(
@@ -190,30 +204,19 @@ def run_headless(
         typer.secho(f"Runtime setup failed: {e}", err=True, fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
-    from coderio.tools.command_policy import CommandPolicy
+    from coderio.agent.deep_loop import run_deep_agent
+    from coderio.cli.repl import build_turn_spec
 
-    cmd_policy = CommandPolicy(
-        extra_blocked=cfg.tools.blocked_commands,
-        network_allowed=cfg.tools.network_allowed,
-        whitelist_mode=cfg.tools.whitelist_mode,
-        allowed_commands=cfg.tools.allowed_commands,
-    )
-
-    spec = TurnSpec(
+    # Single construction path (P2-1): field-identical to the TUI's — drift
+    # between the two would silently give headless runs a different sandbox
+    # or permission wiring than interactive ones.
+    spec = build_turn_spec(
+        cfg,
         model=chat_model,
         gate=gate,
         skill_store=store,
         active_skills=active,
         tools=tools,
-        workdir=cfg.tools.workspace_root or None,
-        harness_enabled=cfg.skills.harness,
-        command_policy=cmd_policy,
-        sandbox_mode=cfg.tools.sandbox_mode,
-        network_allowed=cfg.tools.network_allowed,
-        fs_config=cfg.tools.sandbox_fs,
-        bash_shell=cfg.tools.bash_shell,
-        hooks=cfg.hooks,
     )
 
     def _execute() -> str:
@@ -243,6 +246,12 @@ def run_headless(
     t.start()
     t.join(timeout=timeout if timeout > 0 else None)
     if t.is_alive():
+        _log.warning(
+            "coderio run timed out after %ds; the agent thread is a daemon and cannot be "
+            "killed, and shell children it spawned may outlive this run — set "
+            '[tools].sandbox_mode = "job" so the job object reaps the whole process tree',
+            timeout,
+        )
         typer.secho(
             f"Timed out after {timeout}s (--timeout). Partial output above; exit 124.",
             err=True,

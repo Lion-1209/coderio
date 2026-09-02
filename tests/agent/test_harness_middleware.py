@@ -9,7 +9,10 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from coderio.agent.harness_middleware import HarnessMiddleware, _to_coderio_name
+# P2-2: the _to_coderio_name shim was removed — the tests now exercise the
+# taxonomy registry's to_harness_name directly (same behavior).
+from coderio.agent.harness_middleware import HarnessMiddleware
+from coderio.tools.taxonomy import to_harness_name as _to_coderio_name
 
 
 def _tool_call_msg(name, args, mid="c1", content=""):

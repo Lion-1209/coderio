@@ -29,24 +29,16 @@ from typing import TYPE_CHECKING, Any
 
 # Tool names/categories: single source of truth in tools/taxonomy.py
 # (2026-08-28 audit A2 — six ad-hoc copies had drifted apart).
+from coderio.tools.taxonomy import CONTENT_READ_TOOLS, READ_TOOLS, WRITE_TOOLS
 from coderio.tools.taxonomy import LEGACY_SHELL as VERIFY_TOOL
-from coderio.tools.taxonomy import WRITE_TOOLS
 
 if TYPE_CHECKING:
     from coderio.tools.todo import TodoStore
 
 # Tools that mutate files on disk. A successful one of these creates an
 # "unverified write" that the VerifyGate watches.
-
-# Read-only tools that "ground" a claim about a file — if the model cited a path
-# and one of these tools touched it, the citation is evidence-backed.
-READ_TOOLS: frozenset[str] = frozenset({"read_file", "grep", "list_dir", "glob"})
-# Tools that actually READ FILE CONTENTS. Only these ground a citation about a
-# file's internals — grep only matches a pattern (the model never sees the full
-# file), and list_dir/glob return NAMES without contents. Crediting them would
-# let the model cite "loader.py:81 does X" after a `grep pattern="loader"` or a
-# `list_dir("src")` that only returned filenames.
-CONTENT_READ_TOOLS: frozenset[str] = frozenset({"read_file"})
+# READ_TOOLS / CONTENT_READ_TOOLS moved to the taxonomy registry (P2-2,
+# 2026-09-02 audit: harness.py held the last literal copies).
 
 # Running a shell command counts as a verification attempt — even a failing one
 # means the agent tried to run its code, so we stop nagging. This avoids both

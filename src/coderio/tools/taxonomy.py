@@ -24,6 +24,8 @@ single-file change when it happens.
 
 from __future__ import annotations
 
+import re
+
 # --- engine (deepagents) tool names — the production namespace ------------
 SHELL = "execute"
 WRITE_TODOS = "write_todos"
@@ -37,6 +39,7 @@ LIST_DIR = "ls"
 LEGACY_LIST_DIR = "list_dir"  # coderio's own list_dir tool name
 TASK = "task"
 WEB_FETCH = "web_fetch"
+WEB_SEARCH = "web_search"
 NOTE = "note"
 
 # --- harness (legacy) names -----------------------------------------------
@@ -75,6 +78,32 @@ TODO_TOOL = WRITE_TODOS
 LEGACY_ENGINE_TOOLS = frozenset(
     {READ_FILE, WRITE_FILE, EDIT_FILE, GLOB, GREP, LEGACY_SHELL, LEGACY_TODO, LEGACY_LIST_DIR}
 )
+
+
+# Read-only tools that "ground" a claim about a file — if the model cited a
+# path and one of these tools touched it, the citation is evidence-backed
+# (harness.py GroundingGate). list_dir here is the HARNESS-domain name (the
+# engine calls it "ls" — to_harness_name translates).
+READ_TOOLS = frozenset({READ_FILE, GREP, LEGACY_LIST_DIR, GLOB})
+
+# Tools that actually READ FILE CONTENTS. Only these ground a citation about a
+# file's internals — grep only matches a pattern (the model never sees the full
+# file), and list_dir/glob return NAMES without contents. Crediting them would
+# let the model cite "loader.py:81 does X" after a `grep pattern="loader"` or a
+# `list_dir("src")` that only returned filenames.
+CONTENT_READ_TOOLS = frozenset({READ_FILE})
+
+
+# The harness prose (and coderio's own system-prompt builder) still says
+# "bash" where the engine exposes "execute". ONE regex rewrite serves both
+# call sites (harness_middleware injection + deep_loop system prompt) so the
+# pattern can never drift between them (P2-2, 2026-09-02 audit).
+BASH_PROSE_RE = re.compile(r"\bbash\b", re.IGNORECASE)
+
+
+def translate_bash_prose(text: str) -> str:
+    """Rewrite the standalone word "bash" → the engine's shell tool name."""
+    return BASH_PROSE_RE.sub(SHELL, text)
 
 
 def to_harness_name(name: str) -> str:

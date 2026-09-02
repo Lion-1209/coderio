@@ -277,9 +277,9 @@ class TuiRuntime:
     # ----------------------------------------------------------------- engine
 
     def _send_to_engine(self, line: str) -> None:
-        from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+        from coderio.agent.deep_loop import run_deep_agent
         from coderio.cli.multimodal import build_user_content, extract_images
-        from coderio.tools.command_policy import CommandPolicy
+        from coderio.cli.repl import build_turn_spec
 
         rt = self.rt
         imgs = extract_images(line)
@@ -291,28 +291,16 @@ class TuiRuntime:
         user_content = build_user_content(line)
         # deepagents engine: provides context management, subagents, filesystem.
         # coderio's harness + permission + command review run as middleware.
-        cmd_policy = CommandPolicy(
-            extra_blocked=rt["cfg"].tools.blocked_commands,
-            network_allowed=rt["cfg"].tools.network_allowed,
-            whitelist_mode=rt["cfg"].tools.whitelist_mode,
-            allowed_commands=rt["cfg"].tools.allowed_commands,
-        )
-        # Rebuilt per turn: /model and /clear swap rt["model"]/rt["session"]
-        # between turns, so a cached spec would run on stale objects.
-        spec = TurnSpec(
+        # Rebuilt per turn via the SAME factory as headless runs (P2-1):
+        # /model and /clear swap rt["model"]/rt["session"] between turns, so a
+        # cached spec would run on stale objects.
+        spec = build_turn_spec(
+            rt["cfg"],
             model=rt["model"],
             gate=rt["gate"],
             skill_store=self.store,
             active_skills=self.active,
             tools=self.tools,
-            workdir=rt["cfg"].tools.workspace_root or None,
-            harness_enabled=rt["cfg"].skills.harness,
-            command_policy=cmd_policy,
-            sandbox_mode=rt["cfg"].tools.sandbox_mode,
-            network_allowed=rt["cfg"].tools.network_allowed,
-            fs_config=rt["cfg"].tools.sandbox_fs,
-            bash_shell=rt["cfg"].tools.bash_shell,
-            hooks=rt["cfg"].hooks,
         )
         run_deep_agent(
             user_input=user_content,

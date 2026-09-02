@@ -44,6 +44,49 @@ class TuiPermissionGate(PermissionGate):
         return True
 
 
+def build_turn_spec(
+    cfg: Config,
+    *,
+    model,
+    gate,
+    skill_store,
+    active_skills,
+    tools,
+):
+    """Build the engine TurnSpec from a loaded config (P2-1, 2026-09-02 audit
+    finding 8: run_cmd.py and tui_runtime.py carried two field-identical
+    CommandPolicy + TurnSpec constructions — a config-layer drift surface).
+
+    Rebuilt per turn by callers whose runtime objects can change between
+    turns (TUI /model swaps the model, /clear swaps the session): TurnSpec
+    fields are snapshots.
+    """
+    from coderio.agent.deep_loop import TurnSpec
+    from coderio.tools.command_policy import CommandPolicy
+
+    cmd_policy = CommandPolicy(
+        extra_blocked=cfg.tools.blocked_commands,
+        network_allowed=cfg.tools.network_allowed,
+        whitelist_mode=cfg.tools.whitelist_mode,
+        allowed_commands=cfg.tools.allowed_commands,
+    )
+    return TurnSpec(
+        model=model,
+        gate=gate,
+        skill_store=skill_store,
+        active_skills=active_skills,
+        tools=tools,
+        workdir=cfg.tools.workspace_root or None,
+        harness_enabled=cfg.skills.harness,
+        command_policy=cmd_policy,
+        sandbox_mode=cfg.tools.sandbox_mode,
+        network_allowed=cfg.tools.network_allowed,
+        fs_config=cfg.tools.sandbox_fs,
+        bash_shell=cfg.tools.bash_shell,
+        hooks=cfg.hooks,
+    )
+
+
 def build_gate(cfg: Config, console=None, tui=None):
     """Construct the permission gate.
 

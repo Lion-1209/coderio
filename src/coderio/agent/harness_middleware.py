@@ -23,7 +23,6 @@ _get_can_jump_to, which reads method.__can_jump_to__).
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
@@ -35,12 +34,8 @@ from coderio.agent.harness import Harness, HarnessState
 # Engine↔harness tool-name mapping. Single source of truth:
 # tools/taxonomy.py (2026-08-28 audit A2 — six ad-hoc copies drifted apart).
 from coderio.tools.taxonomy import to_harness_name as _to_harness_name
+from coderio.tools.taxonomy import translate_bash_prose as _translate_bash_prose
 from coderio.tools.todo import TodoStore
-
-# Translate "bash" → "execute" in harness injection prose. Word-boundary regex
-# (robust to prose changes) instead of a chain of literal .replace() calls that
-# silently no-op when harness.py rewords a phrase.
-_BASH_TO_EXECUTE = re.compile(r"\bbash\b", re.IGNORECASE)
 
 
 def _stream_supports_phase(stream: Any) -> bool:
@@ -52,11 +47,6 @@ def _stream_supports_phase(stream: Any) -> bool:
     the live-verify PrintStream opt in by defining on_phase_change.
     """
     return stream is not None and hasattr(stream, "on_phase_change")
-
-
-def _to_coderio_name(name: str) -> str:
-    """Translate a deepagents tool name to the coderio name Harness expects."""
-    return _to_harness_name(name)
 
 
 def _result_to_text(result: Any) -> str:
@@ -181,7 +171,7 @@ class HarnessMiddleware(AgentMiddleware):
         result_text = _result_to_text(result)
 
         # Feed ground truth to the harness (translate deepagents → coderio names).
-        coderio_name = _to_coderio_name(name)
+        coderio_name = _to_harness_name(name)
         self.harness.observe(coderio_name, args, result_text)
 
         # Sync deepagents' write_todos into the harness's TodoStore so
@@ -296,7 +286,7 @@ class HarnessMiddleware(AgentMiddleware):
             # Word-boundary regex (not literal phrase replace) is robust to
             # harness.py prose changes: "use bash", "call bash now", "run with
             # bash" all map correctly without a per-phrase .replace() chain.
-            inject = _BASH_TO_EXECUTE.sub("execute", inject)
+            inject = _translate_bash_prose(inject)
             # Emit a visible signal so the TUI explains why the agent keeps running.
             self._emit(runtime, {"type": "harness_continue", "reason": inject})
             # Force-continue: inject the harness demand as a user message.
