@@ -128,3 +128,53 @@ def test_verify_key_failure_returns_false():
     ok, msg = onboarding_mod._verify_key(p, "sk-invalid-key-test", "gpt-4o", p.base_url)
     assert ok is False
     assert len(msg) > 0
+
+
+# ------------------------------------------------- verify loop: change model (P1-3)
+
+
+def test_verify_failure_allows_model_change(tmp_path, monkeypatch):
+    """P1-3: after a verify failure, "m" returns to model selection — a
+    mistyped model id is no longer an inescapable loop (the old flow only
+    allowed re-entering the key)."""
+    calls = {"n": 0, "models": []}
+
+    def _flaky_verify(p, key, model, base_url):
+        calls["n"] += 1
+        calls["models"].append(model)
+        if calls["n"] == 1:
+            return False, "model not found", 0
+        return True, "ok", 200000
+
+    monkeypatch.setattr(onboarding_mod, "_verify_and_probe", _flaky_verify)
+    answers = iter(
+        [
+            "1",  # provider: bigmodel
+            "bogus-model",  # free-text model id (wrong)
+            "m",  # verify failed -> change model
+            "2",  # _choose_model: pick preset #2 (glm-5.1)
+        ]
+    )
+    result = run_onboarding(
+        prompt_fn=lambda _: next(answers),
+        password_fn=lambda: next(iter(["sk-key1"])),
+        creds_file=tmp_path / "credentials",
+    )
+    assert result.model == "glm-5.1"
+    assert calls["models"] == ["bogus-model", "glm-5.1"], "same key retried with the new model"
+
+
+def test_verify_failure_skip_still_works(tmp_path, monkeypatch):
+    """The pre-P1-3 escape hatch ("n" = skip) must keep working."""
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_verify_and_probe",
+        lambda p, key, model, base_url: (False, "auth failed", 0),
+    )
+    answers = iter(["1", "sk-key1", "glm-5.2", "n"])
+    result = run_onboarding(
+        prompt_fn=lambda _: next(answers),
+        password_fn=lambda: next(iter(["sk-key1"])),
+        creds_file=tmp_path / "credentials",
+    )
+    assert result is None

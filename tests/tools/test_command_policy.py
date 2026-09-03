@@ -521,3 +521,48 @@ def test_safe_find_xargs_variants_pass(command):
     """The tightening must not block legitimate workdir-scoped cleanup."""
     p = CommandPolicy.default()
     assert p.check_command(command) is None, f"should pass: {command!r}"
+
+
+# ------------------------------------------------- wrapper flag dimension (P1-1, 2026-09-03)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -u root rm -rf /",  # sudo's own flag + value before the command
+        "env -i rm -rf /",  # env flag without a value
+        "doas rm -rf /",  # doas prefix
+        "sudo -- rm -rf /",  # bare -- separator
+        "sudo -C 5 rm -rf /",  # short flag with a value (-C 5)
+        "env -u X rm -rf ~",  # env -u takes a value
+        r"del /f /s /q C:\Windows",  # cmd del /s is recursive delete too
+        r"erase /s /q C:\Windows",
+        r"rd /s /q C:\x",
+        'bash -c -l "rm -rf /"',  # -l AFTER -c is a legal bash ($0)
+    ],
+)
+def test_blocks_wrapper_flag_dimension(command):
+    """Audit 2026-09-03: the 09-02 fix handled the shell-wrapper dimension but
+    leaked the wrapper-FLAG dimension — sudo/env/doas flags between the prefix
+    and the command, cmd del/erase /s. All are the same footgun class."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo apt install curl",
+        "env LC=C python x.py",
+        "doas make install",
+        "sudo --version",
+        "env | grep PATH",
+        "del /f notes.txt",  # non-recursive single-file delete stays legal
+        "sudo -u www-data ls /var/www",
+        "bash -c 'echo ok'",
+    ],
+)
+def test_safe_prefixed_commands_pass(command):
+    """The prefix stepper must not block legitimate prefixed commands."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is None, f"should pass: {command!r}"

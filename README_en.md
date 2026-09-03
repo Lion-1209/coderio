@@ -16,6 +16,8 @@ coderio    # onboarding wizard on first launch (pick provider, paste API key, au
 
 Requires Python 3.11+; Git Bash on Windows. Linux / macOS supported.
 
+Optional: MCP external tools (`.mcp.json`) need an extra — `pip install "coderio[mcp]"`; without it MCP tools stay disabled (a notice appears at startup).
+
 ## Why coderio
 
 The shared weakness of coding agents: **the model says "I'm done" and you just have to trust it**. coderio turns that sentence into a structural constraint—
@@ -137,7 +139,7 @@ Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /
 
 ## Origin
 
-A spare-time project, open-sourced as a working reference for developers building their own coding agents. The name is **code + rio** (the author's English name is Lion; "codelion" sounded odd). Project direction and maintenance status: [ROADMAP.md](ROADMAP.md).
+A spare-time project, open-sourced as a working reference for developers building their own coding agents. The name is **code + rio** (the author's English name is Lion; "codelion" sounded odd). Project direction and maintenance status: [ROADMAP_en.md](ROADMAP_en.md).
 
 ## Contributing & License
 

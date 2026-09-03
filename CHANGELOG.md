@@ -8,6 +8,21 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — 2026-09-03 review batch
+- **Confirm diff preview**: CONFIRM-mode prompts for write_file / edit_file /
+  multi_edit render a unified diff of the change (matching the real tool
+  semantics: replace_all, multi-match failure, multi_edit all-or-nothing).
+- **hooks environment whitelist**: hook subprocesses get CODERIO_* +
+  exec-resolution + temp/locale vars instead of the full os.environ.
+- **credentials hardening**: ACL-restricted before key bytes hit the disk;
+  icacls failures logged; corrupt credentials file no longer crashes /setup.
+- **AGENTS.md walk boundary**: falls back to the enclosing GIT root for
+  repos without coderio config (subdirectory launches keep nearest-wins).
+- **concurrent-submission guard** + interruptible permission wait + escaped
+  model-name retry in onboarding (`m` = change model) + `--version` flag.
+- ROADMAP.md / ROADMAP_en.md added (maintenance status, Now/Next/Later,
+  non-goals).
+
 ### Fixed — audit-driven hardening (2026-08-28 + 2026-09-02 review batches)
 - **Command blacklist**: rebuilt segment/token parsing (multi-line, wrapper
   shells incl. path-qualified and sudo-prefixed, PowerShell/cmd variants);
@@ -53,7 +68,7 @@ All notable changes to coderio are documented here. The format follows
 
 ### Added
 - AGENTS.md / CLAUDE.md project instructions injected into the system
-  prompt (nearest-wins, bounded at the project root).
+  prompt (nearest-wins, bounded at the project root / git root).
 - Tool-name registry `tools/taxonomy.py` — one definition of engine/harness
   names and categories (was 6+ drifting ad-hoc copies, the root cause of
   several recorded P0s).
@@ -669,6 +684,10 @@ All notable changes to coderio are documented here. The format follows
 
 [Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.4.4...HEAD
 [0.4.4]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.4
+[0.4.3]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.3
+[0.4.2]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.2
+[0.4.1]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.1
+[0.4.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Lion-1209/coderio/releases/tag/v0.1.0

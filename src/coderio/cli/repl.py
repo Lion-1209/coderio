@@ -123,16 +123,25 @@ def build_gate(cfg: Config, console=None, tui=None):
     # user opted in. FULL mode already allows everything; PLAN stays read-only.
     sandbox_active = cfg.tools.sandbox_mode != "off"
     auto_exec = sandbox_active and cfg.tools.auto_allow_if_sandboxed
-    # HONEST WARNING (2026-08-28 audit): on Windows NEITHER sandbox mode
-    # isolates file writes — "write" is effectively "job" (Restricted Token
-    # no-op, see win_sandbox.py) — so with auto-allow on, the user believes a
-    # filesystem boundary protects them while execute runs with the parent's
-    # full permissions. Warn on every gate build, for both modes.
-    if auto_exec and sys.platform == "win32" and cfg.tools.sandbox_mode in ("job", "write"):
-        warn = (
-            "⚠ [sandbox] Windows 下沙箱暂无文件写隔离（job/write 均为资源限制）。"
-            "auto_allow_if_sandboxed 已开启，execute 将无确认执行（黑名单仍生效）。"
-        )
+    # HONEST WARNING (2026-08-28 audit, extended 2026-09-03): with auto-allow
+    # on, the user believes a filesystem boundary protects them while execute
+    # runs with the parent's full permissions. That belief is wrong on TWO
+    # platforms: Windows (neither sandbox mode isolates file writes) and
+    # macOS (no OS-level sandbox at all — bwrap is Linux-only). Warn on every
+    # gate build so "zero isolation + zero confirmation" is never silent.
+    warn = None
+    if auto_exec and cfg.tools.sandbox_mode in ("job", "write"):
+        if sys.platform == "win32":
+            warn = (
+                "⚠ [sandbox] Windows 下沙箱暂无文件写隔离（job/write 均为资源限制）。"
+                "auto_allow_if_sandboxed 已开启，execute 将无确认执行（黑名单仍生效）。"
+            )
+        elif sys.platform == "darwin":
+            warn = (
+                "⚠ [sandbox] macOS 暂无 OS 级沙箱（bwrap 仅支持 Linux）。"
+                "auto_allow_if_sandboxed 已开启，execute 将无确认执行（黑名单仍生效）。"
+            )
+    if warn:
         if console is not None:
             console.print(warn, style="yellow")
         else:

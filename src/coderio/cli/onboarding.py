@@ -64,7 +64,8 @@ def _menu(prompt_fn) -> ProviderInfo | str:
         print(line)
     while True:
         raw = prompt_fn("Select a provider number: ").strip()
-        if raw.isdigit() and int(raw) in idx:
+        # isdecimal, not isdigit: "²".isdigit() is True but int("²") raises
+        if raw.isdecimal() and int(raw) in idx:
             return idx[int(raw)]
         print(f"  Invalid — enter a number 1-{n}")
 
@@ -236,21 +237,23 @@ def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> On
         # expired keys at config time instead of on first message in the TUI.
         # On success, also probe the model's context window so compaction uses
         # the real threshold (256K for step-3.7-flash, 200K for claude, etc).
+        # Verification loop (P1-3, 2026-09-03): a failure can come from the KEY
+        # *or* from a mistyped model name — the old flow only allowed
+        # re-entering the key, so a bad model id was an inescapable loop.
         print("  Verifying connection...")
-        ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
-        if not ok:
+        while True:
+            ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
+            if ok:
+                break
             print(f"  X {msg}")
-            retry = prompt_fn("  Re-enter key? (Enter = retry, n = skip): ").strip().lower()
+            retry = prompt_fn("  (Enter = retry key, m = change model, n = skip): ").strip().lower()
             if retry == "n":
                 return None
+            if retry == "m":
+                model = _choose_model(prompt_fn, p)
+                continue  # same key, new model
             api_key = password_fn().strip()
             if not api_key:
-                return None
-            print("  Verifying connection...")
-            ok, msg, context_limit = _verify_and_probe(p, api_key, model, base_url)
-            if not ok:
-                print(f"  ❌ {msg}")
-                print("  Verification still failing. Setup skipped — check your config later.")
                 return None
         print(f"  OK {msg}")
     else:

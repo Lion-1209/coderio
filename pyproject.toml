@@ -117,8 +117,11 @@ include = [
     "/README_en.md",
     "/CHANGELOG.md",
     "/CONTRIBUTING.md",
+    "/ROADMAP.md",
+    "/ROADMAP_en.md",
     "/LICENSE",
     "/THIRD_PARTY_LICENSES.md",
+    "/demo.gif",
 ]
 
 [tool.ruff]

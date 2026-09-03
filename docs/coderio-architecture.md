@@ -1,7 +1,7 @@
 # coderio 架构设计文档
 
-- **文档版本**：2026-07-27（基于实际代码库，非早期 spec）
-- **代码规模**：~9400 行 Python（src/coderio），500 测试全绿（499 passed + 1 skipped）
+- **文档版本**：2026-09-03（基于实际代码库，随代码演进更新；测试与规模数据以 §10 / CI 实测为准）
+- **代码规模**：15,000+ 行 Python（src/coderio），测试与规模数据以 §10 / CI 实测为准
 - **技术栈**：Python 3.11 + langchain + langgraph + Textual + Rich + Typer，Windows 优先
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
 - **CI**：GitHub Actions，lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12）+ wheel build smoke

@@ -42,9 +42,9 @@ real evidence:
 - **Structured ToolResult**: bash's exit_code is currently parsed out of the
   result string by regex (`[exit_code: N]` marker) — brittle against
   upstream format drift. The plan is a structured result object.
-- **Upstream Textual collaboration**: a minimal reproduction of the Screen
-  layers scroll-rendering bug, filed upstream (the symptom and a
-  reproducing test already exist in this repo).
+- **Upstream Textual tracking**: the Screen layers scroll-rendering bug was
+  once recorded here; re-tested 2026-09-02 on textual 8.2.8 with two repros —
+  NOT reproducible anymore (likely fixed upstream). Kept under watch.
 - **Confirmation UX expansion**: file writes already show a diff preview;
   shell-command confirmations are planned to gain risk labeling
   (read / write / network / irreversible).

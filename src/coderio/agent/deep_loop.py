@@ -340,7 +340,6 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=No
     if system_prompt is not None:
         return system_prompt
     from coderio.agent.prompts import ActiveSkills, build_system_prompt
-    from coderio.config.loader import _find_project_dir
     from coderio.skills.store import SkillStore
 
     store = skill_store or SkillStore()
@@ -349,23 +348,29 @@ def _resolve_system_prompt(system_prompt, skill_store, active_skills, workdir=No
     # deepagents' shell tool is named 'execute', not 'bash'. The system prompt
     # references 'bash' (coderio's original name); translate the standalone word
     # so the model calls the right tool. Word-boundary regex is robust to prose
-    # changes (same pattern as harness_middleware.py — one shared regex in the
-    # taxonomy registry so the two call sites can never drift; P2-2, audit
-    # 2026-09-02).
+    # The rewrite regex lives in the taxonomy registry as
+    # translate_bash_prose — the single copy shared by this call site and
+    # harness_middleware (P2-2, audit 2026-09-02).
     from coderio.tools.taxonomy import translate_bash_prose
 
     sp = translate_bash_prose(sp)
     # Project instruction files (AGENTS.md / CLAUDE.md) — user conventions for
     # THIS repo, appended after coderio's own instructions (2026-08-28 audit:
     # feature gap; multi-agent users already maintain these files).
-    from coderio.agent.project_instructions import instructions_block
+    from coderio.agent.project_instructions import instruction_boundary, instructions_block
+
+    launch = workdir or Path.cwd()
 
     # Nearest-wins: walk up from the LAUNCH dir (workdir), stopping at the
-    # project root — a monorepo subpackage's AGENTS.md beats the root's, and
-    # nothing above the root can leak in (2026-08-28 adversarial review #3).
+    # boundary — a monorepo subpackage's AGENTS.md beats the root's, and
+    # nothing above the boundary can leak in (2026-08-28 adversarial review
+    # #3; 2026-09-02 audit: passing None let the walk ascend past the launch
+    # dir, leaking a PARENT directory's AGENTS.md). Boundary priority
+    # (instruction_boundary): configured coderio project root -> enclosing
+    # git root (plain repos get their root AGENTS.md too) -> launch dir.
     sp += instructions_block(
         search_from=workdir or Path.cwd(),
-        stop_at=_find_project_dir(workdir or Path.cwd()),
+        stop_at=instruction_boundary(launch),
     )
     return sp
 
@@ -393,8 +398,8 @@ def _build_extra_tools(tools, skill_store, active_skills, anchor_dir=None):
     # These are CODERIO's own tool names (bash, todo, list_dir — the old ReAct
     # names), NOT deepagents' names (execute, write_todos, ls). We skip them
     # because deepagents already provides equivalents with its own naming.
-    # The name translation between the two namespaces lives in
-    # harness_middleware._to_coderio_name and _BASH_TO_EXECUTE.
+    # Name translation between the two namespaces lives in tools/taxonomy.py
+    # (to_harness_name / translate_bash_prose).
     _SKIP = LEGACY_ENGINE_TOOLS  # tools/taxonomy.py — one registry (audit A2)
     extra: list = []
     if tools:

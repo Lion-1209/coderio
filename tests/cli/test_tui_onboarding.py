@@ -141,8 +141,11 @@ async def test_verify_result_success_advances_to_name(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_result_failure_returns_to_key(monkeypatch):
-    """A failed verification shows an error and returns to the key step."""
+async def test_verify_result_failure_returns_to_model_step(monkeypatch):
+    """P1-3 (2026-09-03): a failed verification returns to the MODEL step, not
+    the key — the failure can come from a mistyped model id, and going back to
+    the key alone was an inescapable loop. The failed model id is prefilled in
+    the sentinel input."""
     _patch_first_run(monkeypatch)
     app = _OnboardingApp()
     async with app.run_test(size=(100, 40)) as pilot:
@@ -150,9 +153,11 @@ async def test_verify_result_failure_returns_to_key(monkeypatch):
         screen = app.screen
         bigmodel = next(p for p in screen._provider_items if p.id == "bigmodel_coding_plan")
         screen._chosen_provider = bigmodel
+        screen._chosen_model = "gpt-does-not-exist"
         screen._step = "verifying"
         screen._on_verify_result(ok=False, msg="Auth failed", context_limit=0)
-        assert screen._step == "key"
+        assert screen._step == "model", "must return to the model step (the key cannot fix a bad model id)"
+        assert screen._last_failed_model == "gpt-does-not-exist"
 
 
 # --------------------------------------------------------------- cancel

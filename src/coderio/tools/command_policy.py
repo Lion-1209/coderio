@@ -55,6 +55,80 @@ def _norm_exe(tok: str) -> str:
     return t[:-4] if t.endswith(".exe") else t
 
 
+# Prefix commands whose own flags and flag-arguments must be stepped over to
+# find the real command (audit 2026-09-03: `sudo -u root rm -rf /` and
+# `env -i rm -rf /` leaked because the stepper treated -u/-i naively). Flags
+# listed here TAKE A VALUE; unlisted short flags (-i, -n, ...) do not.
+# lookup key is tok.lower() — keep every flag LOWERCASE
+_PREFIX_FLAGS_WITH_VALUE: dict[str, frozenset[str]] = {
+    "sudo": frozenset(
+        {
+            "-u",
+            "-g",
+            "-p",
+            "-r",
+            "-t",
+            "-c",
+            "-d",
+            "-h",
+            "--user",
+            "--group",
+            "--prompt",
+            "--role",
+            "--type",
+            "--chdir",
+            "--host",
+        }
+    ),
+    "doas": frozenset({"-u", "--user"}),
+    "env": frozenset({"-u", "--unset", "-s", "--split-string", "--default"}),
+    "command": frozenset(),
+    "nohup": frozenset(),
+    "exec": frozenset(),
+}
+
+
+def _skip_exec_prefixes(tokens: list[str]) -> int:
+    """Return the index of the first token AFTER sudo/env/doas/command/nohup/
+    exec prefixes — including the prefix's own flags, a short flag's value
+    (only when the flag is in the take-a-value table), VAR=VALUE assignments
+    after ``env``, and a bare ``--`` separator. Over-stepping a flag value
+    fails safe: the remainder still gets re-checked against every pattern.
+    """
+    i = 0
+    n = len(tokens)
+    while i < n:
+        prefix = _norm_exe(tokens[i])
+        value_flags = _PREFIX_FLAGS_WITH_VALUE.get(prefix)
+        if value_flags is None:
+            break
+        i += 1
+        while i < n:
+            tok = tokens[i]
+            if tok == "--":
+                i += 1
+                break
+            if tok.startswith("-") and len(tok) > 1:
+                i += 1
+                # `-u root`: a short flag in the take-a-value table consumes
+                # the following non-flag token as its value
+                if i < n and not tokens[i].startswith("-") and tok.lower() in value_flags:
+                    i += 1
+                continue
+            if "=" in tok and prefix == "env":
+                i += 1  # env VAR=VALUE assignments
+                continue
+            break
+    return i
+
+
+def _dequote(tok: str) -> str:
+    """Strip quotes, honoring backslash-escaped quotes first — the shell
+    passes `sh -c "rm -rf \"/\""` through with the inner quotes escaped, and
+    a bare strip("\"'") would not reduce `\"/\"` to `/` (2026-09-03 audit)."""
+    return tok.replace('\\"', '"').replace("'", "'").strip("\"'")
+
+
 def _check_recursive_rm(command: str) -> str | None:
     """Python-level check for dangerous rm commands with recursive flags.
 
@@ -66,21 +140,21 @@ def _check_recursive_rm(command: str) -> str | None:
 
     Only triggers when ``rm`` is the actual command name (not inside echo/cat).
     Comparison goes through _norm_exe so `RM`, `rm.exe` and `/bin/rm` are all
-    recognized (2026-09-02 audit: 7 same-family footgun spellings leaked).
+    recognized (2026-09-02 audit: 7 same-family footgun spellings leaked), and
+    sudo/env/doas prefixes step through their own flags via _skip_exec_prefixes
+    (2026-09-03 audit: `sudo -u root rm -rf /` leaked).
     Returns a reason string if blocked, or None if safe.
     """
-    # Extract the command name — only block when rm is actually executed.
-    name = _norm_exe(_extract_command_name(command))
+    tokens = command.strip().split()
+    # Walk past env/sudo/doas prefixes (with their flags/values) to find the
+    # command position, then past `source`/`.` wrappers. _skip_exec_prefixes
+    # handles `sudo -u root rm` / `env -i rm` / `sudo -- rm` / `doas rm`
+    # (2026-09-03 audit: the old entry check extracted `-u` as the command
+    # name and bailed before the prefix stepper ever ran).
+    idx = _skip_exec_prefixes(tokens)
+    name = _norm_exe(tokens[idx]) if idx < len(tokens) else ""
     if name != "rm":
         return None
-
-    tokens = command.strip().split()
-    # Walk past env/sudo/source wrappers to find rm's position.
-    idx = 0
-    if tokens and tokens[0] in ("env", "sudo", "command"):
-        idx = 1
-        while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("-"):
-            idx += 1
     if idx < len(tokens) and tokens[idx] in ("source", "."):
         idx += 2
         while idx < len(tokens) and tokens[idx] in ("&&", "||", ";", "&", "|"):
@@ -111,7 +185,7 @@ def _check_recursive_rm(command: str) -> str | None:
     # Check for dangerous targets among rm's arguments.
     has_dangerous = False
     for t in rm_tokens:
-        stripped = t.strip("\"'")
+        stripped = _dequote(t)
         if stripped == "/" or stripped.startswith("/"):
             has_dangerous = True
             break
@@ -128,9 +202,9 @@ def _check_recursive_rm(command: str) -> str | None:
     if not has_dangerous:
         return None
 
-    if any(t.strip("\"'") in ("/", "$HOME", "~") or t.strip("\"'").startswith(("/", "$HOME")) for t in rm_tokens):
+    if any(_dequote(t) in ("/", "$HOME", "~") or _dequote(t).startswith(("/", "$HOME")) for t in rm_tokens):
         return "recursive delete of system/home directory"
-    if "*" in [t.strip("\"'") for t in rm_tokens]:
+    if "*" in [_dequote(t) for t in rm_tokens]:
         return "recursive delete of all files (glob)"
     return "recursive delete of dangerous target"
 
@@ -346,25 +420,24 @@ def _unwrap_wrapper(seg: str) -> str | None:
     """If ``seg`` is a shell wrapper (``bash -lc "..."``, ``cmd /c ...``),
     return everything after the -c/--command//c flag; else None.
 
-    Prefixes sudo/env/nohup/exec are stepped over (with env's VAR=VALUE
-    assignments), and the shell token is compared via _norm_exe — the
-    audit's `/bin/sh -c "rm -rf /"` and `sudo sh -c "..."` spellings are
-    the same wrapper as bare `sh -c`."""
+    Prefixes sudo/env/doas/nohup/exec are stepped over via
+    _skip_exec_prefixes (with env's VAR=VALUE assignments and the prefixes'
+    own flags/values), and the shell token is compared via _norm_exe — the
+    audit's `/bin/sh -c "rm -rf /"`, `sudo sh -c "..."` and
+    `bash -c -l "rm -rf /"` spellings are the same wrapper as bare `sh -c`
+    (2026-09-03: flags may follow -c, so everything flag-like between -c and
+    the payload is skipped)."""
     tokens = seg.split()
     if not tokens:
         return None
-    i = 0
-    while i < len(tokens) and _norm_exe(tokens[i]) in ("sudo", "env", "command", "nohup", "exec"):
-        i += 1
-        # `env` may carry VAR=value assignments before the command.
-        while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
-            i += 1
+    i = _skip_exec_prefixes(tokens)
     if i >= len(tokens):
         return None
     shell = _norm_exe(tokens[i])
     if shell not in _WRAPPER_SHELLS:
         return None
-    for j in range(i + 1, len(tokens)):
+    j = i + 1
+    while j < len(tokens):
         t = tokens[j].lower()
         if shell == "cmd":
             if t in ("/c", "/k"):
@@ -373,10 +446,17 @@ def _unwrap_wrapper(seg: str) -> str | None:
         else:
             # -c / --command / merged short flags ending in c (bash -lc)
             if t in ("-c", "--command") or (t.startswith("-") and t.endswith("c") and len(t) > 2 and "w" not in t):
+                # Flags may FOLLOW -c (`bash -c -l "rm -rf /"` is a legal bash
+                # invocation where -l becomes $0) — skip everything flag-like,
+                # the payload starts at the first non-flag token.
+                k = j + 1
+                while k < len(tokens) and tokens[k].startswith("-"):
+                    k += 1
                 # strip the wrapping quotes: '"rm -rf /"' must become a
                 # command whose first token _check_recursive_rm recognizes
-                inner = " ".join(tokens[j + 1 :]).strip().strip("\"'")
+                inner = " ".join(tokens[k:]).strip().strip("\"'")
                 return inner or None
+        j += 1
     return None
 
 
@@ -448,7 +528,11 @@ def _check_recursive_windows_delete(command: str) -> str | None:
     # Dangerous-target filter MIRRORS the rm/Remove-Item checks (audit finding
     # #7: an unfiltered rd /s hard-blocked legitimate build cleanup like
     # `rd /s /q .\build`). Relative targets pass; roots/home block.
-    if low_tokens and low_tokens[0] in ("rd", "rmdir"):
+    # cmd recursive delete: rd /s, rmdir /s — AND del|erase /s (2026-09-03
+    # audit: `del /f /s /q C:\Windows` deletes recursively while only rd/rmdir
+    # were checked). No-argument /s (current-directory recursive delete) is
+    # blocked as well.
+    if low_tokens and low_tokens[0] in ("rd", "rmdir", "del", "erase"):
         if "/s" in low_tokens:
             args = [t for t, lt in zip(tokens, low_tokens) if not lt.startswith("/") and not lt.startswith("-")]
             dangerous = any(
@@ -456,7 +540,7 @@ def _check_recursive_windows_delete(command: str) -> str | None:
                 for a in args
             )
             if dangerous or not args:
-                return "cmd recursive directory delete (rd /s)"
+                return "cmd recursive directory delete (del|rd /s)"
 
     return None
 
@@ -476,12 +560,9 @@ def _extract_command_name(command: str) -> str:
         return ""
     # Strip leading env-var assignments (``VAR=x foo``) and common wrappers.
     tokens = command.strip().split()
-    i = 0
-    # Skip ``env`` + its VAR=val args.
-    if tokens and tokens[0] in ("env", "sudo", "command"):
-        i = 1
-        while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
-            i += 1
+    # Skip sudo/env/doas prefixes incl. their flags/values (same stepper as
+    # _check_recursive_rm — `sudo -u root cmd` must yield `cmd`).
+    i = _skip_exec_prefixes(tokens)
     # Skip ``source x && ...`` / ``. x && ...`` prefix.
     if i < len(tokens) and tokens[i] in ("source", "."):
         # Skip the script arg, then any && / ; separator.

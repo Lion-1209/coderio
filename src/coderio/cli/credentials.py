@@ -61,8 +61,17 @@ def read_credentials(path: Path | str | None = None) -> dict[str, str]:
     p = Path(path) if path else _DEFAULT
     if not p.is_file():
         return {}
-    with open(p, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(p, "rb") as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        # Corrupt (e.g. half-written) credentials must not crash /setup — the
+        # user can rebuild by re-entering the key (same tolerance as the trust
+        # store). P2-2, 2026-09-03 audit.
+        _log.warning(
+            "credentials file %s is corrupt (%s) — treating as empty; re-run onboarding or /setup to rebuild it", p, e
+        )
+        return {}
     return {section: v.get("key", "") for section, v in data.items() if isinstance(v, dict)}
 
 

@@ -337,14 +337,13 @@ class OnboardingScreen(ModalScreen[dict | None]):
             self.query_one("#onboard-status").update(f"[green]✅ {msg}[/green]")
             self._show_name_step()
         else:
+            # P1-3 (2026-09-03): a failure can come from the KEY *or* the model
+            # name — going back to the key alone was an inescapable loop for a
+            # mistyped model id. Return to the MODEL step (sentinel prefilled
+            # with the failed id); the key step later prefills this key.
             self.query_one("#onboard-status").update(f"[red]❌ {msg}[/red]")
-            self._step = "key"
-            self.query_one("#onboard-hint").update("Verification failed — re-enter the API key (or Esc to cancel):")
-            inp = self.query_one("#onboard-input", Input)
-            inp.password = True
-            inp.visible = True
-            inp.value = ""
-            inp.focus()
+            self._last_failed_model = self._chosen_model
+            self._show_model_step()
 
     def _finish(self) -> None:
         """Save credentials + profile, then dismiss with result."""
@@ -411,13 +410,15 @@ class OnboardingScreen(ModalScreen[dict | None]):
         elif self._step == "model":
             if idx == len(self._model_items):
                 # "Type a model name…" sentinel (P3-2): switch to free text.
-                # Pre-fill when editing so "keep current" is a bare Enter.
+                # Pre-fill when editing (keep current = bare Enter) or after a
+                # verify failure (retry with the corrected model id).
                 self._step = "model_input"
                 lv.display = False
                 inp = self.query_one("#onboard-input", Input)
                 inp.visible = True
                 inp.password = False
-                inp.value = self._editing_profile.model if self._editing_profile else ""
+                failed = getattr(self, "_last_failed_model", "")
+                inp.value = self._editing_profile.model if self._editing_profile else failed
                 inp.focus()
                 self.query_one("#onboard-hint").update("Enter model name (any valid id for this provider works):")
                 return

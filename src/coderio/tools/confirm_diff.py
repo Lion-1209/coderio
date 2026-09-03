@@ -41,7 +41,7 @@ def _resolve(file_path: str, workdir) -> Path:
     q = Path(file_path)
     if q.is_absolute():
         return q
-    base = Path(workdir) if workdir else Path.cwd()
+    base = Path(workdir).resolve() if workdir else Path.cwd().resolve()
     return base / q
 
 
@@ -100,21 +100,36 @@ def build_diff_preview(
             if old is None:
                 return f"(cannot preview: file not found: {fp})"
             if tool_name == EDIT_FILE:
-                edits = [{"old_string": args.get("old_string", ""), "new_string": args.get("new_string", "")}]
+                edits = [
+                    {
+                        "old_string": args.get("old_string", ""),
+                        "new_string": args.get("new_string", ""),
+                        "replace_all": bool(args.get("replace_all", False)),
+                    }
+                ]
             else:
                 edits = list(args.get("edits", []))
+            # Match the REAL tool semantics (deepagents
+            # perform_string_replacement + multi_edit all-or-nothing):
+            #   0 occurrences          -> the edit fails, nothing is written
+            #   >1 without replace_all -> the edit fails, nothing is written
+            #   replace_all=True       -> EVERY occurrence is replaced
+            # A preview that shows a partial/partially-applied result would
+            # mislead the approval (2026-09-03 audit finding 2).
             new = old
-            applied = 0
-            for e in edits:
+            for idx, e in enumerate(edits, 1):
                 o = str(e.get("old_string", ""))
                 n = str(e.get("new_string", ""))
-                if o and o in new:
-                    new = new.replace(o, n, 1)
-                    applied += 1
-            if not applied:
-                # the real edit will fail the same way — telling the user up
-                # front is more useful than an empty preview
-                return "(cannot preview: old_string not found in file — the edit would fail)"
+                replace_all = bool(e.get("replace_all", False))
+                count = new.count(o) if o else 0
+                if count == 0:
+                    return f"(cannot preview: edit {idx}: string not found in file — the tool would fail)"
+                if count > 1 and not replace_all:
+                    return (
+                        f"(cannot preview: edit {idx}: the target string appears {count} times — "
+                        f"the tool would fail without replace_all)"
+                    )
+                new = new.replace(o, n)
             return _unified(old, new, fp, max_lines)
     except Exception:  # noqa: BLE001 — preview must never break confirmation
         return None

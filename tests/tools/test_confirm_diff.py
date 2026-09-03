@@ -106,3 +106,55 @@ def test_long_diff_is_truncated(tmp_path):
 def test_unexpected_args_return_none():
     assert build_diff_preview("write_file", {}) is None
     assert build_diff_preview("edit_file", {"file_path": ""}) is None
+
+
+# ------------------------------------------------- real-tool semantics (P1-2, 2026-09-03)
+
+
+def test_replace_all_shows_every_occurrence(tmp_path):
+    """deepagents semantics: replace_all=True replaces EVERY occurrence — the
+    preview must show all of them, not just the first (misleading approval)."""
+    target = tmp_path / "app.py"
+    target.write_text("todo\ntodo\ntodo\n", encoding="utf-8")
+    out = build_diff_preview(
+        "edit_file",
+        {"file_path": str(target), "old_string": "todo", "new_string": "done", "replace_all": True},
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert out.count("+done") == 3, f"all three replacements must be previewed: {out}"
+
+
+def test_multiple_matches_without_replace_all_reports_failure(tmp_path):
+    """deepagents semantics: >1 occurrence without replace_all FAILS (nothing
+    written). The preview must say so instead of rendering one replacement."""
+    target = tmp_path / "app.py"
+    target.write_text("todo\ntodo\n", encoding="utf-8")
+    out = build_diff_preview(
+        "edit_file",
+        {"file_path": str(target), "old_string": "todo", "new_string": "done"},
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert "2 times" in out and "would fail" in out
+
+
+def test_multi_edit_all_or_nothing_is_respected(tmp_path):
+    """deepagents multi_edit aborts wholesale when ANY edit fails — the
+    preview must not render a partially-applied result."""
+    target = tmp_path / "app.py"
+    target.write_text("keep\n", encoding="utf-8")
+    out = build_diff_preview(
+        "multi_edit",
+        {
+            "path": str(target),
+            "edits": [
+                {"old_string": "keep", "new_string": "changed"},
+                {"old_string": "not-in-file", "new_string": "x"},
+            ],
+        },
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert "edit 2" in out and "would fail" in out
+    assert "+changed" not in out, "the whole multi_edit aborts — nothing is applied"

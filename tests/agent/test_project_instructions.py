@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coderio.agent.project_instructions import (
+    instruction_boundary,
     instructions_block,
     load_project_instructions,
 )
@@ -166,3 +167,35 @@ def test_run_deep_agent_still_injects_launch_dir_agents_md(tmp_path, monkeypatch
     run_deep_agent("hi", TurnSpec(model=object()), session)
 
     assert "child-local convention" in captured.get("system_prompt", "")
+
+
+def test_boundary_falls_back_to_git_root(tmp_path):
+    """P2-1 (2026-09-03): a plain repo WITHOUT .coderio/config.toml — the
+    boundary falls back to the git root, so the repo's root AGENTS.md loads
+    for launches from subdirectories (the cross-tool user's main scenario,
+    which the 09-02 stop_at fix accidentally broke)."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    sub = repo / "src"
+    sub.mkdir(parents=True)
+    subprocess.run(  # noqa: S603 — fixture-local repo path, no untrusted input
+        ["git", "init", "-q", str(repo)], check=True, capture_output=True
+    )
+    _write(repo, "AGENTS.md", "root agents md")
+
+    boundary = instruction_boundary(sub)
+    assert boundary == repo, "git root must be the boundary when no coderio marker exists"
+    assert load_project_instructions(sub, stop_at=boundary) == "root agents md"
+
+
+def test_boundary_is_launch_dir_outside_git(tmp_path):
+    """Outside any git repo and without a coderio marker, the launch dir is
+    its own boundary — a PARENT AGENTS.md still cannot leak in."""
+    repo = tmp_path / "repo"
+    sub = tmp_path / "not-a-repo" / "child"
+    sub.mkdir(parents=True)
+    repo.mkdir()
+    _write(repo, "AGENTS.md", "LEAKED")
+    assert instruction_boundary(sub) == sub
+    assert load_project_instructions(sub, stop_at=instruction_boundary(sub)) == ""

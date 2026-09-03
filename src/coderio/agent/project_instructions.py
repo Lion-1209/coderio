@@ -26,6 +26,7 @@ Semantics (aligned with the audit's design notes, 2026-08-28):
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -76,6 +77,56 @@ def load_project_instructions(search_from: str | Path, stop_at: str | Path | Non
             break
         current = parent
     return ""
+
+
+def instruction_boundary(launch_dir: str | Path) -> Path:
+    """The highest directory the instruction walk may reach (P2-1, 2026-09-03).
+
+    Bounded at the coderio project root when one is configured (.coderio/
+    config.toml exists); otherwise at the enclosing GIT root — a plain repo
+    without coderio config still gets its root AGENTS.md when launched from a
+    subdirectory, and the git toplevel is the natural monorepo boundary. When
+    neither applies (no git, launch outside any repo), the boundary is the
+    launch dir itself. Never ascends past the boundary: an AGENTS.md above it
+    cannot leak in.
+    """
+    import subprocess
+    import sys
+
+    from coderio.config.loader import _find_project_dir
+
+    start = Path(launch_dir).resolve()
+    root = _find_project_dir(start)
+    if root != start:
+        return root
+    git = shutil.which("git")
+    if git is None:
+        return start  # no git — the launch dir is the boundary
+    try:
+        # two explicit calls (not **kwargs) — keeps subprocess.run overloads
+        # mypy-clean; CREATE_NO_WINDOW only exists on Windows
+        if sys.platform == "win32":
+            r = subprocess.run(  # noqa: S603 — git resolved via shutil.which, fixed args
+                [git, "rev-parse", "--show-toplevel"],
+                cwd=start,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,  # no console flash
+            )
+        else:
+            r = subprocess.run(  # noqa: S603 — git resolved via shutil.which, fixed args
+                [git, "rev-parse", "--show-toplevel"],
+                cwd=start,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        if r.returncode == 0 and r.stdout.strip():
+            return Path(r.stdout.strip())
+    except (OSError, subprocess.SubprocessError) as e:  # boundary probing is best-effort
+        _log.warning("git toplevel probe failed (%s) — instruction walk bounded at the launch dir", e)
+    return start
 
 
 def instructions_block(search_from: str | Path, stop_at: str | Path | None = None) -> str:
