@@ -121,7 +121,7 @@ jobs:
         # the publish job — the old flow REBUILT in publish-pypi, so PyPI
         # could receive a different byte stream than the one verified above
         # (2026-08-28 audit: non-deterministic build gap).
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: |
