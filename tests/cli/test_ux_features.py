@@ -228,7 +228,12 @@ async def test_send_button_submit_goes_through_worker_guard():
         inp = app.query_one("#msg", Input)
         inp.value = "via button"
         app._submit_current_input()
-        await pilot.pause()
+        # the worker thread's scheduling on CI runners is slower than a local
+        # pause — poll instead of a single pause (flaky otherwise)
+        for _ in range(20):
+            await pilot.pause()
+            if submits:
+                break
         assert len(submits) == 1, "idle button submit must spawn the worker"
         assert seen_flags == [True], "_spawn_turn must flip the flag synchronously (worker samples it True)"
         assert inp.value == "", "input cleared on accepted submit"

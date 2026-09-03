@@ -566,3 +566,57 @@ def test_safe_prefixed_commands_pass(command):
     """The prefix stepper must not block legitimate prefixed commands."""
     p = CommandPolicy.default()
     assert p.check_command(command) is None, f"should pass: {command!r}"
+
+
+# ------------------------------------------- second adversarial round (P1-1, 2026-09-03)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -cb "rm -rf /"',  # c in the MIDDLE of a merged flag group
+        'sh -cx "rm -rf /"',
+        "bash -bc 'rm -rf /'",
+        "exec -a name rm -rf /",  # exec -a renames argv[0]
+        "exec -a name bash -c 'rm -rf /'",
+        'su -c "rm -rf /"',  # su -c is wrapper territory
+        'su root -c "rm -rf /"',  # username positional before -c
+        "del /s",  # no-argument /s: deletes the whole CWD tree
+        "rd /s",
+        "rmdir /s",
+        "erase /s",
+        "del /s *",
+        'env -S "rm -rf /"',  # env split-string: the VALUE is the command
+        'env -S"rm -rf /"',  # glued form
+        "timeout 10 rm -rf /",  # duration operand before the command
+        "timeout 5 rm -rf /",
+        "nice -n 5 rm -rf /",
+        "nice rm -rf /",
+        "setsid rm -rf /",
+        "pkexec rm -rf /",
+    ],
+)
+def test_blocks_second_round_wrapper_variants(command):
+    """Second adversarial round (2026-09-03): the wrapper-FLAG dimension and
+    the timeout/nice/setsid/pkexec prefix family — all natural footgun
+    spellings, all verified against real bash/env behavior."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "timeout 10 python train.py",
+        "nice -n 5 python bench.py",
+        "setsid python worker.py",
+        "sudo apt install curl",
+        "env LC=C python x.py",
+        "doas make install",
+        "bash -c 'echo ok'",
+    ],
+)
+def test_safe_timeout_family_pass(command):
+    """The timeout/nice/setsid family must not block legitimate use."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is None, f"should pass: {command!r}"

@@ -275,10 +275,14 @@ class OnboardingScreen(ModalScreen[dict | None]):
         self.query_one("#onboard-list", ListView).display = False
         if self._editing_profile:
             # Editing: key is optional — empty input keeps the existing key.
-            from coderio.cli.credentials import get_key
+            # P1-3 follow-up (audit): keep a freshly entered key across a
+            # verify-failure retry — overwriting it with the stored value
+            # discarded the user's new key AND let an empty submit skip
+            # verification right after a failure (audit P2).
+            if not self._api_key:
+                from coderio.cli.credentials import get_key
 
-            existing = get_key(p.id) or ""
-            self._api_key = existing  # carry over until the user types a new one
+                self._api_key = get_key(p.id) or ""
             self.query_one("#onboard-hint").update(
                 f"Enter a new API key (leave empty to keep the current one) — {p.api_key_hint}:"
             )
@@ -334,6 +338,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
             # profile. Without this, /setup-configured models miss the compaction
             # threshold optimization (only CLI onboarding was probing).
             self._context_limit = context_limit
+            self._last_failed_model = ""
             self.query_one("#onboard-status").update(f"[green]✅ {msg}[/green]")
             self._show_name_step()
         else:
@@ -418,7 +423,7 @@ class OnboardingScreen(ModalScreen[dict | None]):
                 inp.visible = True
                 inp.password = False
                 failed = getattr(self, "_last_failed_model", "")
-                inp.value = self._editing_profile.model if self._editing_profile else failed
+                inp.value = failed or (self._editing_profile.model if self._editing_profile else "")
                 inp.focus()
                 self.query_one("#onboard-hint").update("Enter model name (any valid id for this provider works):")
                 return

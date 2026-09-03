@@ -61,6 +61,7 @@ def _norm_exe(tok: str) -> str:
 # listed here TAKE A VALUE; unlisted short flags (-i, -n, ...) do not.
 # lookup key is tok.lower() — keep every flag LOWERCASE
 _PREFIX_FLAGS_WITH_VALUE: dict[str, frozenset[str]] = {
+    # lookup key is tok.lower() — keep every flag LOWERCASE
     "sudo": frozenset(
         {
             "-u",
@@ -81,10 +82,18 @@ _PREFIX_FLAGS_WITH_VALUE: dict[str, frozenset[str]] = {
         }
     ),
     "doas": frozenset({"-u", "--user"}),
-    "env": frozenset({"-u", "--unset", "-s", "--split-string", "--default"}),
+    "env": frozenset({"-u", "--unset", "--default"}),
     "command": frozenset(),
     "nohup": frozenset(),
-    "exec": frozenset(),
+    # -a renames argv[0] (`exec -a name rm -rf /` really runs rm) — audit P1-2
+    "exec": frozenset({"-a"}),
+    # su: -l/-m/-p are login markers; bare `-` is a special case in the
+    # stepper; `-c "cmd"` is wrapper territory (_WRAPPER_SHELLS)
+    "su": frozenset({"-l", "-m", "-p"}),
+    "timeout": frozenset(),
+    "nice": frozenset({"-n"}),
+    "setsid": frozenset(),
+    "pkexec": frozenset(),
 }
 
 
@@ -108,6 +117,12 @@ def _skip_exec_prefixes(tokens: list[str]) -> int:
             if tok == "--":
                 i += 1
                 break
+            if prefix == "su" and tok == "-":
+                i += 1  # `su - cmd`: login-shell marker, not a value
+                continue
+            if prefix == "timeout" and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?[smhd]?", tok):
+                i += 1  # duration operand (`timeout 10 rm -rf /`) — audit P2
+                continue
             if tok.startswith("-") and len(tok) > 1:
                 i += 1
                 # `-u root`: a short flag in the take-a-value table consumes
@@ -146,6 +161,24 @@ def _check_recursive_rm(command: str) -> str | None:
     Returns a reason string if blocked, or None if safe.
     """
     tokens = command.strip().split()
+    # `env -S "rm -rf /"`: -S/--split-string's VALUE is the command itself
+    # (GNU env split-string) — re-check the value as a command (audit P2).
+    if tokens and _norm_exe(tokens[0]) == "env":
+        for k, tok in enumerate(tokens[1:], 1):
+            val = None
+            if tok in ("-S", "--split-string") and k + 1 < len(tokens):
+                val = tokens[k + 1]
+            elif tok.startswith("--split-string="):
+                val = tok.split("=", 1)[1]
+            elif tok.startswith("-S") and len(tok) > 2:
+                # glued form -S"rm -rf /": the value CONTAINS spaces, so the
+                # whitespace split shredded it — rejoin the tail (audit P1)
+                val = tok[2:] + (" " + " ".join(tokens[k + 1 :]) if k + 1 < len(tokens) else "")
+            if val:
+                nested = _check_recursive_rm(val.strip("\"'"))
+                if nested:
+                    return nested
+                break
     # Walk past env/sudo/doas prefixes (with their flags/values) to find the
     # command position, then past `source`/`.` wrappers. _skip_exec_prefixes
     # handles `sudo -u root rm` / `env -i rm` / `sudo -- rm` / `doas rm`
@@ -155,10 +188,6 @@ def _check_recursive_rm(command: str) -> str | None:
     name = _norm_exe(tokens[idx]) if idx < len(tokens) else ""
     if name != "rm":
         return None
-    if idx < len(tokens) and tokens[idx] in ("source", "."):
-        idx += 2
-        while idx < len(tokens) and tokens[idx] in ("&&", "||", ";", "&", "|"):
-            idx += 1
     if idx >= len(tokens) or _norm_exe(tokens[idx]) != "rm":
         return None
 
@@ -413,7 +442,7 @@ _SEGMENT_SPLIT_RE = re.compile("&&|\\|\\||[;|&]|\r\n|\n")
 # re-check. Token-based parsing handles merged short flags (bash -lc) and
 # cmd's slash-style flags — neither survives a regex approach cleanly
 # (2026-08-28 adversarial review findings #4/#5).
-_WRAPPER_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "powershell", "pwsh", "cmd"}
+_WRAPPER_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "powershell", "pwsh", "cmd", "su"}
 
 
 def _unwrap_wrapper(seg: str) -> str | None:
@@ -436,7 +465,12 @@ def _unwrap_wrapper(seg: str) -> str | None:
     shell = _norm_exe(tokens[i])
     if shell not in _WRAPPER_SHELLS:
         return None
-    j = i + 1
+    # `su user -c "cmd"`: the username is a POSITIONAL argument between the
+    # prefix and -c — skip it when scanning (audit P1-3).
+    scan_from = i + 1
+    if shell == "su" and scan_from < len(tokens) and not tokens[scan_from].startswith("-"):
+        scan_from += 1  # the username
+    j = scan_from
     while j < len(tokens):
         t = tokens[j].lower()
         if shell == "cmd":
@@ -444,8 +478,10 @@ def _unwrap_wrapper(seg: str) -> str | None:
                 inner = " ".join(tokens[j + 1 :]).strip().strip("\"'")
                 return inner or None
         else:
-            # -c / --command / merged short flags ending in c (bash -lc)
-            if t in ("-c", "--command") or (t.startswith("-") and t.endswith("c") and len(t) > 2 and "w" not in t):
+            # -c / --command / merged short-flag groups CONTAINING c:
+            # `bash -lc` (c at the end) AND `bash -cb` (c in the middle —
+            # `-cb "x"` runs x, verified on real bash; audit P1-1)
+            if t in ("-c", "--command") or (t.startswith("-") and len(t) > 2 and "c" in t[1:] and "w" not in t):
                 # Flags may FOLLOW -c (`bash -c -l "rm -rf /"` is a legal bash
                 # invocation where -l becomes $0) — skip everything flag-like,
                 # the payload starts at the first non-flag token.
@@ -534,14 +570,36 @@ def _check_recursive_windows_delete(command: str) -> str | None:
     # blocked as well.
     if low_tokens and low_tokens[0] in ("rd", "rmdir", "del", "erase"):
         if "/s" in low_tokens:
-            args = [t for t, lt in zip(tokens, low_tokens) if not lt.startswith("/") and not lt.startswith("-")]
+            # skip index 0 (the command name) — counting it made `not args` a
+            # dead condition and `del /s` (delete the whole CWD tree) leaked
+            args = [
+                tok
+                for k, (tok, lt) in enumerate(zip(tokens, low_tokens))
+                if k > 0 and not lt.startswith("/") and not lt.startswith("-")
+            ]
             dangerous = any(
-                a.lower().rstrip("\\/") in ("c:", "~") or a.lower().startswith(("c:\\", "\\\\")) or a in ("/", "\\")
+                a.lower().rstrip("\\") in ("c:", "~")
+                or a.lower().startswith(("c:\\", "\\\\"))
+                or a in ("/", "\\")
+                or a in ("*", "*.*")  # audit: `del /s *` nukes the whole CWD tree
                 for a in args
             )
             if dangerous or not args:
                 return "cmd recursive directory delete (del|rd /s)"
 
+    return None
+
+
+def _check_su_c(command: str) -> str | None:
+    """`su [user] -c "cmd"`: cmd runs as root — re-check the payload with the
+    full rm logic (audit 2026-09-03 P1-3). The stepper cannot locate rm
+    across su's username positional, so this runs at the segment level."""
+    tokens = command.strip().split()
+    if not tokens or _norm_exe(tokens[0]) != "su":
+        return None
+    for k in range(1, len(tokens)):
+        if tokens[k].lower() in ("-c", "--command") and k + 1 < len(tokens):
+            return _check_recursive_rm(" ".join(tokens[k + 1 :]))
     return None
 
 
@@ -649,6 +707,9 @@ class CommandPolicy:
             py_reason = _check_recursive_rm(segment)
             if py_reason is not None:
                 return py_reason
+            su_reason = _check_su_c(segment)
+            if su_reason is not None:
+                return su_reason
             win_reason = _check_recursive_windows_delete(segment)
             if win_reason is not None:
                 return win_reason

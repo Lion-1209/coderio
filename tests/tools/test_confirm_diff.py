@@ -158,3 +158,55 @@ def test_multi_edit_all_or_nothing_is_respected(tmp_path):
     assert out is not None
     assert "edit 2" in out and "would fail" in out
     assert "+changed" not in out, "the whole multi_edit aborts — nothing is applied"
+
+
+# ------------------------------------- guards for the P1-2 semantics fixes
+
+
+def test_crlf_file_and_crlf_old_string_preview_normally(tmp_path):
+    """Guard: CRLF file + CRLF old_string must preview as a normal diff —
+    the real tool normalizes CRLF before matching, so 'would fail' here was
+    the exact false negative the semantics alignment fixed."""
+    target = tmp_path / "win.py"
+    target.write_bytes(b"print('hello')\r\nprint('bye')\r\n")
+    out = build_diff_preview(
+        "edit_file",
+        {"file_path": str(target), "old_string": "print('hello')\r\n", "new_string": "print('hi')\r\n"},
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert "would fail" not in out
+    assert "-print('hello')" in out and "+print('hi')" in out
+
+
+def test_string_replace_all_false_is_not_truthy(tmp_path):
+    """Guard: replace_all arriving as the STRING "false" (raw model JSON is
+    not schema-validated before the preview) must parse as False — a truthy
+    conversion showed an all-occurrences preview for an edit that would fail."""
+    target = tmp_path / "app.py"
+    target.write_text("todo\ntodo\n", encoding="utf-8")
+    out = build_diff_preview(
+        "edit_file",
+        {"file_path": str(target), "old_string": "todo", "new_string": "done", "replace_all": "false"},
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert "appears 2 times" in out and "would fail" in out
+
+
+def test_line_number_prefixed_old_string_previews_normally(tmp_path):
+    """Guard: old_string carrying read_file's 'N\t' line-number prefixes must
+    preview as a normal diff (multi_edit strips them before matching)."""
+    target = tmp_path / "app.py"
+    target.write_text("foo\nbar\n", encoding="utf-8")
+    out = build_diff_preview(
+        "multi_edit",
+        {
+            "path": str(target),
+            "edits": [{"old_string": "1\tfoo\n2\tbar", "new_string": "1\tfoo\n2\tBAZ"}],
+        },
+        workdir=tmp_path,
+    )
+    assert out is not None
+    assert "would fail" not in out
+    assert "+BAZ" in out or "+2\tBAZ" in out, f"prefix should be stripped in preview: {out}"

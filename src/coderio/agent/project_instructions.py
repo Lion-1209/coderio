@@ -31,6 +31,11 @@ from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
+# P2-1 follow-up (audit P3): `git rev-parse` runs once per resolved launch
+# dir — a hung network-mounted launch dir would otherwise stall EVERY turn
+# for the full probe timeout.
+_BOUNDARY_CACHE: dict[Path, Path] = {}
+
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 MAX_CHARS = 20_000
 
@@ -96,8 +101,20 @@ def instruction_boundary(launch_dir: str | Path) -> Path:
     from coderio.config.loader import _find_project_dir
 
     start = Path(launch_dir).resolve()
+    cached = _BOUNDARY_CACHE.get(start)
+    if cached is not None:
+        return cached
+    # NOTE (audit P1-5): do NOT infer "no coderio config" from
+    # _find_project_dir(start) == start — that is ALSO the result when the
+    # launch dir IS a coderio project root nested inside an outer git repo,
+    # and the git fallback then lifted the boundary ABOVE the coderio root,
+    # leaking the outer repo's AGENTS.md. Test the marker directly.
+    if (start / ".coderio" / "config.toml").is_file():
+        _BOUNDARY_CACHE[start] = start
+        return start
     root = _find_project_dir(start)
     if root != start:
+        _BOUNDARY_CACHE[start] = root
         return root
     git = shutil.which("git")
     if git is None:
@@ -123,7 +140,8 @@ def instruction_boundary(launch_dir: str | Path) -> Path:
                 timeout=5,
             )
         if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
+            _BOUNDARY_CACHE[start] = Path(r.stdout.strip())
+            return _BOUNDARY_CACHE[start]
     except (OSError, subprocess.SubprocessError) as e:  # boundary probing is best-effort
         _log.warning("git toplevel probe failed (%s) — instruction walk bounded at the launch dir", e)
     return start
