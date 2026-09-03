@@ -85,10 +85,11 @@ class CoderioTUI(App):
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }
-    /* NOTE: do NOT define `Screen { layers }` here — it changes how Textual
-       renders the scrollable region (bottom rows of scrolled content stop
-       rendering). The CommandMenu popup uses display:none/block for show/hide
-       and dock:bottom for positioning, so it does NOT need layers. */
+    /* HISTORY (2026-07): defining `Screen { layers }` here once made the bottom
+       rows of scrolled content render blank (tests/cli/test_truncation.py was
+       written for it). Re-tested 2026-09-02 on textual 8.2.8 with two repros
+       (plain + full layout): NOT reproducible anymore — likely fixed upstream.
+       Kept without layers anyway; CommandMenu only needs display:none/block. */
     """
 
     BINDINGS = [
