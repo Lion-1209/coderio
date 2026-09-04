@@ -2,6 +2,8 @@ import os
 import threading
 import time
 
+import pytest
+
 from coderio.session import Message, ToolCall
 from coderio.session.store import Session, new_session_id
 
@@ -214,3 +216,82 @@ def test_locked_append_falls_through_on_timeout(tmp_path):
     s.append(Message.user("test-msg"))
     reloaded = Session.load(s.path)
     assert any(m.content == "test-msg" for m in reloaded.messages)
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="P0-5 regression is Windows msvcrt-specific; POSIX flock locks the whole file",
+)
+def test_windows_lock_mutex_survives_file_growth(tmp_path):
+    """REGRESSION (2026-09-04 audit P0-5, reproduced experimentally): the
+    cross-process lock used to lock the byte at the OPEN-TIME EOF position.
+    A holder appending under the lock grows the file, so a later opener
+    locked a DIFFERENT byte and both "held" the lock — concurrent appends
+    could interleave and half-line corruption got silently dropped on load.
+    The fix pins the lock to byte [0,1) via seek(0).
+
+    This test holds the lock in a child process (the exact seek(0) +
+    LK_NBLCK sequence _locked_append uses) while the file GROWS, then
+    asserts a fresh parent handle at the new EOF cannot acquire it."""
+    import msvcrt
+    import subprocess
+    import sys
+
+    s = Session.create(tmp_path, {"model": "test"})
+    child = (
+        "import sys, time, msvcrt\n"
+        "f = open(sys.argv[1], 'a', encoding='utf-8')\n"
+        "f.seek(0)\n"
+        "msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)\n"
+        "f.write('B' * 500)\n"
+        "f.flush()\n"
+        "print('HELD', flush=True)\n"
+        "time.sleep(3.0)\n"
+        "f.close()\n"
+    )
+    # noqa S603: the child is a fixed test snippet, sys.executable is the test runner
+    proc = subprocess.Popen([sys.executable, "-c", child, str(s.path)], stdout=subprocess.PIPE, text=True)  # noqa: S603
+    try:
+        line = proc.stdout.readline().strip()
+        assert line == "HELD", "child must hold the lock before the parent probe"
+        assert s.path.stat().st_size > 100, "child must have grown the file under the lock"
+        # Parent probes through the PRODUCTION lock path (_locked_append), not
+        # a hand-rolled seek(0) replica — the mutation round (2026-09-04)
+        # showed a replica test survives a revert because both sides hardcode
+        # the fix. With the fix, the probe cannot enter until the 2s timeout
+        # falls through; with the broken lock-at-EOF it enters instantly.
+        from coderio.session.store import _locked_append
+
+        entered: list[float] = []
+        start = time.monotonic()
+
+        def probe():
+            with _locked_append(s.path, timeout=0.8) as f:
+                entered.append(time.monotonic() - start)
+                f.write("parent-fallthrough\n")
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join(timeout=5)
+        assert entered, "probe must eventually enter (the lock is best-effort with a timeout)"
+        assert entered[0] >= 0.75, (
+            f"production lock entered after only {entered[0]:.2f}s while the child "
+            "still holds it — mutex broken at the production path (P0-5 regression)"
+        )
+        # Mechanism pin, unchanged: a manual seek(0)+lock on a fresh handle
+        # must be excluded while the child holds [0,1).
+        import msvcrt
+
+        f = open(s.path, "a", encoding="utf-8")
+        try:
+            f.seek(0)
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                pytest.fail("acquired the lock while the child still holds it — P0-5 mutex broken")
+            except OSError:
+                pass  # correctly excluded by the fixed [0,1) mutex
+        finally:
+            f.close()
+    finally:
+        proc.wait(timeout=10)

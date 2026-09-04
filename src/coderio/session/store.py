@@ -32,6 +32,18 @@ def _locked_append(path: str | Path, timeout: float = 2.0) -> Iterator[object]:
     isn't acquired within ``timeout`` seconds (or the platform lock module is
     unavailable), falls through to an unlocked write — locking is a safety net,
     not a hard gate, so the agent never blocks indefinitely on session I/O.
+
+    KNOWN BOUNDARY (runtime audit 2026-09-04, Windows): the fail-open
+    fall-through write can itself fail while another process holds byte [0,1)
+    AND the file is empty — an append to an empty file starts at offset 0,
+    inside the locked range, so flush/close raises PermissionError and that
+    one write is lost. Production callers are unaffected: ``Session.create``
+    writes the meta line first, so a session file is never 0 bytes by the time
+    a second process appends. The window only opens for a same-path empty-file
+    race (two instances creating the same brand-new session id in the same
+    millisecond — timestamp + 4 random chars makes this negligible). Fixing it
+    for real needs a lock byte outside any possible write — impossible on an
+    empty file — or retry-on-PermissionError at the caller.
     """
     p = Path(path)
     f = open(p, "a", encoding="utf-8")
@@ -42,9 +54,15 @@ def _locked_append(path: str | Path, timeout: float = 2.0) -> Iterator[object]:
             try:
                 import msvcrt
 
-                # Seek to a byte range at the end and lock it. We lock 1 byte
-                # at offset 0 as a mutex — the actual append position doesn't
-                # matter, the lock itself serializes concurrent appenders.
+                # Lock byte [0,1) as the cross-process mutex. msvcrt.locking
+                # locks at the CURRENT position, and an "a"-mode handle starts
+                # at the open-time EOF — a holder that appends grows the file,
+                # so a later opener locked a DIFFERENT byte and both "held"
+                # the lock (2026-09-04 audit P0-5, reproduced experimentally).
+                # seek(0) pins the lock to a fixed range: mutual exclusion
+                # survives EOF drift, and "a"-mode writes still land at the
+                # (never-locked) end of file.
+                f.seek(0)
                 while time.monotonic() < deadline:
                     try:
                         msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
@@ -74,7 +92,10 @@ def _locked_append(path: str | Path, timeout: float = 2.0) -> Iterator[object]:
                 if os.name == "nt":
                     import msvcrt
 
-                    # Seek back to 0 before unlocking the byte range we locked.
+                    # The lock lives at [0,1) — seek back there to unlock the
+                    # range actually locked (the old seek(0)-after-locking-at-
+                    # EOF combo unlocked a range that was never held and
+                    # swallowed the error; the real lock only cleared at close).
                     f.seek(0)
                     msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
