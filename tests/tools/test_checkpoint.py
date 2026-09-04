@@ -105,6 +105,79 @@ def test_byte_budget_evicts_oldest(tmp_path):
     assert cp.undo().path == big2
 
 
+def test_budget_eviction_never_drops_newest_snapshot(tmp_path):
+    """P1-12 (2026-09-04): budget eviction used to pop from the bottom with no
+    floor — when the newest snapshot itself overflowed the budget it was
+    evicted TOO, so /undo restored an OLDER state (or hit an empty stack)
+    while presenting as a normal undo of the latest write. The newest must
+    always survive."""
+    cp = FileCheckpoint(max_total_bytes=100)
+    s1 = tmp_path / "s1.bin"
+    s2 = tmp_path / "s2.bin"
+    s1.write_bytes(b"a" * 80)
+    s2.write_bytes(b"b" * 80)
+    cp.snapshot(s1)
+    cp.snapshot(s2)
+
+    # Total (160) exceeds the budget (100): s1 is evicted, the newest (s2)
+    # is retained — never the reverse.
+    assert len(cp) == 1
+    r = cp.undo()
+    assert r.path == s2 and r.restored and s2.read_bytes() == b"b" * 80
+    # The stack may be empty now, but the undo returned the LATEST write.
+
+
+def test_budget_eviction_floor_survives_synthetic_oversized_newest(tmp_path):
+    """Mutation round (2026-09-04): the 80B+80B data could NOT distinguish the
+    eviction floor — the old loop stopped at the same place. The floor only
+    bites when the newest snapshot ALONE exceeds the budget, which snapshot()'s
+    oversize-skip makes unreachable through the public path. Inject directly
+    to pin the floor: evicting the newest must be impossible."""
+    from coderio.tools.checkpoint import FileCheckpoint, _Snapshot
+
+    cp = FileCheckpoint(max_total_bytes=100)
+    old = tmp_path / "old.bin"
+    new = tmp_path / "new.bin"
+    old.write_bytes(b"a" * 10)
+    new.write_bytes(b"b" * 10)
+    cp.snapshot(old)
+    # Simulate the pre-oversize-skip stack state: newest snapshot alone is
+    # over budget.
+    cp._stack.append(_Snapshot(path=new.resolve(), existed=True, content=b"b" * 150))
+    cp._evict_overflow()
+
+    r = cp.undo()
+    assert r is not None and r.path == new.resolve(), (
+        "the NEWEST snapshot must survive budget eviction even when it alone exceeds the budget"
+    )
+    assert new.read_bytes() == b"b" * 150, "undo restores the newest snapshot's captured content"
+
+
+def test_snapshot_skips_oversized_file_with_warning(tmp_path, caplog):
+    """P1-12: a file larger than the whole checkpoint budget can never fit —
+    snapshot it and it would have evicted everything (and itself, pre-fix).
+    Skip it with a warning instead: the write proceeds, /undo won't cover it,
+    and the log says so."""
+    import logging
+
+    cp = FileCheckpoint(max_total_bytes=10)
+    keep = tmp_path / "keep.bin"
+    keep.write_bytes(b"k" * 5)
+    cp.snapshot(keep)
+
+    huge = tmp_path / "huge.bin"
+    huge.write_bytes(b"z" * 50)
+    with caplog.at_level(logging.WARNING):
+        cp.snapshot(huge)
+
+    assert len(cp) == 1, "oversized file must not enter the checkpoint stack"
+    assert keep.read_bytes() == b"k" * 5
+    assert any("skipping snapshot" in r.message for r in caplog.records)
+    # The earlier valid snapshot is untouched and still undoable.
+    r = cp.undo()
+    assert r.path == keep.resolve()
+
+
 def test_snapshot_of_missing_path_records_creation_marker(tmp_path):
     """A snapshot of a not-yet-existing path is MEANINGFUL, not noise: when the
     agent goes on to create that file, /undo must delete it."""
