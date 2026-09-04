@@ -43,6 +43,34 @@ def test_ssrf_public_host_allowed():
     assert _validate_url_host("http://example.com/path?q=1") is None
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://100.64.1.1/",  # CGNAT shared address space
+        "http://100.100.200.200/latest/meta-data/",  # Aliyun IMDS lives in CGNAT
+        "http://198.18.0.1/",  # benchmarking range
+        "http://192.0.2.1/",  # documentation range
+        "http://192.88.99.1/",  # C4: explicit CIDR — is_global lies on Python ≤ 3.11.8
+        "http://192.0.0.9/",  # C4: explicit CIDR (192.0.0.0/24)
+    ],
+)
+def test_ssrf_shared_address_ranges_blocked(url):
+    """2026-09-04 audit: 100.64/10 is neither private nor link-local by
+    ipaddress classification, so the Aliyun metadata service (the classic
+    SSRF payout on the most common Chinese cloud) leaked past every named
+    check. The is_global catch-all must block every non-global range."""
+    reason = _validate_url_host(url)
+    assert reason is not None, f"{url} must be blocked by SSRF protection"
+
+
+def test_ssrf_aliyun_metadata_error_is_actionable():
+    """Tool-level: the CGNAT metadata service is blocked with a model-facing
+    reason, not a network round-trip."""
+    out = WebFetchTool().run("http://100.100.200.200/latest/meta-data/", timeout=5)
+    assert "SSRF" in out or "blocked" in out
+    assert "100.100.200.200" in out
+
+
 def test_ssrf_error_message_is_actionable():
     """The model-facing error explains WHAT was blocked and WHY (so it can
     reformulate instead of retrying blindly)."""

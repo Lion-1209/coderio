@@ -64,6 +64,17 @@ def _extract_text(html: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
+# Shared/special-purpose ranges blocked EXPLICITLY (third-party adversarial
+# review C4, 2026-09-04): `is_global`'s classification for these changed in
+# CPython 3.11.9/3.12.3 (CVE-2024-4032) — on older 3.11 patch releases
+# 192.88.99.0/24 and 192.0.0.0/24 classified as global and slipped past the
+# catch-all. requires-python allows those patch versions, so the claim must
+# not depend on the stdlib's mood.
+_EXTRA_BLOCKED_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("100.64.0.0/10", "192.0.0.0/24", "192.88.99.0/24", "198.18.0.0/15")
+)
+
+
 def _is_blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
     """Return a human-readable reason if the address must not be fetched, else None."""
     if ip.is_loopback:
@@ -74,6 +85,16 @@ def _is_blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> st
         return f"link-local address {ip} is not allowed (cloud metadata lives here)"
     if ip.is_reserved or ip.is_unspecified or ip.is_multicast:
         return f"reserved address {ip} is not allowed"
+    for net in _EXTRA_BLOCKED_NETS:
+        if ip in net:
+            return f"address {ip} is not allowed (shared/special-purpose range {net})"
+    # Catch-all for any remaining special-purpose range the checks above
+    # don't classify (2026-09-04 audit): the documentation ranges and
+    # whatever the stdlib classifies as non-global on this Python version.
+    # Everything a legitimate fetch can reach is global; if it isn't global,
+    # don't fetch it.
+    if not ip.is_global:
+        return f"non-global address {ip} is not allowed (shared/special-purpose range)"
     return None
 
 

@@ -620,3 +620,169 @@ def test_safe_timeout_family_pass(command):
     """The timeout/nice/setsid family must not block legitimate use."""
     p = CommandPolicy.default()
     assert p.check_command(command) is None, f"should pass: {command!r}"
+
+
+# --------------------------------- brace expansion / drive letters / same-family (P0-1, 2026-09-04)
+# 2026-09-04 third-party audit: all commands below passed the then-current
+# blacklist WITHOUT any obfuscation — ${HOME} brace expansion, non-C: drive
+# letters, UNC targets, PowerShell power verbs, and the cp/shred/wipefs
+# device-destruction family. Every form here is a plain, likely-typed footgun.
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf ${HOME}",  # brace form of the $HOME footgun
+        "rm -fr ${HOME}/projects",
+        "rm -rf '${HOME}'",  # quoted brace form
+        "find ${HOME} -delete",  # ${HOME} in the find dangerous-start set
+        "rm -rf D:\\*",  # non-C: drive glob
+        "rm -rf \\\\server\\share",  # UNC target
+    ],
+)
+def test_blocks_brace_and_drive_targets(command):
+    """${VAR} brace expansion and Windows drive/UNC targets must be treated
+    exactly like their bare-dollar / POSIX-absolute counterparts."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"Remove-Item -Recurse D:\ -Force",  # audit: only C: was dangerous
+        r"Remove-Item -Recurse -Force E:/",
+        r"Remove-Item -Recurse \\server\share",  # UNC: Remove-Item branch leaked it
+        r"rd /s /q D:\data",  # audit: rd/del branch only knew C: and ~
+        "del /f /s /q D:\\",
+        "Remove-Item -Recurse $HOME",  # PowerShell dollar-home spelling
+        r'powershell -Command "Remove-Item -Recurse D:\data"',
+    ],
+)
+def test_blocks_windows_delete_other_drives(command):
+    """The Remove-Item and rd/del/erase branches must share one dangerous-target
+    set covering every drive letter, UNC paths, and $HOME spellings."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "chmod --recursive 777 /",  # long flag leaked the regex pair
+        "chmod -R 777 ~",  # ~ target leaked
+        "chmod -R 0777 $HOME",
+        "chmod 0777 --recursive ${HOME}",
+        "chmod -R 777 *",  # whole-CWD glob
+        "chmod -Rf 777 /",  # glued short-flag group containing R
+        "chmod 777 -R /var",  # mode-before-flag, absolute target
+    ],
+)
+def test_blocks_recursive_chmod_variants(command):
+    """`chmod -R 777` on a system/home/glob target must be blocked regardless
+    of flag form (-R vs --recursive vs glued), flag position, or target."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Stop-Computer -Force",
+        "Restart-Computer",
+    ],
+)
+def test_blocks_powershell_power_control(command):
+    """PowerShell's power-control verbs are the same act as shutdown/reboot."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bomb(){ bomb|bomb & }; bomb",  # named-function fork bomb
+        "foo () { foo | foo & } ; foo",  # spaced variant
+    ],
+)
+def test_blocks_named_fork_bomb(command):
+    """The old fork-bomb pattern only matched the `:` name — a named function
+    piping into itself is the same bomb."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp /dev/zero /dev/sda",
+        "shred /dev/sda",
+        "wipefs -a /dev/sdb",
+        "echo x > /dev/vda",  # virtio disk: the old redirect set missed vd
+        "echo x >> /dev/nvme0",
+        "dd if=/dev/zero of=/dev/vdb",
+        "diskutil eraseDisk APFS MyDisk /dev/disk2",
+        "diskutil zeroDisk /dev/disk1",
+    ],
+)
+def test_blocks_device_destruction_family(command):
+    """cp/shred/wipefs onto a raw device is as destructive as dd/redirect —
+    same family, same treatment."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf ./build",  # relative targets stay legal on every branch
+        "rm -rf build",
+        "rm -rf vendor/pkg",
+        r"git rm -r D:\myproject\src",  # adversarial C1: git's own subcommand must not trip the PowerShell branch
+        "git rm -r ./old",
+        r"Remove-Item -Recurse .\dist",
+        r"rd /s /q .\build",
+        "chmod -R 755 ./deploy",  # non-world-writable mode stays legal
+        "chmod -R 755 /srv/www",  # absolute but not world-writable
+        "chmod 777 ./local-file.txt",  # non-recursive 777 stays legal
+        "cp src/disk.img /tmp/disk.img",  # cp NOT onto a raw device
+        "echo x > /dev/null",
+        "shred ./secret.txt",  # shred of a workspace file is not a device wipe
+        "df -h /dev/sda1",  # reading device info stays legal
+        "./scripts/restart-api.sh",  # not the PowerShell power verbs
+        "myfunc(){ echo hi; }; myfunc",  # a normal function is not a fork bomb
+    ],
+)
+def test_p0_hardening_no_false_positives(command):
+    """The 2026-09-04 tightening must not block legitimate workspace work."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is None, f"false positive on {command!r}"
+
+
+# ------------------------------- adversarial-review round-1 fixes (2026-09-04)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "chmod -R a+rwx /",  # C2: symbolic world-writable, documented spelling
+        "chmod --recursive ugo+rwx /",
+        "chmod -R 7777 /",  # setuid + world-writable
+        "chmod -R 1777 /tmp",
+        "chmod 07777 -R ~",
+        r"Remove-Item -Recurse -Force $env:USERPROFILE",  # Windows-native home spellings
+        "rm -rf $USERPROFILE",
+        "rm -rf ${USERPROFILE}",  # brace form of USERPROFILE
+        "bomb(){ bomb|bomb & }\nbomb",  # newline-separated call, no semicolon
+        "diskutil partitionDisk GPT MyDisk /dev/disk1",
+        "diskutil apfs deleteContainer disk1",
+        r"ls D:\ | ri -r",  # pipeline form: recursive delete of piped paths
+    ],
+)
+def test_blocks_adversarial_round1_findings(command):
+    """Third-party adversarial review (2026-09-04) round-1 findings: the
+    documented-symbolic chmod modes, Windows-native $USERPROFILE home
+    spellings, newline-called fork bombs, diskutil partitioning, and the
+    Remove-Item pipeline form all leaked and must now be blocked."""
+    p = CommandPolicy.default()
+    assert p.check_command(command) is not None, f"should block: {command!r}"

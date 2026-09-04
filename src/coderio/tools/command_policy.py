@@ -144,6 +144,20 @@ def _dequote(tok: str) -> str:
     return tok.replace('\\"', '"').replace("'", "'").strip("\"'")
 
 
+def _expand_var_braces(tok: str) -> str:
+    """Normalize ``${VAR}`` to ``$VAR`` — `rm -rf ${HOME}` is the same footgun
+    as `rm -rf $HOME`, but the old target checks only knew the bare-dollar
+    form (2026-09-04 audit)."""
+    return re.sub(r"\$\{(\w+)\}", r"$\1", tok)
+
+
+# Windows drive-letter absolute path: `C:`, `C:\`, `D:/data` — ANY drive, not
+# just C: (2026-09-04 audit: the Windows-delete checks hard-coded C: and the
+# rm check never looked at drive letters, so `rm -rf D:\*` / `rd /s /q D:\data`
+# leaked).
+_WIN_ABS_TARGET_RE = re.compile(r"^[a-zA-Z]:")
+
+
 def _check_recursive_rm(command: str) -> str | None:
     """Python-level check for dangerous rm commands with recursive flags.
 
@@ -211,29 +225,35 @@ def _check_recursive_rm(command: str) -> str | None:
     if not has_recursive:
         return None
 
-    # Check for dangerous targets among rm's arguments.
+    # Check for dangerous targets among rm's arguments. ${HOME} normalizes to
+    # $HOME (2026-09-04 audit); Windows drive-letter absolute paths and UNC
+    # paths join POSIX absolute paths as dangerous targets — Git Bash's rm
+    # happily deletes `D:\stuff`, same footgun class as `rm -rf /stuff`.
+    # $USERPROFILE / $env:USERPROFILE are the Windows-native home spellings
+    # (third-party adversarial review, 2026-09-04: only $HOME was covered).
     has_dangerous = False
     for t in rm_tokens:
-        stripped = _dequote(t)
-        if stripped == "/" or stripped.startswith("/"):
-            has_dangerous = True
-            break
-        if stripped == "~" or stripped.startswith("~"):
-            has_dangerous = True
-            break
-        if stripped == "$HOME" or stripped.startswith("$HOME"):
-            has_dangerous = True
-            break
-        if stripped == "*" or stripped.startswith("*"):
+        stripped = _expand_var_braces(_dequote(t))
+        low = stripped.lower()
+        if (
+            stripped.startswith("/")
+            or stripped.startswith("~")
+            or stripped.startswith("$HOME")
+            or low.startswith(("$userprofile", "$env:userprofile", "%userprofile%"))
+            or stripped.startswith("*")
+            or stripped.startswith("\\\\")
+            or _WIN_ABS_TARGET_RE.match(stripped)
+        ):
             has_dangerous = True
             break
 
     if not has_dangerous:
         return None
 
-    if any(_dequote(t) in ("/", "$HOME", "~") or _dequote(t).startswith(("/", "$HOME")) for t in rm_tokens):
+    norm = [_expand_var_braces(_dequote(t)) for t in rm_tokens]
+    if any(t in ("/", "$HOME", "~") or t.startswith(("/", "$HOME")) for t in norm):
         return "recursive delete of system/home directory"
-    if "*" in [_dequote(t) for t in rm_tokens]:
+    if "*" in norm:
         return "recursive delete of all files (glob)"
     return "recursive delete of dangerous target"
 
@@ -262,7 +282,7 @@ def _check_recursive_rm(command: str) -> str | None:
 # `find ~ -delete` leaked (2026-09-02 audit: footgun spellings, not
 # obfuscation). Relative starts (`find . -delete`, `find foo -delete`)
 # stay allowed, mirroring the rm check's relative-target rule.
-_FIND_DANGEROUS_START = r"(?:/(?:\S*)?|~\S*|\$HOME\S*|\*)"
+_FIND_DANGEROUS_START = r"(?:/(?:\S*)?|~\S*|\$HOME\S*|\$\{\w+\}\S*|\*)"
 
 _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     # Recursive rm detection is handled by _check_recursive_rm() (Python-level).
@@ -286,19 +306,37 @@ _DEFAULT_BLOCKED: list[tuple[str, str]] = [
     ),
     # Filesystem format — destroys all data on a device.
     (r"\bmkfs(?:\.\w+)?\s", "filesystem format (destroys all data on target)"),
-    # Writing to raw block devices.
+    # Writing to raw block devices: `>` and `>>`, Linux sd/nvme/hd/vd plus
+    # macOS diskN. Same-family device destruction (2026-09-04 audit): cp/shred/
+    # wipefs onto /dev/ were as destructive as the dd/redirect forms but leaked.
     (r"\bdd\b.*\bof\s*=\s*/dev/", "dd writing to a raw device"),
-    (r">\s*/dev/(?:sd|nvme|hd)", "redirect to a raw block device"),
+    (r">>?\s*/dev/(?:sd|nvme|hd|vd|disk)", "redirect to a raw block device"),
+    (r"\bcp\b[^|;&]*\s/dev/(?:sd|nvme|hd|vd|disk)", "copy onto a raw block device"),
+    (r"\bshred\b[^|;&]*\s/dev/", "shred a raw device"),
+    (r"\bwipefs\b[^|;&]*\s/dev/", "wipe filesystem signatures off a device"),
+    (r"\bdiskutil\s+(?:eraseDisk|eraseVolume|zeroDisk|secureErase|partitionDisk)\b", "macOS disk erase"),
+    (r"\bdiskutil\s+apfs\s+delete(?:Volume|Container)\b", "macOS APFS container deletion"),
     # Fork bomb — the bash classic `:(){:|:&};:` and spaced variants.
     # Allow optional space between `:` and `()` (some shells/users space it).
+    # The named-function form (`bomb(){ bomb|bomb & }; bomb`) is the same bomb
+    # with a name — the old pattern only matched the `:` name (2026-09-04).
+    # The call may be separated by a NEWLINE instead of `;` — legal script
+    # layout, same bomb (third-party adversarial review, 2026-09-04).
     (r":\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;", "fork bomb"),
+    (r":\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*\n\s*:", "fork bomb"),
+    (r"\b(\w+)\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*[;\n]\s*\1\b", "fork bomb (self-piping function)"),
     # Global permission corruption. Accept 777 with or without leading 0
     # (chmod accepts both `777` and `0777`; the old pattern missed 0777).
     # Also catches mode-before-flag order: chmod 777 -R / (same destruction).
+    # Flag-order/flag-form/target permutations are handled by the Python-level
+    # _check_recursive_chmod() — these regexes remain as a fast first net.
     (r"\bchmod\s+-R\s+0?777\s+/(?:\S|$)", "recursive world-writable on system directory"),
     (r"\bchmod\s+0?777\s+-R\s+/(?:\S|$)", "recursive world-writable on system directory (mode-before-flag)"),
-    # System power control — no coding task needs these.
+    # System power control — no coding task needs these. Stop-Computer /
+    # Restart-Computer are the PowerShell spellings of the same act
+    # (2026-09-04 audit: the list only had the POSIX verbs).
     (r"\b(?:shutdown|reboot|halt|poweroff)\b", "system power control"),
+    (r"\b(?:Stop|Restart)-Computer\b", "system power control (PowerShell)"),
     # Kernel module manipulation — loading/unloading kernel code.
     (r"\brmmod\b", "kernel module unload"),
     (r"\binsmod\b", "kernel module load"),
@@ -527,6 +565,29 @@ def _iter_shell_segments(command: str) -> list[str]:
     return segments
 
 
+def _is_win_dangerous_target(arg: str) -> bool:
+    """Dangerous recursive-delete target on Windows — shared by the
+    Remove-Item and rd/del/erase branches so the two can no longer drift
+    (2026-09-04 audit: each branch leaked a different half of the same set).
+
+    Dangerous:
+    - ANY drive-letter absolute path: `C:\\`, `C:\\data`, `D:\\`, `E:/x` — the
+      old checks hard-coded C:, so `Remove-Item -Recurse D:\\` leaked. POSIX rm
+      blocks every absolute target, so the Windows branches mirror that rule.
+    - UNC paths (`\\\\server\\share`)
+    - home in every spelling: `~`, `~x`, `$HOME`, `${HOME}`, `$USERPROFILE`,
+      `$env:USERPROFILE`, `%USERPROFILE%` (third-party adversarial review
+      2026-09-04: the Windows-native home spellings leaked)
+    - bare globs `*`, `*.*` (whole-CWD-tree deletes)
+    """
+    low = arg.lower()
+    if low.startswith(("~", "$home", "${home}", "$userprofile", "$env:userprofile", "%userprofile%", "\\\\")):
+        return True
+    if _WIN_ABS_TARGET_RE.match(arg):
+        return True
+    return arg in ("/", "\\", "*", "*.*")
+
+
 def _check_recursive_windows_delete(command: str) -> str | None:
     """Windows counterparts of _check_recursive_rm (2026-08-28 audit: the
     blacklist had no PowerShell/cmd destructive patterns).
@@ -535,7 +596,7 @@ def _check_recursive_windows_delete(command: str) -> str | None:
     - ``Remove-Item -Recurse ...`` aimed at dangerous targets (case-insensitive)
     - ``rd /s ...`` / ``rmdir /s ...`` (cmd's recursive delete)
 
-    The dangerous-target set mirrors the rm check: drive roots, ~, globs.
+    The dangerous-target set mirrors the rm check (see _is_win_dangerous_target).
     """
     tokens = command.split()
     # Strip quotes per token: inside a -Command wrapper the whole payload is
@@ -546,18 +607,24 @@ def _check_recursive_windows_delete(command: str) -> str | None:
     # Remove-Item -Recurse (flag may appear in any position, case-insensitive;
     # -Force is not required for the destructive part). Aliases rm/del/erase
     # and the flag prefix -r/-rec also bind to -Recurse in PowerShell.
+    # THIRD-PARTY REVIEW FIX (2026-09-04 adversarial C1): the alias check ran
+    # at ANY token position, so `git rm -r D:\proj\src` — git's own subcommand
+    # — matched "rm" and the drive-letter rule (now any drive) hard-blocked a
+    # legitimate command. The segment HEAD must be the delete command; the
+    # wrapped-payload case (`powershell -Command "Remove-Item ..."`) reaches
+    # us already unwrapped by _iter_shell_segments, so token 0 IS the cmdlet.
     delete_aliases = {"remove-item", "ri", "rm", "del", "erase"}
-    if any(t in delete_aliases for t in low_tokens):
+    if low_tokens and low_tokens[0] in delete_aliases:
         has_recurse = any(t.startswith("-") and t.lstrip("-").startswith("r") for t in low_tokens)
         if has_recurse:
-            args = [t for t, lt in zip(tokens, low_tokens) if not lt.startswith("-")]
-            dangerous = any(
-                a.lower().rstrip("\\/") in ("c:", "c:\\", "\\\\", "~", "*")
-                or a.lower().startswith(("c:\\", "c:/", "~", "*"))
-                or a == "*"
-                for a in args
-            )
-            if dangerous:
+            # skip index 0 (the command name) — it is not a target argument;
+            # counting it made the pipeline form (`ls D:\ | ri -r`) see
+            # args=["ri"] and miss the no-args guard.
+            args = [t for k, (t, lt) in enumerate(zip(tokens, low_tokens)) if k > 0 and not lt.startswith("-")]
+            # `or not args`: pipeline form (`ls D:\ | ri -r`) carries the
+            # targets on stdin — nothing to scan, but it is still a recursive
+            # delete of whatever flows in (same guard as the del/rd branch).
+            if not args or any(_is_win_dangerous_target(a) for a in args):
                 return "PowerShell recursive delete of system/home directory (Remove-Item -Recurse)"
 
     # cmd builtins: rd /s, rmdir /s — recursive directory removal.
@@ -577,16 +644,58 @@ def _check_recursive_windows_delete(command: str) -> str | None:
                 for k, (tok, lt) in enumerate(zip(tokens, low_tokens))
                 if k > 0 and not lt.startswith("/") and not lt.startswith("-")
             ]
-            dangerous = any(
-                a.lower().rstrip("\\") in ("c:", "~")
-                or a.lower().startswith(("c:\\", "\\\\"))
-                or a in ("/", "\\")
-                or a in ("*", "*.*")  # audit: `del /s *` nukes the whole CWD tree
-                for a in args
-            )
+            dangerous = any(_is_win_dangerous_target(a) for a in args)
             if dangerous or not args:
                 return "cmd recursive directory delete (del|rd /s)"
 
+    return None
+
+
+def _chmod_mode_is_world_writable(mode: str) -> bool:
+    """World-writable mode test (third-party adversarial review C2, 2026-09-04:
+    the old single `0?777` fullmatch leaked the DOCUMENTED spellings `a+rwx`,
+    `ugo+rwx`, and the setuid/sticky supersets `7777`/`1777`)."""
+    if re.fullmatch(r"0?[17]?777", mode):  # 777, 0777, 7777, 07777, 1777, ...
+        return True
+    # Symbolic: `a+rwx`, `ugo+rwx`, bare `+rwx` (no who = all), and `=rwx` forms.
+    return bool(re.fullmatch(r"(?:a|ugo)?[+=]rwx", mode.lower()))
+
+
+def _check_recursive_chmod(command: str) -> str | None:
+    """`chmod -R <world-writable>` on a dangerous target (2026-09-04 audit: the
+    regex pair only matched the `-R` short flag with a `/` target, so
+    `chmod --recursive 777 /` and `chmod -R 777 ~` leaked). Python-level like
+    the rm check so flag form and position don't matter.
+
+    Dangerous targets mirror the rm check: absolute paths (POSIX and Windows
+    drives), UNC, home (~/~x/$HOME/${HOME}), and the bare glob.
+    """
+    tokens = command.strip().split()
+    idx = _skip_exec_prefixes(tokens)
+    if idx >= len(tokens) or _norm_exe(tokens[idx]) != "chmod":
+        return None
+    rest = tokens[idx + 1 :]
+    has_recursive = any(
+        t == "-R" or t.lower() == "--recursive" or (t.startswith("-") and not t.startswith("--") and "R" in t[1:])
+        for t in rest
+    )
+    if not has_recursive:
+        return None
+    if not any(_chmod_mode_is_world_writable(t) for t in rest):
+        return None
+    for t in rest:
+        s = _expand_var_braces(_dequote(t))
+        low = s.lower()
+        if (
+            s.startswith("/")
+            or s.startswith("~")
+            or s.startswith("$HOME")
+            or low.startswith(("$userprofile", "$env:userprofile", "%userprofile%"))
+            or s.startswith("\\\\")
+            or _WIN_ABS_TARGET_RE.match(s)
+            or s == "*"
+        ):
+            return "recursive world-writable (chmod -R) on a system/home/glob target"
     return None
 
 
@@ -713,6 +822,9 @@ class CommandPolicy:
             win_reason = _check_recursive_windows_delete(segment)
             if win_reason is not None:
                 return win_reason
+            chmod_reason = _check_recursive_chmod(segment)
+            if chmod_reason is not None:
+                return chmod_reason
         return None
 
     def check_whitelist(self, command: str) -> str | None:
