@@ -4,6 +4,8 @@ These test Harness in isolation — no loop, no model. The loop-integration test
 (those that check the harness actually intercepts run_agent) live in test_loop.py.
 """
 
+import pytest
+
 from coderio.agent.harness import Harness, HarnessState
 from coderio.tools.todo import Todo, TodoStore
 
@@ -294,6 +296,119 @@ def test_verify_gate_segmented_real_verifier_still_counts():
     h.observe("bash", {"command": "cd src && pytest -q"}, "[Command succeeded with exit code 0]")
     cont, _, _ = h.check_termination("done")
     assert cont is False, "cd X && pytest (passed) IS a verification run"
+
+
+# --- VerifyGate file-reference bypass closure (2026-09-04 audit P0-3) ---
+# The file-reference branch of _command_verifies_written accepted ANY exit-0
+# command that merely NAMED a written file — `echo foo.py`, `cat src/foo.py`,
+# `git diff foo.py` all cleared the unverified-writes list.
+
+
+def test_verify_gate_echo_filename_not_verification():
+    """BYPASS #4: `echo foo.py` exits 0 and mentions the written file —
+    naming a file is not running it."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/foo.py"}, "Wrote 10 chars to src/foo.py")
+    h.observe("bash", {"command": "echo foo.py"}, "foo.py\n[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "echo <written file> must NOT count as verification"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat src/foo.py",
+        "git diff src/foo.py",
+        "ls src/foo.py",
+        "head -5 src/foo.py",
+        "cat src/foo.py | grep def",  # mention in a piped read — still not a run
+        'git commit -m "fix src/foo.py"',  # mention inside a string argument
+    ],
+)
+def test_verify_gate_non_execution_file_commands_not_verification(command):
+    """Read/inspection/commit commands that mention the file exit 0 but run
+    nothing — they must not clear the unverified-writes list."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/foo.py"}, "Wrote 10 chars")
+    h.observe("bash", {"command": command}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, f"{command!r} must NOT count as verification"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python src/foo.py",
+        "python3 src/foo.py",
+        "uv run src/foo.py",
+        "bash src/foo.py",
+        "timeout 10 python src/foo.py",
+        "FOO=1 python src/foo.py",
+        "sudo -u root python src/foo.py",
+        "./src/foo.py",  # direct execution (chmod +x / shebang)
+        "echo done && python src/foo.py",  # mention in a LATER segment
+    ],
+)
+def test_verify_gate_executor_file_commands_still_verify(command):
+    """The tightened branch must still accept real execution forms:
+    interpreter/runner + written file, direct execution, env/prefix
+    wrappers, and a mention in a later pipeline segment."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/foo.py"}, "Wrote 10 chars")
+    h.observe("bash", {"command": command}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, f"{command!r} IS a verification run"
+
+
+def test_verify_gate_node_runs_written_js():
+    """A different interpreter + different filename: node app.js verifies an
+    app.js write."""
+    h = _harness()
+    h.observe("write_file", {"path": "app.js"}, "Wrote 10 chars")
+    h.observe("bash", {"command": "node app.js"}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, "node app.js IS a verification run"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'echo src/foo.py'",  # C3: wrapper shell head + mention inside the string
+        "sh -c 'cat src/foo.py; true'",
+        "python -c \"print('src/foo.py')\"",  # C3: inline code, file never touched
+        "python -u -c \"print('src/foo.py')\"",  # release-gate: inline flag AFTER valueless flags
+        "node --input-type=module -e \"console.log('src/foo.py')\"",  # flag run then -e
+        "perl -w -e 'print \"src/foo.py\"'",  # perl spelling
+    ],
+)
+def test_verify_gate_inline_and_wrapper_mentions_not_verification(command):
+    """Adversarial review C3 + seam report (2026-09-04): a wrapper-shell head
+    or an inline-code flag (-c/-e) with the filename as a mere STRING still
+    runs nothing — the verdict must come from the unwrapped inner command /
+    the inline-flag rule."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/foo.py"}, "Wrote 10 chars")
+    h.observe("bash", {"command": command}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, f"{command!r} must NOT count as verification"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python.exe src/foo.py",  # seam: .exe spelling must normalize to python
+        "bash src/foo.py",  # wrapper WITHOUT a -c payload runs its own args
+        "sh -c 'python src/foo.py'",  # unwrapped inner IS an executor + mention
+    ],
+)
+def test_verify_gate_wrapper_and_exe_forms_still_verify(command):
+    """The wrapper-unwrap and inline-flag hardening must not break the real
+    execution forms, including the Windows .exe spelling."""
+    h = _harness()
+    h.observe("write_file", {"path": "src/foo.py"}, "Wrote 10 chars")
+    h.observe("bash", {"command": command}, "[Command succeeded with exit code 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, f"{command!r} IS a verification run"
 
 
 def test_verify_gate_passes_when_nothing_written():

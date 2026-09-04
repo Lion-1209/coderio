@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from coderio.tools.command_policy import _norm_exe, _skip_exec_prefixes, _unwrap_wrapper
+
 # Tool names/categories: single source of truth in tools/taxonomy.py
 # (2026-08-28 audit A2 — six ad-hoc copies had drifted apart).
 from coderio.tools.taxonomy import CONTENT_READ_TOOLS, READ_TOOLS, WRITE_TOOLS
@@ -291,6 +293,143 @@ def _segment_runs_verifier(segment: str) -> bool:
     }
 
 
+# Commands whose segment can actually EXECUTE code when the segment also
+# mentions a written file. The file-reference branch of
+# _command_verifies_written used to accept ANY exit-0 command that merely
+# NAMED the file — `echo foo.py`, `cat src/foo.py`, `git diff foo.py` all
+# cleared the unverified-writes list (2026-09-04 audit P0-3), the same
+# "echo pytest" class the v2 audit closed for tool names but missed for
+# filenames.
+_EXECUTOR_HEADS: frozenset[str] = frozenset(
+    {
+        "python",
+        "python3",
+        "py",
+        "node",
+        "nodejs",
+        "deno",
+        "bun",
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "ksh",
+        "pwsh",
+        "powershell",
+        "cmd",
+        "ruby",
+        "perl",
+        "php",
+        "lua",
+        "java",
+        "javac",
+        "go",
+        "cargo",
+        "rustc",
+        "gcc",
+        "g++",
+        "clang",
+        "clang++",
+        "dotnet",
+        "npx",
+        "npm",
+        "pnpm",
+        "yarn",
+        "bunx",
+        "uv",
+        "uvx",
+        "make",
+        "cmake",
+        "ninja",
+        "just",
+        "ruff",
+        "mypy",
+        "flake8",
+        "pylint",
+        "eslint",
+        "tsc",
+        "tox",
+        "nox",
+    }
+)
+
+
+def _segment_head_tokens(segment: str) -> list[str]:
+    """The segment's tokens after stepping over leading VAR=VALUE assignments
+    and exec-wrapping prefixes with their flag values (`sudo -u root python
+    app.py` yields ['python', 'app.py']).
+
+    Reuses command_policy's battle-tested prefix stepper instead of growing a
+    parallel implementation. KNOWN LIMIT (fails safe): a head that isn't an
+    executor only makes the gate MORE strict — the model gets intercepted
+    once and re-runs, never waved through.
+    """
+    tokens = segment.strip().split()
+    i = 0
+    while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith(("-", "/", ".")):
+        i += 1  # leading VAR=VALUE assignment (`FOO=1 python app.py`)
+    rest = tokens[i:]
+    return rest[_skip_exec_prefixes(rest) :]
+
+
+# Shell wrappers whose -c/-e payload is an INLINE STRING: `python -c
+# "print('foo.py')"` exits 0 having never touched the written file, so a
+# mention inside the string proves nothing (third-party adversarial review C3,
+# 2026-09-04). Covers node -e / perl -e and their =value spellings.
+_INLINE_CODE_FLAGS = {"c", "e", "command", "eval"}
+
+# Wrapper shells: when the segment head is one of these, the verdict must come
+# from the UNWRAPPED inner command (`bash -c 'echo foo.py'` is an echo), not
+# from the shell head (seam report 2026-09-04: fail-open through the shell
+# head). Same set as command_policy._WRAPPER_SHELLS.
+_WRAPPER_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "powershell", "pwsh", "cmd", "su"}
+
+
+def _segment_runs_written_file(segment: str, written_files: list[str]) -> bool:
+    """File-reference branch of _command_verifies_written: the segment must
+    MENTION a written file AND its command head must actually run that file.
+
+    Hardening (2026-09-04 adversarial review C3 + seam report):
+    - wrapper shells are UNWRAPPED first — `bash -c 'echo foo.py'` is judged
+      by its inner `echo`, not by the bash head;
+    - inline-code flags (-c/-e/...) after the head disqualify the segment;
+    - head normalization goes through command_policy._norm_exe, so
+      `python.exe src/foo.py` (Windows spelling) counts and `bash deploy.sh`
+      (wrapper without a -c payload, running its own args) still counts.
+    """
+    head = _segment_head_tokens(segment)
+    if not head:
+        return False
+    head_tok = _norm_exe(head[0])
+    if head_tok in _WRAPPER_SHELLS:
+        inner = _unwrap_wrapper(segment)
+        if inner and inner != segment:
+            return _segment_runs_written_file(inner, written_files)
+        # No -c payload (`bash deploy.sh`): the shell runs the segment's own
+        # args directly — fall through to the mention check.
+    # Inline-code flags may sit AFTER other flags (`python -u -c "..."`),
+    # so scan the leading flag run, not just head[1] (release-gate review
+    # 2026-09-04: `python -u -c` slipped through a head[1]-only check). Stop
+    # at the first non-flag token — that's the operand position; anything
+    # beyond it is data (`python -m pytest -c pytest.ini` must still verify).
+    for tok in head[1:]:
+        if not tok.startswith("-"):
+            break
+        base = tok.lower().lstrip("-").split("=", 1)[0]
+        if base in {"c", "e", "command", "eval"}:
+            return False
+    seg_lower = segment.lower()
+    for f in written_files:
+        basename = _norm_exe(f.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+        if not basename:
+            continue
+        if basename not in seg_lower and f.lower() not in seg_lower:
+            continue
+        if head_tok in _EXECUTOR_HEADS or head_tok == basename:
+            return True
+    return False
+
+
 def _command_verifies_written(command: str, written_files: list[str]) -> bool:
     """Does this bash command plausibly run or test the written code?
 
@@ -300,25 +439,26 @@ def _command_verifies_written(command: str, written_files: list[str]) -> bool:
         ``; | &`` — a tool name that appears only as an ARGUMENT (`echo
         pytest`, commit messages) does NOT count (2026-08-14 v2 audit:
         three bypass paths through substring matching, all closed here).
-      - The command references a written file by basename or path — e.g.
-        ``python src/foo.py`` or ``node app.js``.
+      - A segment references a written file AND its command can actually run
+        it (an interpreter/runner head, or the file itself as the command —
+        ``./foo.py`` after chmod +x). A mere mention doesn't count: `echo
+        foo.py`, `cat src/foo.py`, and `git diff foo.py` all exit 0 without
+        executing anything (2026-09-04 audit P0-3).
 
-    Returns False for commands that don't touch the written files at all,
-    like ``echo done``, ``ls``, ``pwd``, ``git status`` — these would let the
+    Returns False for commands that don't run the written files, like
+    ``echo done``, ``ls``, ``pwd``, ``git status`` — these would let the
     agent bypass VerifyGate without actually running its code.
     """
     if not command:
         return False
-    # Known verification tools count even without explicit file references —
-    # but only as the COMMAND of a segment, never as a string argument.
     for segment in _SEGMENT_SPLIT_RE.split(command):
+        # Known verification tools count even without explicit file
+        # references — but only as the COMMAND of a segment, never as a
+        # string argument.
         if _segment_runs_verifier(segment):
             return True
-    # Check if any written file's basename or path appears in the command.
-    cmd_lower = command.lower()
-    for f in written_files:
-        basename = f.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        if basename and (basename.lower() in cmd_lower or f.lower() in cmd_lower):
+        # File-reference branch (see _segment_runs_written_file).
+        if _segment_runs_written_file(segment, written_files):
             return True
     return False
 
