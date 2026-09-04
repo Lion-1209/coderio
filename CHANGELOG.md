@@ -6,7 +6,7 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
-## [Unreleased]
+## [0.5.0] — 2026-09-04
 
 ### Security — 2026-09-04 third-party audit batch (P0; each fix re-verified by an independent adversarial round, mutation-tested, and runtime-audited)
 
@@ -812,7 +812,8 @@ weaker than the documentation's promise. All fixed and double-checked:
 - Rich stream UI + Textual TUI with foldable thinking.
 - jsonl session persistence with compression truncation.
 
-[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Lion-1209/coderio/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.4
 [0.4.3]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.3
 [0.4.2]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.2
