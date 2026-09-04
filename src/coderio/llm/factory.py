@@ -42,7 +42,14 @@ def _build_client(kind: str, *, model: str, base_url: str, api_key, max_tokens: 
 
 def _pick_api_key(provider: str) -> str | None:
     if provider == "anthropic":
-        return os.environ.get("ANTHROPIC_API_KEY")
+        # Z_API_KEY fallback (2026-09-04 audit P0-7): the onboarding gate
+        # (_needs_onboarding) and the headless error message both tell users
+        # "set Z_API_KEY" — and a user who does that lands on an
+        # anthropic-kind provider (bigmodel/stepfun coding plan), for which
+        # Z_API_KEY IS the key. The old code read only ANTHROPIC_API_KEY, so
+        # the documented path produced a guaranteed auth failure. The
+        # Anthropic vendor's own variable keeps precedence.
+        return os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("Z_API_KEY")
     return os.environ.get("Z_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
 

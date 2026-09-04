@@ -266,16 +266,10 @@ apply (they are what make you a usable agent, not just a code-spitter):
     calls, but it WILL penalize you for claiming "done" based on a failed verification.
 """
 
-# The core workflow chain — these are injected as runtime rules by default, NOT
-# left to the LLM to optionally activate. Cross-cutting skills remain opt-in.
-CORE_CHAIN_SKILLS = (
-    "clarifying-questions",
-    "spec-writing",
-    "task-breakdown",
-    "executing-plans",
-    "verify-and-fix",
-    "commit-message",
-)
+# NOTE: the old CORE_CHAIN_SKILLS constant (the "always-inject these bodies"
+# list) was deleted — it had zero consumers since the switch to progressive
+# disclosure (descriptions in the prompt, bodies loaded on demand via
+# activate_skill, which now returns the body in the tool result itself).
 
 
 def build_system_prompt(store: SkillStore, active: ActiveSkills) -> str:

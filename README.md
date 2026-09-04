@@ -96,7 +96,7 @@ coderio run "统计 src/ 下的 Python 行数并总结" --quiet
 - **MCP 支持**：`.mcp.json`（Claude Code 兼容格式）接入外部工具，`coderio mcp` 命令行管理
 - **生命周期 hooks**：`[[hooks]]` 在 PreToolUse / PostToolUse / UserPromptSubmit 等事件执行你的命令（exit 2 = 阻断），IO 契约与 Claude Code 兼容
 - **skills 三层加载**：bundled + 用户 + 项目层，渐进披露省上下文
-- **上下文治理**：自动压缩（60% 窗口触发）、大块 offload、sqlite 检查点跨轮持久化
+- **上下文治理**：deepagents 自动摘要压缩 + 大块 offload、sqlite 检查点跨轮持久化
 - **子 agent**：research（只读，双重强制）+ general-purpose（继承主 agent 全部安全层）
 - **工程纪律**：1080+ 测试、覆盖率 CI 卡 75% 下限、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
 

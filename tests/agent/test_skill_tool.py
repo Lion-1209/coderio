@@ -23,6 +23,25 @@ def test_activate_skill(tmp_path):
     assert active.is_active("debugging")
 
 
+def test_activate_skill_returns_body_same_turn(tmp_path):
+    """P1-9 (2026-09-04): the playbook body must be IN the tool result so the
+    model can follow it the same turn. The old status-only string relied on an
+    on_activate_skill callback that never existed — the body only reached the
+    system prompt on the NEXT turn."""
+    _make(tmp_path)
+    store = SkillStore()
+    store._load_layer(tmp_path, "user")
+    active = ActiveSkills()
+    out = ActivateSkillTool(store, active).run(name="debugging")
+    assert "DEBUG BODY" in out, "the skill body must be returned with the activation result"
+    # Re-activation also returns the body (adversarial review note): after
+    # context compaction the playbook may have left the window while `active`
+    # still lists it — "already active" alone would leave it unrecoverable.
+    out2 = ActivateSkillTool(store, active).run(name="debugging")
+    assert "already active" in out2.lower()
+    assert "DEBUG BODY" in out2, "re-activation must re-supply the playbook body"
+
+
 def test_activate_unknown(tmp_path):
     store = SkillStore()
     active = ActiveSkills()

@@ -92,7 +92,7 @@ coderio run "count the Python lines under src/ and summarize" --quiet
 - **MCP support**: connect external tools via `.mcp.json` (Claude Code-compatible format), managed with `coderio mcp`
 - **Lifecycle hooks**: `[[hooks]]` run your commands at PreToolUse / PostToolUse / UserPromptSubmit (exit 2 = block) — IO contract compatible with Claude Code
 - **Three-layer skills**: bundled + user + project, progressive disclosure saves context
-- **Context governance**: auto-compaction (60% window trigger), large-block offload, sqlite checkpoints across turns
+- **Context governance**: deepagents auto-summarization + large-block offload, sqlite checkpoints across turns
 - **Subagents**: research (read-only, double-enforced) + general-purpose (inherits the main agent's full security stack)
 - **Engineering discipline**: 1080+ tests, coverage gated at 75% in CI, mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
 

@@ -13,9 +13,15 @@ class ActivateSkillArgs(BaseModel):
 class ActivateSkillTool:
     """Tool that activates a skill by name, loading its full playbook into context.
 
-    Spec §2.3 (3): keyword/explicit skill activation. Returns a status string;
-    the actual prompt refresh happens via the on_activate_skill callback in the
-    loop (so the system prompt picks up the newly-active skill body).
+    The playbook body is returned IN the tool result, so the model can follow
+    it in the SAME turn (a tool result is context-immediate). ``active`` also
+    records the skill so the next system-prompt build keeps the body pinned
+    (the ActiveSkills instance is shared with the loop).
+
+    2026-09-04 audit P1-9: the old status-only return ("Activated skill: X")
+    relied on an ``on_activate_skill`` callback that never existed — the body
+    only reached the system prompt on the NEXT turn, so the model believed it
+    had the manual in hand a full round before it did.
     """
 
     name = "activate_skill"
@@ -30,11 +36,17 @@ class ActivateSkillTool:
         self.active = active
 
     def run(self, name: str) -> str:
-        if not self.store.has(name):
-            return f"Error: skill not found: {name}. Available: {', '.join(self.store.names())}"
         skill = self.store.get(name)
+        if skill is None:
+            return f"Error: skill not found: {name}. Available: {', '.join(self.store.names())}"
         newly = self.active.activate(skill)
-        return f"Activated skill: {name}" if newly else f"Skill already active: {name}"
+        # The body ALWAYS rides the result (third-party adversarial review
+        # note, 2026-09-04): after context compaction the playbook may have
+        # fallen out of the window while `active` still lists it — a
+        # re-activation that only said "already active" would leave the model
+        # unable to recover the manual.
+        prefix = "Activated skill" if newly else "Skill re-activated (already active)"
+        return f"{prefix}: {name} — playbook follows.\n\n{skill.body}"
 
 
 class DeactivateSkillArgs(BaseModel):
@@ -47,9 +59,8 @@ class DeactivateSkillTool:
     Mirrors ActivateSkillTool. The budget warning in the system prompt points the model at
     `deactivate_skill` when active skill bodies exceed ~30% of the context budget;
     without this tool that hint would reference a non-existent tool and the model
-    would get an 'unknown tool' error. After deactivation the prompt is refreshed
-    via the same on_activate_skill callback path (it rebuilds the system prompt
-    from whatever skills remain active).
+    would get an 'unknown tool' error. The next system-prompt build (next turn)
+    rebuilds from whatever skills remain active.
     """
 
     name = "deactivate_skill"

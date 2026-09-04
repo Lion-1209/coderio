@@ -1,6 +1,6 @@
 # coderio 架构设计文档
 
-- **文档版本**：2026-09-03（基于实际代码库，随代码演进更新；测试与规模数据以 §10 / CI 实测为准）
+- **文档版本**：2026-09-04（基于实际代码库，随代码演进更新；测试与规模数据以 §10 / CI 实测为准）
 - **代码规模**：15,000+ 行 Python（src/coderio），测试与规模数据以 §10 / CI 实测为准
 - **技术栈**：Python 3.11 + langchain + langgraph + Textual + Rich + Typer，Windows 优先
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
@@ -114,7 +114,8 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 | 1（第二次）| 强制续跑，列出未验证文件名，措辞更严厉 |
 | 2（第三次）| **放行 + UI 红色警告面板**（永不无限循环、永不静默放水）|
 
-- **"已验证"定义**：跑过 bash 且 exit_code=0 = 验证通过。bash 失败（非 0 退出码）**不算验证通过**——退出码从 BashTool 结果的 `[exit_code: N]` marker 解析。避免 agent "跑了一下报错就说验证了"，又阻止"写完就说完成"。
+- **"已验证"定义**：跑过 bash 且 exit_code=0 = 验证通过。bash 失败（非 0 退出码）**不算验证通过**——退出码从结果文本的 `[exit_code: N]`（coderio 遗留格式）或 `[Command failed|succeeded with exit code N]`（deepagents 原生格式）marker 解析；结果完全不含 marker 时按"中性通过"处理（对不回传 exit code 的 provider/工具保持兼容）。避免 agent "跑了一下报错就说验证了"，又阻止"写完就说完成"。
+- **"跑了代码"的判定**（2026-09-04 收紧）：命令段要么以已知验证工具（pytest/ruff/mypy/cargo test…）**作为命令**开头，要么是**能执行代码的命令（python/node/bash/uv run…）引用了被写的文件**，要么直接以被写文件作为命令执行（`./foo.py`）。仅**提到**文件名不算——`echo foo.py`、`cat src/foo.py`、`git diff foo.py` 退出码为 0 也无法清空未验证写入列表。
 - **智能跳过非代码文件**：写 `.md`/`.json`/`.yaml`/`.txt`/`.toml` 等文档/配置文件不触发 VerifyGate——读一遍确认格式即可，不需要跑 pytest。只有 `.py`/`.js`/`.ts`/`.go`/`.rs` 等真正的代码文件才需要 bash 验证。
 
 #### CompletionGate（硬，逐级升级）
@@ -131,7 +132,7 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 #### GroundingGate（硬，逐级升级）★分析正确性
 
-- **触发**：已过验证门和完成门，模型最终文本里**显式引用了代码位置**（`foo.py`、`src/x.py:42`），但该文件**本 turn 从未被 read_file/grep/glob/list_dir 读过**
+- **触发**：已过验证门和完成门，模型最终文本里**显式引用了代码位置**（`foo.py`、`src/x.py:42`），但该文件**本 turn 从未被 read_file 读过内容**（grep/list_dir/glob 只算"看过名字"，不足以支撑内容级断言；且本门仅在 CODE 模式——本 turn 有写入——启用，纯分析的文件名列举不触发）
 - **逐级升级**：同 VerifyGate（0/1 强制续跑要求先读，2 放行+警告）
 - **"已读"定义**：`HarnessState.content_read_files` 记录所有 read_file 的 path（归一化：小写 + 正斜杠 + 折叠 `..`）。匹配是 basename 或完整路径精确比较。
 - **路径归一化**：`_norm_path()` 统一小写 + 正斜杠 + 折叠 `../`，Windows 大小写不敏感文件系统（NTFS/APFS）正确处理 `Loop.py` == `loop.py`。
@@ -141,26 +142,24 @@ Harness 维护四道门，读工具调用历史和 todo 状态：
 
 ### 3.4 harness 在循环里的接线
 
-`run_deep_agent`（`agent/deep_loop.py`）是 deepagents 引擎的入口，harness 作为 middleware（`HarnessMiddleware`）挂载，通过 deepagents 的 hook 机制（wrap_tool_call / after_model）实现四道门：
+`run_deep_agent`（`agent/deep_loop.py`）是 deepagents 引擎的入口。harness 不是手写循环，而是 `HarnessMiddleware`（`agent/harness_middleware.py`）挂在 deepagents 的 middleware 链上，通过 langchain middleware 的两个 hook 实现四道门：
 
 ```python
-for _ in range(max_rounds):
-    stream.on_step_start()          # ← UI 计时器启动（见 §6.2）
-    ai = run_step(...)              # 调模型
-    if not ai.tool_calls:           # 模型想结束
-        # ★ 插入点 1：终止检查
-        cont, inject, warn = harness.check_termination(text)
-        if cont:                    # 拦截 → 注入续跑消息 → continue（不 return）
-            ...
-        if warn: stream.on_harness_warn(warn)
-        return text                 # 真正结束
-    for tc in tool_calls:
-        result = _invoke_tool(...)  # ★ 工具错误变 result（见 §3.6）
-        # ★ 插入点 2+3：observe + after_tool_call
-        harness.observe(name, args, result)        # 记录 ground truth
-        aug = harness.after_tool_call(...)          # PlanGate nudge
-        if aug: result = aug
+# wrap_tool_call —— 每次工具执行的观察点：
+result = handler(request)                 # 真正执行（权限/命令审查中间件已在其外层）
+harness.observe(name, args, result_text)  # 记录 ground truth（写入/读取/验证）
+if name == "write_todos" and success:     # 同步 TodoStore + 镜像 plan.md
+    ...                                   # （PLAN 模式跳过落盘，见 §7.1）
+aug = harness.after_tool_call(...)        # PlanGate nudge（软，追加到结果）
+
+# after_model —— 模型想结束时的终止权检查（须 @hook_config(can_jump_to=["model"])，
+# 否则 langchain factory 不建条件边，jump 静默失效——见 §9.2）：
+cont, inject, warn = harness.check_termination(text)
+if cont:   return {"jump_to": "model", "messages": [HumanMessage(inject)]}
+if warn:   ...  # stream_writer 发 on_harness_warn，放行结束
 ```
+
+wrap_tool_call 内先 `handler(request)` 再观察——它看到的是权限门放行后的真实结果；被拒的结果以 `Permission denied` 前缀进入 observe，不会误记为成功写入。
 
 ### 3.5 "系统级"的三条判据
 
@@ -170,18 +169,12 @@ for _ in range(max_rounds):
 | 基于 ground truth | 否（基于模型自述） | **是**——读工具调用历史 |
 | 可审计 | 否（静默） | **是**——注入消息入 session、警告面板可见、attempt 有计数 |
 
-### 3.6 工具错误韧性 + 分级（_invoke_tool）
+### 3.6 工具错误韧性
 
-`tool.run(**args)` 被 `_invoke_tool` 包裹：任何异常（TypeError/ValueError/...）都变成结构化 tool result 回灌给模型，**不中断 turn**。错误按**可重试性**分级，给模型可操作的信号：
+引擎是 deepagents，coderio 不再手写 `_invoke_tool` 包装层。工具调用失败的处理路径是 deepagents 原生的：异常/失败被结构化为 tool result 回灌给模型（不中断 turn），模型读到错误后自行修正。coderio 在其上保证两点：
 
-| 标记 | 触发 | 模型该做什么 |
-|------|------|-------------|
-| `[retryable]` | TypeError（参数签名错）/ 未知 Exception | 改参数或改调用方式，再试一次 |
-| `[non-retryable]` | PermissionError / FileNotFoundError / IsADirectoryError | 这是环境约束——**别重复同一调用**，换路径或换方法 |
-
-- 模型给 bash 传了 `path`（bash 只认 `cwd`）→ 返回 `[retryable] tool 'bash' rejected the arguments...`，模型改参数重试
-- 模型 read_file 一个无权限路径 → `[non-retryable] tool 'read_file' cannot proceed: PermissionError...`，模型换路径而非死磕
-- 设计原则：**工具调用层面的错误不是错误，是信号**。只有底层 LLM API 错误（auth/网络/限流，从 run_step 抛出）才是致命的。BaseException（SystemExit/KeyboardInterrupt）不被捕获——那是用户/系统中断，不是工具结果。
+- **权限拒绝不是崩溃**：PermissionGate 拒绝以 `Permission denied:` 前缀文本进入工具结果，HarnessMiddleware.observe 据此把它当作"未执行"处理（不记为写入、不清空未验证列表）。
+- **BaseException（SystemExit/KeyboardInterrupt）不被捕获**——那是用户/系统中断，不是工具结果。
 
 ---
 
@@ -201,7 +194,7 @@ harness 是硬约束（基于 ground truth），意图分类是**提示词层的
 
 ### 4.2 CODE 工作流（6 步 + 执行段）
 
-仅 CODE 模式触发，playbook 体由 CORE_CHAIN_SKILLS 注入：
+仅 CODE 模式触发，playbook 体由 activate_skill 按需加载（§7.2）：
 
 ```
 0. EXPLORE FIRST（先探索再动手）
@@ -225,9 +218,8 @@ harness 是硬约束（基于 ground truth），意图分类是**提示词层的
 
 ```
 _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
-  + CORE_CHAIN_SKILLS 的 body（clarify/spec/task/executing-plans/verify-and-fix/commit-message，
-    作为 CODE 模式 runtime rules 始终注入）
-  + 横切 skill 的分组列表（执行段/横切/上手元，opt-in，见 §7.3）
+  + 全部 skill 的分组描述列表（只列名称+描述，不注入 body——渐进披露，
+    body 由 activate_skill 按需加载，加载后 body 随工具结果当轮可见，见 §7.2）
   + 用户显式 activate 的 skill body
 ```
 
@@ -301,7 +293,7 @@ Textual 8.x App，核心设计：
 
 **文件 checkpoint**（`checkpoint.py`，S4）：三个结构化写工具落盘前快照进内存栈（50 条 / 64MB 上限），`/undo` 逐级回滚；bash 重定向等 shell 路径不覆盖——OS 级沙箱才是那一层的答案。
 
-**计划产物**（`plan_artifact.py`，S5）：write_todos 成功后任务清单镜像到 `<project>/.coderio/plan.md`；用户在两轮之间手改它，下一轮开始自动采纳其版本并注入提示。
+**计划产物**（`plan_artifact.py`，S5）：write_todos 成功后任务清单镜像到 `<project>/.coderio/plan.md`；用户在两轮之间手改它，下一轮开始自动采纳其版本并注入提示。**例外（2026-09-04）**：PLAN 模式是只读契约，该落盘被抑制——todo 仍在内存工作，但不再绕过权限把内容写进项目文件。
 
 **命令审查层**（`command_review.py` + `command_policy.py`）：权限门只管"哪个工具能执行"，不管"命令内容是什么"。shell（execute）不受 virtual_mode 约束，所以额外加了一层 `CommandReviewMiddleware`——内置黑名单挡住 `rm -rf /`、`mkfs`、fork bomb、`dd of=/dev/`、`shutdown` 等破坏性命令。即使 FULL 模式也挡（安全优先于"full=全放行"字面语义）。用户可在 config.toml `[tools].blocked_commands` 追加正则黑名单。`network_allowed=false` 可禁用 web_fetch/web_search（离线模式）。
 
@@ -310,8 +302,8 @@ Textual 8.x App，核心设计：
 **文件路径隔离**：deepagents 后端的 `virtual_mode=True` 把文件工具（write_file/edit_file/read_file/ls/grep/glob）限制在工作区根目录内——agent 看到的 `/foo.py` 映射到 `{workdir}/foo.py`。**注意：shell（execute）不受 virtual_mode 约束**，shell 命令可任意读写工作区外的文件、访问网络。真正的 OS 级沙箱是未来工作。旧的 coderio 自研 `WorkspacePolicy`（路径 resolve + relative_to 边界检查）已删除——它无法处理 deepagents 的虚拟路径（`/foo.py` 被 resolve 成 `C:\foo.py`，总是落在工作区外被误拒）。
 
 **shell（execute）工具特性**：
-- **进程树超时杀**：deepagents 后端用 `Popen` + timeout + 进程树 kill（Windows Job Object / POSIX killpg），解决 `subprocess.run(timeout=...)` 在 Windows 上不杀孙子进程导致永久挂起的问题
-- **exit_code marker**：`HarnessMiddleware._result_to_text` 从 deepagents 的结构化 ExecuteResponse 提取 exit_code，追加 `[exit_code: N]` 到结果文本，harness VerifyGate 解析它判断验证是否通过
+- **进程树超时杀**（2026-09-04 起生产路径生效）：plain 路径用 `Popen` + `communicate(timeout=...)`；超时后 `kill_process_tree`（Windows 用 `taskkill /T /F` 按当前真实进程树杀，Job 兜底；POSIX 用 `killpg`）杀掉整棵树后立即返回 exit 124。解决 `subprocess.run(timeout=...)` 在 Windows 上只杀直接子进程、孙进程持管道导致永久挂起的问题（孙进程拿不到的管道不再阻塞返回——超时路径本就丢弃输出，不做无谓排空）
+- **exit_code marker**：`_result_to_text` 从 deepagents 的结构化 ExecuteResponse 提取 exit code，以 deepagents 原生 `[Command failed|succeeded with exit code N]` 文本进入结果，harness VerifyGate 同时解析它与遗留的 `[exit_code: N]` 格式判断验证是否通过
 - **注意**：旧的 coderio 自研 bash 工具的 `.venv` 自动激活逻辑在生产路径不生效（deepagents 后端不经过它）。如需 venv，在 shell 命令里显式激活
 
 **统一接口**（`base.py`）：每个工具声明 pydantic `args_schema` + `run()`，经 `to_langchain_tool` 适配成 `StructuredTool` 绑定给模型。
@@ -324,7 +316,7 @@ Textual 8.x App，核心设计：
 - body 懒加载（只在用到时读文件），元数据缓存
 - 12 个 Lion-Skills skill（clarifying-questions / spec-writing / task-breakdown / commit-message / code-review / debugging / error-handling / naming / testing / verify-and-fix / onboarding-unknown-codebase / lion-writing-skills）
 
-**skill 激活**：模型通过 `activate_skill(name)` 工具按需加载 skill body（系统提示词里只列名称+描述，~2K tokens）。旧的 `triggers.py` 关键词阶段触发已删除——召回低（"帮我改 bug"不触发）、易误触发（`\bcommit\b` 匹配 "I commit to..."），且引用了不存在的 skill（`executing-plans`）。改为完全依赖模型自主判断 + `activate_skill`。
+**skill 激活**：模型通过 `activate_skill(name)` 工具按需加载 skill body——body **直接随工具结果返回**，当轮即可用；`ActiveSkills` 同时记录它，下一轮系统提示词重建时 body 固定注入。旧的 `triggers.py` 关键词阶段触发已删除——召回低（"帮我改 bug"不触发）、易误触发（`\bcommit\b` 匹配 "I commit to..."），且引用了不存在的 skill（`executing-plans`）。改为完全依赖模型自主判断 + `activate_skill`。
 
 ### 7.3 skill 在提示词里的呈现（分组）
 
@@ -343,10 +335,9 @@ CODE 执行段（写完代码后按需）:
 
 **三层 TOML 合并**：defaults < user（`~/.coderio/config.toml`）< project（`./.coderio/config.toml`）< env。`frozen` dataclass。
 
-关键字段：
-- `model`: default, provider, base_url, provider_id, max_output_tokens=16384, context_limit=0（onboarding 自动探测）
+关键字段（以 `config/models.py` 与 [docs/CONFIG.md](CONFIG.md) 为准）：
+- `model`: default, provider, base_url, provider_id, max_output_tokens=16384, context_limit=0（onboarding 自动探测；上下文窗口跟随模型/profile，不再有独立的 `[context]` 压缩配置段——该段已于 0.4.x 移除）
 - `tools`: bash_shell, permission_mode, workspace_root=""（空=用 cwd）
-- `context`: enabled, trigger_ratio=0.6, keep_recent=8, model_context_limit=200000
 - `skills`: auto_load, **harness=True**, repo_url
 - `cli`: theme, show_tool_output
 
@@ -366,46 +357,39 @@ jsonl 追加式存储（`~/.coderio/sessions/`）。支持 `Session.create / loa
 
 ## 8. 数据流：一次 CODE 任务的完整路径
 
-以"写个 hello.py 并测试"为例，单 agent 模式：
+以"写个 hello.py 并测试"为例（deepagents 引擎，单 agent 模式）：
 
 ```
 用户输入 "写个 hello.py 内容 print(1)，写好告诉我完成了"
   │
   ▼
-repl._loop → run_agent(harness_enabled=True)
-  │  1. build_system_prompt（注入意图分类 + core chain + skill 列表）
-  │  2. 构造 Harness（找到 TodoStore）
+run_deep_agent（deepagents create_deep_agent + coderio middleware 链）
+  │  1. build_system_prompt（意图分类 + skill 描述 + 已激活 skill body）
+  │  2. HarnessMiddleware(todos=TodoStore, plan_artifact=PlanArtifact) 挂载
   │  3. session.append(user msg)
   │
   ▼
-_execute_turn(harness=h)  循环：
-  │
-  ├─ round 1: run_step → 模型返回 tool_calls=[write_file]
-  │    on_step_start (UI 计时启动)
-  │    stream.on_token（流式输出模型的思考文本）
-  │    _invoke_tool(write_file) → "Wrote 12 chars to hello.py"
-  │    harness.observe(write_file, success) → writes_since_verify=["hello.py"]
-  │    harness.after_tool_call → [nudge]（无 todo，提醒分解）追加到结果
-  │
-  ├─ round 2: run_step → 模型返回 tool_calls=[]（"完成了"，想结束）
-  │    harness.check_termination("完成了")
-  │      → VerifyGate: writes_since_verify 非空 → attempt 0 → (True, "[harness] You MUST run it...", None)
-  │    ★ 拦截：不 return，注入 [harness] user 消息，continue
-  │
-  ├─ round 3: run_step → 模型读到 [harness] 要求，返回 tool_calls=[bash(py hello.py)]
-  │    _invoke_tool(bash) → "1"
-  │    harness.observe(bash) → writes_since_verify 清空, verify_attempts=0
-  │
-  ├─ round 4: run_step → 模型返回 tool_calls=[]（"完成了，运行输出 1"）
-  │    harness.check_termination
-  │      → VerifyGate: writes_since_verify 空 → pass
-  │      → CompletionGate: todos 空 → 豁免 pass
-  │    → (False, None, None) → 真正结束
-  │    stream.on_finish → 蓝色 Panel 渲染
-  │
+模型第 1 步：tool_calls=[write_file hello.py]
+  │  wrap_tool_call: handler 执行 → "Wrote 12 chars to hello.py"
+  │  harness.observe → writes_since_verify=["hello.py"]
+  │  after_tool_call → [nudge]（无 todo 时提醒分解，软）
   ▼
-返回 "完成了，运行验证输出 1"
+模型第 2 步：无 tool_calls（"完成了"）
+  │  after_model → check_termination
+  │  VerifyGate: writes_since_verify 非空 → attempt 0
+  │  → {"jump_to": "model", "messages": [HumanMessage("[harness] You MUST run it...")]}
+  ▼
+模型第 3 步：tool_calls=[execute("python hello.py")]
+  │  wrap_tool_call: execute 成功，exit code 0
+  │  harness.observe → 解析 exit code 0 → writes_since_verify 清空
+  ▼
+模型第 4 步：无 tool_calls（"完成了，运行输出 1"）
+  │  after_model → VerifyGate 过 / CompletionGate（todo 空）豁免 → 放行
+  ▼
+on_finish → 蓝色面板渲染最终答复 + 轮末文件修改汇总
 ```
+
+harness 强制续跑注入的 `HumanMessage` 只进 graph 状态与模型上下文；session jsonl 持久化的是用户/助手/工具消息与 harness 的执行痕迹（工具结果），两套历史的边界见 §9 已知问题。
 
 ---
 
@@ -431,7 +415,7 @@ _execute_turn(harness=h)  循环：
 
 ## 10. 测试与验证体系
 
-- **1000+ 单元/集成测试**（2026-09-02：1074 collected，CI 全绿），覆盖所有模块；`tests/e2e/` 以黑盒方式驱动真实 Typer app（LLM 边界 stub）
+- **1200+ 单元/集成测试**（数字持续增长，以 CI 实测为准），覆盖所有模块；`tests/e2e/` 以黑盒方式驱动真实 Typer app（LLM 边界 stub）
 - **CI**（GitHub Actions）：lint（ruff E/F/W/I/S）+ test matrix（Ubuntu/Windows/macOS × Python 3.11/3.12，coverage 卡 75% 下限）+ wheel build smoke + pip-audit 阻断 + mypy 硬门
 - **Live 验证脚本**（`scripts/verify_*_live.py`）：连真实智谱/阶跃端点验证
   - `verify_harness_live.py`：4 场景（验证门触发/通过/禁用/工具错误韧性）

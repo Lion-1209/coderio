@@ -70,6 +70,38 @@ def test_provider_id_falls_back_to_env_when_no_creds(tmp_path, monkeypatch):
     assert model.anthropic_api_key.get_secret_value() == "env-key"
 
 
+def test_anthropic_kind_falls_back_to_z_api_key(monkeypatch):
+    """P0-7 (2026-09-04): the onboarding gate and the headless error message
+    both tell users "set Z_API_KEY" — for an anthropic-kind provider
+    (bigmodel/stepfun coding plan) that must actually yield a working key.
+    The old _pick_api_key read only ANTHROPIC_API_KEY, so a Z_API_KEY-only
+    user skipped onboarding and hit a guaranteed auth failure."""
+    from coderio.llm.factory import _pick_api_key
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("Z_API_KEY", "zk-coding-plan")
+    assert _pick_api_key("anthropic") == "zk-coding-plan"
+    # ANTHROPIC_API_KEY keeps precedence for the Anthropic vendor itself.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+    assert _pick_api_key("anthropic") == "sk-anthropic"
+
+
+def test_z_api_key_only_user_gets_working_model(monkeypatch, tmp_path):
+    """End-to-end over the factory: bigmodel_coding_plan with no credentials
+    file and only Z_API_KEY set must build a ChatAnthropic carrying that
+    key (the exact documented onboarding-skip path)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("Z_API_KEY", "zk-only")
+    cfg = Config(
+        model=ModelConfig(provider_id="bigmodel_coding_plan", default="glm-5.2", provider="anthropic", base_url="")
+    )
+    model = build_chat_model(cfg, creds_path=tmp_path / "nope")
+    from langchain_anthropic import ChatAnthropic
+
+    assert isinstance(model, ChatAnthropic)
+    assert model.anthropic_api_key.get_secret_value() == "zk-only"
+
+
 def test_stepfun_api_uses_openai_protocol(tmp_path):
     from coderio.cli.credentials import write_credentials
 

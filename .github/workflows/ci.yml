@@ -88,6 +88,20 @@ jobs:
         run: |
           uv run python -m pytest -q --cov=coderio --cov-report=term-missing --cov-fail-under=75
 
+      - name: MCP extra smoke (install + loader import)
+        # The mcp extra was never installed in CI (audit 2026-09-04 P1-17):
+        # `load_mcp_tools_sync` — the code path behind README's "MCP support"
+        # — was never executed anywhere, in tests or CI. Install the extra
+        # from the frozen lock and at least run the loader test module
+        # against the real adapters package. One matrix leg is enough (the
+        # loader is pure Python; this step exists so the import path can't
+        # rot silently).
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          uv sync --frozen --extra dev --extra mcp
+          uv run python -c "from coderio.mcp_loader import load_mcp_tools_sync; print('mcp loader import OK')"
+          uv run python -m pytest tests/test_mcp_loader.py -q
+
       - name: Type check (mypy)
         # HARD GATE for clean modules. pyproject.toml's [[tool.mypy.overrides]]
         # lists modules with known type issues (ignore_errors=true) — each is a

@@ -213,7 +213,12 @@ async def load_mcp_tools(
         return []
 
     # Build connections dict for MultiServerMCPClient.
-    connections: dict[str, dict] = {}
+    # dict[str, Any], not dict[str, dict]: adapters 0.3.2 types this parameter
+    # with its own connection TypedDicts, and dict invariance makes dict[str,
+    # dict] incompatible once the (py.typed) package is installed — which the
+    # CI MCP-smoke leg now does (release-gate review 2026-09-04: this surfaced
+    # the pre-existing error). Any is accepted regardless of what's installed.
+    connections: dict[str, Any] = {}
     for name, raw_cfg in config.items():
         if not isinstance(raw_cfg, dict):
             continue
