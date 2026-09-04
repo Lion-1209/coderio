@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 # P2-2: the _to_coderio_name shim was removed — the tests now exercise the
 # taxonomy registry's to_harness_name directly (same behavior).
 from coderio.agent.harness_middleware import HarnessMiddleware
+from coderio.tools.permission import PermissionGate
 from coderio.tools.taxonomy import to_harness_name as _to_coderio_name
 
 
@@ -54,6 +55,75 @@ def test_wrap_tool_call_observes_write():
     handler = lambda r: "Wrote 5 chars to a.py"
     mw.wrap_tool_call(req, handler)
     assert mw.harness.state.writes_since_verify == ["a.py"]
+
+
+# --- P1-10 (2026-09-04): PLAN mode must not write plan.md ---
+
+
+def test_plan_mode_skips_plan_md_materialization():
+    """P1-10: PLAN mode is documented read-only, but the write_todos →
+    plan.md mirror wrote todo content to disk anyway — fixed path, arbitrary
+    content, no permission gate, outside /undo. The mirror must be suppressed
+    under a PLAN gate."""
+    mw = HarnessMiddleware(permission_gate=PermissionGate("plan"), plan_artifact=MagicMock())
+    req = _tool_call_request("write_todos", {"todos": [{"content": "evil", "status": "pending"}]})
+    mw.wrap_tool_call(req, lambda r: "ok")
+    mw.plan_artifact.materialize.assert_not_called()
+
+
+def test_non_plan_mode_still_materializes_plan_md():
+    """The mirror stays on for confirm/full/auto_edit — only PLAN suppresses."""
+    for mode in ("confirm", "full", "auto_edit"):
+        mw = HarnessMiddleware(permission_gate=PermissionGate(mode), plan_artifact=MagicMock())
+        req = _tool_call_request("write_todos", {"todos": [{"content": "t", "status": "pending"}]})
+        mw.wrap_tool_call(req, lambda r: "ok")
+        mw.plan_artifact.materialize.assert_called_once(), f"mode {mode} must keep the mirror"
+        mw.plan_artifact.reset_mock()
+
+
+def test_no_gate_still_materializes_plan_md():
+    """No gate (subagents / legacy tests) keeps the old behavior — and
+    subagents have no plan_artifact anyway."""
+    mw = HarnessMiddleware(plan_artifact=MagicMock())
+    req = _tool_call_request("write_todos", {"todos": [{"content": "t", "status": "pending"}]})
+    mw.wrap_tool_call(req, lambda r: "ok")
+    mw.plan_artifact.materialize.assert_called_once()
+
+
+def test_plan_mode_suppresses_plan_gate_nudge():
+    """Adversarial review note (2026-09-04): the PlanGate nudge advertises the
+    plan.md mirror — which PLAN mode now suppresses. Under a PLAN gate the
+    nudge must not fire (it would point the model at a write that cannot
+    happen)."""
+    mw = HarnessMiddleware(permission_gate=PermissionGate("plan"))
+    req = _tool_call_request("write_file", {"path": "a.py", "content": "x"})
+    result = mw.wrap_tool_call(req, lambda r: "Wrote 1 chars to a.py")
+    assert "nudge" not in str(result), "PLAN mode must not append the plan.md nudge"
+
+
+def test_build_middleware_wires_gate_into_harness_middleware():
+    """Mutation round (2026-09-04): the PLAN suppression lives in
+    HarnessMiddleware, but the gate reaches it ONLY via build_middleware's
+    `permission_gate=spec.gate` — that wiring line had no guard (reverting it
+    left every middleware-level test green because they construct the
+    middleware directly). Identity assertion closes the seam."""
+    from unittest.mock import MagicMock
+
+    from coderio.agent.deep_loop import build_middleware
+
+    gate = PermissionGate("plan")
+    spec = MagicMock()
+    spec.gate = gate
+    spec.harness_enabled = True
+    spec.command_policy = None
+
+    stack = build_middleware(spec, stream=None, hook_runner=MagicMock(specs=[]), plan_artifact=None)
+    harness_mws = [m for m in stack if type(m).__name__ == "HarnessMiddleware"]
+    assert harness_mws, "HarnessMiddleware must be in the production middleware stack"
+    assert harness_mws[0]._permission_gate is gate, (
+        "build_middleware must pass the spec gate into HarnessMiddleware — "
+        "without the wiring, PLAN-mode plan.md suppression is dead code"
+    )
 
 
 def test_wrap_tool_call_observes_execute_as_verification():

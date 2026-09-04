@@ -191,22 +191,28 @@ def _shell_backend_cls():
             result = super().delete(file_path)
             return check(result) if check else result
 
+        # bash probe cache, keyed by the [tools].bash_shell config value. A
+        # single class-level value let the FIRST instance's probe shadow every
+        # other instance's configured shell for the whole process — a /model
+        # or /profile rebuild never saw its own config (2026-09-04 audit P1-8).
+        _bash_cache: dict[str, str | None] = {}
+
         def _resolve_bash(self) -> str | None:
             """Find a bash executable, or None to fall back to shell=True.
 
-            Cached at module level after the first successful probe —
-            the probe does filesystem checks we don't want per-command.
+            Cached per configured shell after the first probe — the probe
+            does filesystem checks we don't want per-command.
             """
             if sys.platform != "win32":
                 return None  # POSIX shell=True is /bin/sh -c — already correct
-            cached = _Sub._bash_cache
-            if cached is not None:
-                return cached or None
+            configured = (getattr(self, "_bash_shell", "") or "").strip()
+            if configured in _Sub._bash_cache:
+                return _Sub._bash_cache[configured] or None
             try:
                 from coderio.tools.bash import detect_shell
 
-                path = detect_shell(getattr(self, "_bash_shell", "") or "")
-                _Sub._bash_cache = path
+                path = detect_shell(configured)
+                _Sub._bash_cache[configured] = path
                 return path
             except FileNotFoundError:
                 _log.warning(
@@ -214,10 +220,8 @@ def _shell_backend_cls():
                     "cmd.exe. Single-quoted args and POSIX syntax will misbehave; "
                     "install Git Bash or set [tools].bash_shell."
                 )
-                _Sub._bash_cache = ""
+                _Sub._bash_cache[configured] = ""
                 return None
-
-        _bash_cache: str | None = None
 
         def execute(self, command: str, *, timeout: int | None = None):  # noqa: ANN201, ARG002
             import subprocess
@@ -275,24 +279,57 @@ def _shell_backend_cls():
             # semantically identical to bash -c for our purposes).
             bash_path = self._resolve_bash()
             run_args = [bash_path, "-c", command] if bash_path else command
+            # Popen + manual timeout instead of subprocess.run(timeout=...).
+            # subprocess.run's Windows timeout kills only the direct child;
+            # grandchildren (a dev server, a hung test worker) survive holding
+            # the stdout/stderr pipes, so communicate() waits for EOF forever
+            # and the agent loop freezes with no way back (2026-09-04 audit:
+            # the plain path had reintroduced the exact hang bash.py fixed —
+            # Popen + kill_process_tree + a bounded drain window).
+            import os
+
             try:
-                proc = subprocess.run(
+                proc = subprocess.Popen(
                     run_args,
                     shell=(bash_path is None),
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     cwd=cwd,
-                    timeout=effective_timeout,
                     text=False,  # bytes — decode ourselves (Windows GBK safety)
                     stdin=subprocess.DEVNULL,  # prevent stdin-reading cmds from hanging
                     env=env,
+                    # Own process group/session so the POSIX tree kill
+                    # (os.killpg) reaches grandchildren — mirrors bash.py.
+                    start_new_session=(os.name != "nt"),
                 )
-                stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
-                stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
-                exit_code = proc.returncode
-            except subprocess.TimeoutExpired:
-                return ExecuteResponse(output=f"Command timed out after {effective_timeout}s", exit_code=124)
             except Exception as e:  # noqa: BLE001
                 return ExecuteResponse(output=f"Execution error: {e}", exit_code=1)
+            try:
+                stdout_b, stderr_b = proc.communicate(timeout=effective_timeout)
+            except subprocess.TimeoutExpired:
+                from coderio.tools.win_job import kill_process_tree
+
+                # Kill the tree, reap the direct child, return NOW. No drain:
+                # the timeout path discards output anyway, so a second
+                # communicate() only risks waiting on a lingering pipe holder
+                # that taskkill's tree walk can't see (observed: conhost-style
+                # holders cost the full drain window with nothing to show).
+                kill_process_tree(proc)
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except Exception:  # noqa: S110, BLE001 — best-effort reap; must not hang the timeout path
+                    pass
+                return ExecuteResponse(output=f"Command timed out after {effective_timeout}s", exit_code=124)
+            except Exception as e:  # noqa: BLE001
+                # communicate() failed some other way — make sure the child
+                # doesn't linger holding the pipes (third-party review note,
+                # 2026-09-04).
+                proc.kill()
+                return ExecuteResponse(output=f"Execution error: {e}", exit_code=1)
+            stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+            stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+            exit_code = proc.returncode
             output = stdout
             if stderr:
                 output += f"\n[stderr]\n{stderr}"
@@ -695,6 +732,9 @@ def build_middleware(spec: TurnSpec, stream, hook_runner, plan_artifact) -> list
             enabled=spec.harness_enabled,
             todos=plan_artifact.store if plan_artifact is not None else None,
             plan_artifact=plan_artifact,
+            # Gate reference: PLAN mode suppresses the write_todos → plan.md
+            # disk mirror (PLAN is read-only by contract; audit P1-10).
+            permission_gate=spec.gate,
         )
     )
     # Planning middleware (write_todos tool): deepagents 0.7.6 REMOVED it from

@@ -93,6 +93,62 @@ def test_kill_process_tree_windows_terminates_process():
     assert proc.returncode is not None, "process should have an exit code after kill"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="taskkill is Windows-only")
+def test_kill_process_tree_uses_taskkill_tree_flag(monkeypatch):
+    """P0-6 (2026-09-04, audit M6): the Windows tree kill must invoke
+    `taskkill /T /F /PID <pid>` — taskkill walks the parent-child tree as it
+    exists right now, so grandchildren spawned before the kill die too. The
+    old Job-assigned-at-kill-time approach never contained them, so they
+    survived holding the stdout/stderr pipes."""
+    calls = []
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+    proc = subprocess.Popen(["cmd", "/c", "ping", "-n", "30", "127.0.0.1"])
+    try:
+        win_job.kill_process_tree(proc)
+    finally:
+        # The faked taskkill didn't actually kill anything — clean up.
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        proc.wait(timeout=5)
+    assert calls, "kill_process_tree must invoke taskkill"
+    assert calls[0][:4] == ["taskkill", "/T", "/F", "/PID"], f"unexpected taskkill shape: {calls[0]!r}"
+    assert calls[0][4] == str(proc.pid), "taskkill must target the child process pid"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only tree kill")
+def test_kill_process_tree_kills_grandchildren():
+    """M6 behavioral pin (2026-09-04): the tree kill must reach DESCENDANTS,
+    not just the direct child. bash -c 'sleep 30' nests sleep under bash;
+    after kill_process_tree no sleep.exe parented by the killed bash may
+    survive (a surviving grandchild keeps holding the stdout pipe). Windows
+    does not re-parent orphans, so sleep's PPID still points at the dead
+    bash after the kill — making the filter deterministic."""
+    import time
+
+    proc = subprocess.Popen(["bash", "-c", "sleep 30"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(1.0)  # let bash spawn sleep
+        win_job.kill_process_tree(proc)
+        proc.wait(timeout=5)
+        time.sleep(0.5)  # give taskkill's kill a beat to land
+        ps = (
+            "Get-CimInstance Win32_Process -Filter "
+            f"\"Name='sleep.exe' AND ParentProcessId={proc.pid}\" | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        # noqa S603: fixed powershell query against a process WE spawned
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=15)  # noqa: S603
+        survivors = r.stdout.split()
+        assert not survivors, f"grandchild sleep.exe (pids {survivors}) survived the tree kill (M6 regression)"
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 # ----------------------------------------------------- graceful degradation
 
 

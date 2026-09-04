@@ -167,11 +167,20 @@ def assign_to_job(job_handle: int, pid: int) -> bool:
 
 
 def kill_process_tree(proc: subprocess.Popen) -> None:
-    """Kill a process AND all its children (the whole process tree).
+    """Kill a process AND all its descendants (the whole process tree).
 
-    On Windows: creates a Job Object, assigns the process, then terminates the
-    job — this kills the entire tree reliably (subprocess.run's timeout only
-    kills the direct child, leaving grandchildren running with open pipes).
+    On Windows: ``taskkill /T /F /PID`` walks the parent-child tree as it
+    exists right now and kills every descendant — unlike a Job assigned at
+    kill time, which only ever contains the direct child (2026-09-04 audit
+    M6: pre-existing grandchildren survived the old kill and kept holding
+    the pipes). A Job + TerminateProcess fallback covers taskkill being
+    unavailable, so the direct child at least always dies and callers'
+    communicate() can return. HONEST LIMIT (seam review, 2026-09-04): MSYS2
+    (Git Bash) may re-parent background grandchildren OUTSIDE the Windows
+    parent chain, where taskkill /T cannot see them; such orphans are
+    bounded (they exit on their own) and no longer hang the caller, but they
+    are not killed here. The cure is a Job created at SPAWN time — future
+    work.
 
     On POSIX: uses os.killpg on the process group (requires the process to have
     been started with start_new_session=True or in its own process group).
@@ -181,28 +190,39 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
     """
     pid = proc.pid
     if sys.platform == "win32":
+        # taskkill /T walks the parent-child tree AS IT EXISTS RIGHT NOW and
+        # force-kills every descendant. The previous approach (a Job assigned
+        # at kill time) only contained the direct child — grandchildren that
+        # already existed were never in the job, survived the kill, and kept
+        # holding the stdout/stderr pipes (2026-09-04 audit M6).
+        try:
+            import subprocess
+
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("taskkill tree kill failed: %s", e)
+        # Belt and braces: if taskkill was unavailable or failed, the
+        # Job+TerminateProcess fallback still kills the direct child, so the
+        # caller's communicate() can raise instead of blocking forever.
         try:
             import ctypes
 
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            # Create a one-shot job just for the kill (simpler than tracking a
-            # persistent job handle across the process lifetime). The
-            # KILL_ON_JOB_CLOSE + TerminateJobObject combo ensures the whole
-            # tree dies even if some children escaped assignment.
+            # One-shot job just for the kill (simpler than tracking a
+            # persistent handle). KILL_ON_JOB_CLOSE + TerminateJobObject as
+            # the documented fallback shape.
             h_job = create_job_with_limits()
             if h_job:
                 if assign_to_job(h_job, pid):
                     kernel32.TerminateJobObject(h_job, 1)
                 kernel32.CloseHandle(h_job)
-            # Fallback: if job creation failed, try a direct TerminateProcess
-            # (kills only the direct child, but better than hanging).
             PROCESS_TERMINATE = 0x0001
             h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
             if h_proc:
                 kernel32.TerminateProcess(h_proc, 1)
                 kernel32.CloseHandle(h_proc)
         except Exception as e:  # noqa: BLE001
-            _log.warning("kill_process_tree (Windows) failed: %s", e)
+            _log.warning("kill_process_tree (Windows) fallback failed: %s", e)
     else:
         try:
             import signal

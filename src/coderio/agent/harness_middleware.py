@@ -107,6 +107,7 @@ class HarnessMiddleware(AgentMiddleware):
         enabled: bool = True,
         todos: "TodoStore | None" = None,
         plan_artifact=None,
+        permission_gate=None,
     ) -> None:
         # Wire the phase-observation tracker when a stream consumer is present.
         # The display pipeline (TUI StatusBar / stream.on_phase_change) already
@@ -127,9 +128,24 @@ class HarnessMiddleware(AgentMiddleware):
         self.stream = stream
         # Optional plan-artifact mirror (.coderio/plan.md). The MAIN agent gets
         # one from deep_loop; subagents deliberately don't — the plan has one
-        # owner. When provided, every successful write_todos materializes it.
+        # owner. When provided, every successful write_todos materializes it —
+        # EXCEPT in PLAN mode (see _plan_mode_blocks_writes).
         self.plan_artifact = plan_artifact
+        # Optional permission gate reference; PLAN mode suppresses the
+        # plan.md disk mirror (audit 2026-09-04 P1-10).
+        self._permission_gate = permission_gate
         self._runtime = None  # captured in wrap_tool_call / after_model
+
+    def _plan_mode_blocks_writes(self) -> bool:
+        """PLAN mode is documented as read-only ("blocks ALL writes"). The
+        write_todos → plan.md mirror is a DISK WRITE that used to slip past
+        that contract: any todo content could land in
+        <project>/.coderio/plan.md — fixed path, arbitrary content, no
+        permission gate, outside /undo. In PLAN mode the mirror is
+        suppressed; todos still work in memory (audit 2026-09-04 P1-10).
+        """
+        gate = self._permission_gate
+        return gate is not None and getattr(gate, "mode", "") == "plan"
 
     def _emit(self, runtime: Any, payload: dict) -> None:
         """Send a custom stream event (harness_continue / harness_warn).
@@ -190,7 +206,9 @@ class HarnessMiddleware(AgentMiddleware):
                 ]
                 # Plan artifact: mirror the fresh task list to
                 # .coderio/plan.md so the user can view/edit it between turns.
-                if self.plan_artifact is not None:
+                # Suppressed under a PLAN gate — PLAN is read-only by contract
+                # and must not write the project file (audit 2026-09-04 P1-10).
+                if self.plan_artifact is not None and not self._plan_mode_blocks_writes():
                     self.plan_artifact.materialize()
                     # The model re-authored the plan — its version supersedes
                     # any turn-start adoption; drop that pending signal so
@@ -211,8 +229,15 @@ class HarnessMiddleware(AgentMiddleware):
                 clean = cited.rsplit(":", 1)[0] if ":" in cited else cited
                 self.harness.state.content_read_files.add(_norm_path(clean))
 
-        # PlanGate: nudge if writing without a todo list (soft, appends to result).
-        aug = self.harness.after_tool_call(coderio_name, args, result_text)
+        # PlanGate: nudge if writing without a todo list (soft, appends to
+        # result). Suppressed in PLAN mode: the nudge advertises the plan.md
+        # mirror, which PLAN suppresses (read-only contract, audit P1-10) —
+        # advertising it there would point the model at a write that cannot
+        # happen (third-party adversarial review note, 2026-09-04).
+        if not self._plan_mode_blocks_writes():
+            aug = self.harness.after_tool_call(coderio_name, args, result_text)
+        else:
+            aug = None
         if aug and isinstance(result, str):
             result = result + aug
         elif aug:

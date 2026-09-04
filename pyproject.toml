@@ -176,6 +176,10 @@ select = ["E", "F", "W", "I", "S"]
 # S603 — the LocalShellBackend override runs model-generated bash commands;
 # executing them IS the tool's purpose (same rationale as tools/bash.py).
 "src/coderio/agent/deep_loop.py" = ["S602", "S603"]
+# win_job tree kill: S603/S607 — runs `taskkill /T /F /PID` against a process
+# WE spawned (the pid comes from our own Popen, not user input). Killing the
+# timed-out process tree IS this module's purpose.
+"src/coderio/tools/win_job.py" = ["S603", "S607"]
 # Hooks: S603 — hook commands come from the user's TOML config (trusted
 # project settings, like skills_cmd.py's git clone), not arbitrary model
 # input. Executing them IS the hooks feature's purpose.

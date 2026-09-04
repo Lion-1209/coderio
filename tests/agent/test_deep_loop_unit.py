@@ -9,8 +9,11 @@ _handle_*_mode a dedicated test without spinning up the full deepagents graph.
 
 from __future__ import annotations
 
+import shutil
+import sys
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
@@ -410,6 +413,89 @@ def test_win_shell_backend_truncates_oversized_output(tmp_path):
     output = getattr(result, "output", "") or ""
     assert "truncated" in output.lower() or "..." in output, (
         f"output should be truncated, got {len(output)} bytes: {output[:100]!r}..."
+    )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+# ------------------------------------------------- bash probe cache (P1-8, 2026-09-04)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="bash resolution cache is Windows-only")
+def test_bash_cache_keyed_by_shell_config(tmp_path, monkeypatch):
+    """P1-8 (2026-09-04): the bash probe cache was ONE class-level value — the
+    first instance's result shadowed every other instance's [tools].bash_shell
+    config for the whole process (/model, /profile rebuilds included). The
+    cache must be keyed by the configured shell value."""
+    from coderio.agent import deep_loop as dl
+
+    # Fresh _Sub class → fresh class-level cache (the built class is cached in
+    # a module global and would otherwise leak across tests).
+    monkeypatch.setattr(dl, "_SHELL_BACKEND_CLS", None)
+    calls = []
+
+    def fake_detect(configured):
+        calls.append(configured)
+        return f"C:\\fake\\{configured or 'auto'}\\bash.exe"
+
+    monkeypatch.setattr("coderio.tools.bash.detect_shell", fake_detect)
+
+    b1 = dl.make_shell_backend(root_dir=str(tmp_path), bash_shell="shellA")
+    b2 = dl.make_shell_backend(root_dir=str(tmp_path), bash_shell="shellB")
+    assert b1._resolve_bash().endswith("shellA\\bash.exe"), "instance A must get ITS configured shell"
+    assert b2._resolve_bash().endswith("shellB\\bash.exe"), "instance B must get ITS configured shell"
+    # Second resolution hits the per-config cache — no new probe.
+    b1._resolve_bash()
+    b2._resolve_bash()
+    assert sorted(calls) == ["shellA", "shellB"], f"each config must be probed exactly once, got {calls}"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+def test_plain_execute_timeout_returns_promptly(tmp_path):
+    """REGRESSION (2026-09-04 audit P0-6): the plain (sandbox off) execute path
+    used subprocess.run(timeout=...) — its Windows timeout kills only the
+    direct child, so a grandchild holding the pipes made communicate() wait
+    for EOF forever and the agent loop froze. Popen + kill_process_tree + a
+    bounded drain must return exit 124 promptly instead."""
+    import time
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import make_shell_backend
+
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True)
+    start = time.monotonic()
+    resp = backend.execute("sleep 30", timeout=2)
+    elapsed = time.monotonic() - start
+    assert getattr(resp, "exit_code", None) == 124, f"expected exit 124, got: {resp!r}"
+    assert "timed out" in (getattr(resp, "output", "") or "")
+    assert elapsed < 15, f"timeout kill took {elapsed:.1f}s — the subprocess.run hang is back"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+def test_plain_execute_timeout_kills_grandchild(tmp_path):
+    """The timeout path must return near the timeout even when the executed
+    shell leaves descendants behind (bash -c 'sleep 30' → bash → sleep). The
+    old subprocess.run form HUNG forever on Windows; the Popen + tree-kill +
+    no-drain form returns at ~timeout regardless of surviving pipe holders
+    (the timeout path discards output, so there is nothing to drain for)."""
+    import time
+
+    deepagents = pytest.importorskip("deepagents")
+    if not deepagents:
+        return
+
+    from coderio.agent.deep_loop import make_shell_backend
+
+    backend = make_shell_backend(root_dir=str(tmp_path), virtual_mode=True, inherit_env=True)
+    start = time.monotonic()
+    resp = backend.execute("bash -c 'sleep 30'", timeout=2)
+    elapsed = time.monotonic() - start
+    assert getattr(resp, "exit_code", None) == 124
+    assert elapsed < 6, (
+        f"timeout return took {elapsed:.1f}s — a drain window is being "
+        "consumed or the tree kill is hanging (audit P0-6 regression)"
     )
 
 
