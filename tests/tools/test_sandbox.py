@@ -510,3 +510,32 @@ def test_run_with_sandbox_env_forwarded_to_subprocess():
     )
     assert code == 0
     assert "sandbox-value-42" in output, f"env var must be forwarded, got: {output!r}"
+
+
+def test_write_mode_degradation_is_model_visible(monkeypatch, tmp_path):
+    """P1-11 (2026-09-04): a degraded sandbox run must be distinguishable —
+    the output carries an [sandbox unavailable] marker instead of silently
+    looking like a sandboxed run. No real process needed: the fallback
+    subprocess.run is faked."""
+    from coderio.tools import sandbox_runner
+
+    monkeypatch.setattr(sandbox_runner.sys, "platform", "linux")
+    try:
+        from coderio.tools import linux_sandbox
+
+        monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: False)
+    except ImportError:
+        pass  # the loader's own ImportError path degrades too — same marker
+
+    class _FakeProc:
+        returncode = 0
+        stdout = b"hi\n"
+        stderr = b""
+
+    # sandbox_runner imports subprocess lazily inside the function — patch the
+    # stdlib module the function will resolve to.
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _FakeProc())
+    code, out = sandbox_runner.run_with_sandbox("echo hi", cwd=str(tmp_path), mode="write")
+    assert code == 0
+    assert out.startswith("[sandbox unavailable:"), f"degraded run must be marked, got: {out!r}"
+    assert "hi" in out

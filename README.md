@@ -138,7 +138,8 @@ TUI 内输入 `/` 查看全部命令（/resume 恢复会话、/mode 切权限、
 
 ## 已知限制
 
-- Windows 写沙箱当前等价于 job 档（真隔离待 ACL，文档如实标注）；**macOS 无 OS 级沙箱**（bubblewrap 是 Linux 专属，macOS 上沙箱档仅作用于 Linux）——对抗性场景请用 VM
+- Windows 写沙箱当前等价于 job 档（真隔离待 ACL，文档如实标注）；沙箱命令经 `cmd /c` 包装，引号/`$VAR` 语义与 Git Bash 直跑不同；**macOS 无 OS 级沙箱**（bubblewrap 是 Linux 专属，macOS 上沙箱档仅作用于 Linux）——对抗性场景请用 VM
+- Linux 未安装 bubblewrap 时 write 沙箱降级为直接执行：模型输出会带 `[sandbox unavailable]` 标注，且 `auto_allow_if_sandboxed` 自动失效（execute 恢复逐条确认）
 - 黑白名单为防手滑设计（正则可被混淆绕过），对抗性场景用沙箱 / VM
 
 ## 起源

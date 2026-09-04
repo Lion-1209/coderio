@@ -70,6 +70,7 @@ def run_with_sandbox(
     # mode there's no POSIX equivalent of Job Object resource limits without
     # cgroups, so we fall through to plain subprocess (with start_new_session
     # for at least reliable process-group kill).
+    degraded: str | None = None  # set when the configured sandbox can't run
     if mode == "write":
         try:
             from coderio.tools.linux_sandbox import bwrap_available, run_bwrap
@@ -95,8 +96,10 @@ def run_with_sandbox(
                     network_allowed=network_allowed,
                     fs_config=fs_config,
                 )
+            degraded = "bubblewrap not installed"
             _log.warning("sandbox_mode=write but bubblewrap not installed — falling back to plain run")
         except ImportError:
+            degraded = "linux_sandbox module unavailable"
             _log.warning("linux_sandbox not available — falling back to plain run")
 
     # Fallback: plain subprocess with start_new_session (for POSIX process-group kill).
@@ -115,6 +118,12 @@ def run_with_sandbox(
         output = stdout
         if stderr:
             output += f"\n[stderr]\n{stderr}"
+        if degraded:
+            # Model-visible marker (audit P1-11): a degraded sandbox run must
+            # not be indistinguishable from a sandboxed one — the model (and
+            # the user reading the transcript) should know the configured
+            # isolation did NOT apply to this output.
+            output = f"[sandbox unavailable: {degraded} — ran WITHOUT the configured write sandbox]\n{output}"
         if len(output) > max_output_bytes:
             output = output[:max_output_bytes] + f"\n\n... Output truncated at {max_output_bytes} bytes."
         return (proc.returncode, output)

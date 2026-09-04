@@ -42,6 +42,15 @@ WHAT ACTUALLY ISOLATES WRITES ON WINDOWS TODAY: nothing in this module. Use
 the command blacklist (command_policy.py) for accidental-damage prevention,
 or run on Linux with bubblewrap (linux_sandbox.py) for true OS-level
 write isolation. For fully untrusted code, use a VM.
+
+COMMAND SEMANTICS DIVERGENCE (third-party audit M4, documented 2026-09-04):
+sandboxed commands run as ``cmd /c "{command}"`` (CreateProcessAsUserW has
+no shell= handling), while the plain path runs through Git Bash. Quoting,
+``$VAR`` expansion, and single-quote semantics therefore DIFFER between
+sandboxed and unsandboxed execution of the same command string — a model
+that learned bash semantics from plain runs may misbehave here. Not
+switching the sandbox path to bash until CreateProcessAsUserW + bash.exe
+is validated end-to-end (token inheritance, console handles).
 """
 
 from __future__ import annotations
@@ -568,7 +577,17 @@ def run_sandboxed(
             # resume its main thread. Now any children it spawns are in the
             # job too — TerminateJobObject on timeout will kill them all.
             if job is not None and pid:
-                assign_to_job(job, pid)
+                if not assign_to_job(job, pid):
+                    # Third-party audit P1-19 (2026-09-04): the return value
+                    # was ignored — on failure the command ran with NO job
+                    # resource caps and the timeout tree-kill silently dead,
+                    # while the user believed the sandbox was on. Still run
+                    # (availability over strictness), but never silently.
+                    _log.warning(
+                        "win_sandbox: assign_to_job failed for pid %s — running WITHOUT "
+                        "job resource limits; timeout tree-kill will not cover this process",
+                        pid,
+                    )
             # ResumeThread: -1 on error, otherwise the previous suspend count
             # (1 means it was suspended, now running).
             kernel32.ResumeThread(thread_handle)
