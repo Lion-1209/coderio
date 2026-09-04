@@ -8,6 +8,136 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Security — 2026-09-04 third-party audit batch (P0; each fix re-verified by an independent adversarial round, mutation-tested, and runtime-audited)
+
+An external third-party audit (report committed as `PROJECT_REVIEW_2026-09-04.md`)
+found five confirmed issues and three seam breaks where the implementation was
+weaker than the documentation's promise. All fixed and double-checked:
+
+- **P0-1 · command blacklist leaked plain (non-obfuscated) footguns.**
+  `${HOME}` brace expansion, any drive letter (`Remove-Item -Recurse D:\`,
+  `rd /s /q D:\data`) and UNC targets, PowerShell home spellings
+  (`$USERPROFILE` / `$env:USERPROFILE` / `%USERPROFILE%`), the documented
+  symbolic chmod modes (`a+rwx`, `ugo+rwx`) plus `7777`/`1777` supersets,
+  PowerShell `Stop-Computer`/`Restart-Computer`, `diskutil partitionDisk` /
+  `apfs delete*`, the `cp`/`shred`/`wipefs` raw-device family, named-function
+  fork bombs (`bomb(){ bomb|bomb & }; bomb`, newline-call variant), and the
+  `Remove-Item` pipeline form (`ls D:\ | ri -r`) — all blocked now. One false
+  positive fixed in the same pass: `git rm -r D:\proj` was caught by an alias
+  match at any token position; the PowerShell branch now matches only at the
+  segment head.
+- **P0-2 · web_fetch SSRF: shared-address ranges leaked.** `is_global`
+  depends on the CPython version (CVE-2024-4032 reclassified several ranges in
+  3.11.9/3.12.3), so on older 3.11 patch releases the Aliyun internal metadata
+  service (`100.100.200.200`, the classic SSRF payout) was fetchable. Explicit
+  CIDR blocks for 100.64/10, 192.0.0.0/24, 192.88.99.0/24, 198.18.0.0/15 —
+  version-independent — plus the `is_global` catch-all for everything else.
+- **P0-3 · VerifyGate counted `echo foo.py` as verification.** The
+  file-reference branch required only that the command MENTION a written file.
+  Now the segment must actually run it: an interpreter/runner head
+  (`python src/foo.py`, `uv run …`), the file itself as the command
+  (`./foo.py`), or a known verifier — with shell wrappers unwrapped first
+  (`bash -c 'echo foo.py'` is an echo), inline-code flags closing the segment
+  (`python -c "print('foo.py')"`, incl. `python -u -c`), and Windows
+  `.exe` spellings normalized. `cat`/`git diff`/`ls` mentions never verify.
+- **P0-4 · credentials: non-atomic write + corrupt file silently wiped keys.**
+  A crash mid-write truncated the TOML, `read_credentials` treated corrupt
+  files as empty, and the next save persisted that emptiness — every stored
+  key gone. Writes are now atomic (PID-unique temp file, permission-
+  restricted before key bytes land, `os.replace`); a corrupt file is backed up
+  to `.corrupt` before being rebuilt; `UnicodeDecodeError` (non-UTF-8
+  corruption) is caught explicitly — it previously crashed /setup outright.
+- **P0-5 · the Windows session lock was not mutually exclusive.**
+  `msvcrt.locking` locks at the current position and an append-mode handle
+  starts at open-time EOF — a holder appending under the lock grew the file,
+  so a later opener locked a different byte and both processes "held" the
+  lock (reproduced before the fix). The mutex is now byte [0,1) via
+  `seek(0)`; appends still land at the never-locked EOF; unlock targets the
+  range actually held.
+- **P0-6 · default-config execute could hang forever (Windows).** The plain
+  path used `subprocess.run(timeout=...)`, whose Windows timeout kills only
+  the direct child — grandchildren kept the pipes open and `communicate()`
+  waited for EOF indefinitely (the exact bug `tools/bash.py` had fixed; the
+  production path regressed it). Now Popen + `taskkill /T /F` tree kill (Job
+  fallback) + bounded reap, returning exit 124 at ~timeout; the old Job-at-
+  kill-time approach in `win_job` never contained pre-existing grandchildren.
+- **P0-7 · the documented `Z_API_KEY` path guaranteed an auth failure.**
+  Onboarding skip and the headless error both say "set Z_API_KEY", but
+  `_pick_api_key("anthropic")` read only `ANTHROPIC_API_KEY` — and every
+  coding-plan provider is anthropic-kind. `Z_API_KEY` now falls through
+  (Anthropic's own variable keeps precedence).
+
+### Fixed — P1 behavior defects + P2 hygiene (2026-09-04, same audit)
+
+- **P1-8** the bash probe cache was one class-level value: the first
+  instance's result shadowed every other instance's `[tools].bash_shell`
+  config for the whole process. Now keyed by the configured shell.
+- **P1-9** `activate_skill` returned only "Activated skill: X" — the playbook
+  body reached the system prompt one turn LATER (the docstring's
+  `on_activate_skill` callback never existed). The body now rides the tool
+  result (same-turn context), and re-activation re-supplies it (recovery
+  after context compaction).
+- **P1-10** PLAN mode wrote files: every successful `write_todos` mirrored
+  arbitrary todo content to `<project>/.coderio/plan.md` — bypassing the
+  read-only contract and `/undo`. Suppressed under a PLAN gate (todos still
+  work in memory); the PlanGate nudge no longer advertises the mirror there.
+- **P1-11** sandbox degradation is visible and honest: a degraded run
+  (Linux without bubblewrap) prefixes `[sandbox unavailable: …]` to the tool
+  output, and `auto_allow_if_sandboxed` now works only where the sandbox
+  actually provides a boundary — on macOS / Linux-without-bwrap / Linux job
+  mode it is disabled with a printed reason instead of yielding "zero
+  isolation + zero confirmation".
+- **P1-12** checkpoint `/undo` could silently restore an OLDER state: budget
+  eviction had no floor, so a newest snapshot over budget evicted itself.
+  The newest entry is now eviction-proof; files over the whole budget are
+  skipped with a warning; the multi-instance lost-update boundary is
+  documented.
+- **P1-13** TUI wedge: `worker.cancel()` landing between submit and thread
+  start finished the worker without running its `finally`, leaving
+  `_is_running` stuck True (every submit refused until restart). The stale
+  state is now detected and cleared (one resubmit); the in-flight guard is
+  not weakened, and `action_interrupt` no longer claims cancel() can unblock
+  a running thread.
+- **P1-14** the repo trust gate now covers `.coderio/commands/` and
+  `.coderio/agents/` — prompt templates injected into the model verbatim
+  deserve the same first-use confirmation as skills. NOTE for existing users:
+  repos that ship these directories will re-prompt once (trust is
+  content-keyed).
+- **P1-15** explicit sync-only middleware contract: all four production
+  middlewares inherit `SyncOnlyMiddleware`, and a contract test pins that no
+  async surface is defined (an overriding `aafter_model` was tested and
+  breaks even the sync path — langgraph wires the node differently).
+- **P1-18** multimodal prompts were `str(list)`'d in three places — hook
+  rejection persisted base64 garbage into the session (prompt text lost),
+  `/export` leaked image blobs into markdown, and the TUI encoded every
+  image twice per message. New `session.message.text_of_content` is the
+  single text view; `build_user_content` accepts pre-extracted images.
+- **P1-19** `win_sandbox` now checks `assign_to_job`'s return value (a
+  failure previously meant no resource caps and a dead timeout tree-kill,
+  silently); the `cmd /c` quoting/`$VAR` divergence between sandboxed and
+  plain runs is documented in the module docstring and README.
+- **P2 hygiene**: `neutralize_base_prompt` removed (deepagents 0.7.6
+  deprecated `BASE_AGENT_PROMPT` with zero internal consumption — the call
+  was a no-op that raised a LangChainDeprecationWarning every startup);
+  dead `render_markdown`/`render_error`/`render_tool_call` and the ghost
+  `on_truncated` protocol method removed; factory's duplicate custom-provider
+  branch collapsed; `HookSpec` caches its compiled matcher (was a fresh
+  re.compile per tool call per hook); hook `communicate` failures kill and
+  reap the child; model-facing `timeout` args bounded (web_fetch ≤ 600s,
+  bash ≤ 3600s).
+- **docs**: the architecture doc no longer describes the removed hand-written
+  loop (`run_step`/`_execute_turn` pseudocode), the deleted `[context]`
+  config section, or the `_invoke_tool` error-grading table; the data-flow
+  chapter follows the real deepagents middleware path; README/README_en
+  dropped the "auto-compaction (60% window trigger)" claim (no such knob);
+  the third-party report itself is committed as
+  `PROJECT_REVIEW_2026-09-04.md`.
+- **CI**: new `MCP extra smoke` leg (ubuntu/py3.12) installs the mcp extra
+  from the frozen lock and runs the loader tests against real adapters —
+  `load_mcp_tools_sync` had never been executed by any test or CI job.
+  Surfaced (and fixed) a pre-existing mypy error that only appears with the
+  py.typed adapters installed.
+
 ### Added — 2026-09-03 review batch
 - **Confirm diff preview**: CONFIRM-mode prompts for write_file / edit_file /
   multi_edit render a unified diff of the change (matching the real tool

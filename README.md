@@ -47,7 +47,7 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 
 - 四级权限（plan 只读 / confirm 逐项确认 / auto_edit / full）
 - 命令黑名单 + 白名单（防手滑）；Linux bubblewrap OS 级沙箱（防越界写）
-- 仓库配置首次信任确认（防克隆恶意仓库）；web_fetch SSRF 防护
+- 仓库配置首次信任确认（防克隆恶意仓库）——config.toml、.mcp.json、skills、自定义命令与自定义 agent 全部纳入；web_fetch SSRF 防护
 - 黑白名单是**防手滑不是防对抗**——对抗性防护靠沙箱 + 权限，恶意代码请用 VM
 
 confirm 模式下每次写入都是一次按键的选择，不读术语、不猜含义：
@@ -91,14 +91,14 @@ coderio run "统计 src/ 下的 Python 行数并总结" --quiet
 - **自定义 slash 命令**：`.coderio/commands/*.md`（项目级/用户级）把提示词模板变成 `/命令`，`$ARGUMENTS` 占位符替换，内置命令不可被遮蔽
 - **自定义子代理**：`.coderio/agents/*.md` 定义 `task(subagent_type=...)` 可调的专属人格——只定制"是谁"，能力恒为只读栈
 - **文件回滚**：agent 的每次结构化写盘自动快照，`/undo` 一键逐级恢复（改坏文件不再可怕）
-- **计划产物**：任务清单自动镜像到 `.coderio/plan.md`，你手动编辑它，下一轮 agent 自动采纳你的版本
+- **计划产物**：任务清单自动镜像到 `.coderio/plan.md`，你手动编辑它，下一轮 agent 自动采纳你的版本（PLAN 只读模式下不落盘）
 - **headless 模式**：`coderio run "任务"` 单次运行（CI / 脚本 / benchmark），退出码分级
 - **MCP 支持**：`.mcp.json`（Claude Code 兼容格式）接入外部工具，`coderio mcp` 命令行管理
 - **生命周期 hooks**：`[[hooks]]` 在 PreToolUse / PostToolUse / UserPromptSubmit 等事件执行你的命令（exit 2 = 阻断），IO 契约与 Claude Code 兼容
 - **skills 三层加载**：bundled + 用户 + 项目层，渐进披露省上下文
 - **上下文治理**：deepagents 自动摘要压缩 + 大块 offload、sqlite 检查点跨轮持久化
 - **子 agent**：research（只读，双重强制）+ general-purpose（继承主 agent 全部安全层）
-- **工程纪律**：1080+ 测试、覆盖率 CI 卡 75% 下限、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
+- **工程纪律**：1280+ 测试、覆盖率 CI 卡 75% 下限、mypy 硬门、uv.lock 锁定、3 OS × 2 Python CI 矩阵
 
 <details>
 <summary><b>配置示例</b>（点击展开）</summary>

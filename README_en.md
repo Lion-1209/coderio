@@ -2,8 +2,8 @@
 
 [中文](README.md) | **English**
 
-> The agent claims "done" without running the tests? coderio's harness stops it.
-> A local coding agent with **native Zhipu GLM & StepFun Step coding-plan support** — four-tier permissions, layered sandbox, MCP, lifecycle hooks, and an interactive TUI.
+> The agent claims "done" without running the tests? coderio's harness stops it — system-level enforcement, not prompt politeness.
+> A fully open-source local coding agent that runs on **your** endpoint: native Zhipu GLM & StepFun coding-plan support, any Anthropic-protocol or OpenAI-compatible API, four-tier permissions, a layered sandbox, MCP, lifecycle hooks, and an interactive TUI.
 
 ![demo](demo.gif)
 
@@ -20,30 +20,32 @@ Optional: MCP external tools (`.mcp.json`) need an extra — `pip install "coder
 
 ## Why coderio
 
-The shared weakness of coding agents: **the model says "I'm done" and you just have to trust it**. coderio turns that sentence into a structural constraint—
+The shared weakness of coding agents: **the model says "I'm done" and you just have to trust it**. Most agents treat that as a prompting problem — coderio treats it as an enforcement problem. The harness holds the termination decision and checks tool-call ground truth (what actually ran, what actually got read) before a turn is allowed to end.
 
-### The Four Gates: the agent can't lie to you
+### The Four Gates: the agent can't talk its way past the harness
 
 | Gate | Behavior |
 |---|---|
-| **VerifyGate** | Wrote code, never ran it, wants to finish → intercepted, forced to continue. Parses real exit codes — **a failing test run does NOT count as verified** |
+| **VerifyGate** | Wrote code, never ran it, wants to finish → intercepted, forced to continue. Parses real exit codes — **a failing test run does NOT count as verified**, and `echo app.py` doesn't count as "running it" |
 | **CompletionGate** | Declares done with pending todos → intercepted |
-| **GroundingGate** | Cites files it never read → intercepted |
+| **GroundingGate** | Cites files it never actually read → intercepted |
 | **PlanGate** | Writes code without a todo list → soft nudge |
 
-Not a prompt-level soft rule — a system-level control based on tool-call ground truth. Built-in, with escalating enforcement and exit-code parsing — rare among terminal coding agents.
+Not prompt-level soft rules — a system-level control based on tool-call ground truth, with escalating enforcement: the agent is force-continued twice, then released with a loud warning. Never infinite, never silent.
 
 ![harness intercept: the model claims done, unverified](docs/images/harness-warn.svg)
 
-### Native Chinese coding-plan support
+### Where coderio fits
 
-Zhipu **GLM Coding Plan** and StepFun **Step Plan** work out of the box (direct Anthropic-protocol connection) — your subscription quota runs a local agent, no proxies, no middle layer. Also supports OpenAI / Anthropic / Ollama / any OpenAI-compatible endpoint, with multi-profile switching.
+- **Your endpoint, no middleman.** Bring the API you already pay for: Zhipu **GLM Coding Plan** and StepFun **Step Plan** connect directly over the Anthropic protocol (subscription quota runs a local agent — no proxy layer), and OpenAI / Anthropic / Ollama / any OpenAI-compatible endpoint work the same way, with multi-profile switching.
+- **Enforcement, not vibes.** Verified completion, trust-gated repo config, four-tier permissions, a command blacklist for accident prevention, SSRF-protected web_fetch — each layer isolated in its own module.
+- **A reference you can actually read.** A layered monolith (~16k lines of Python) where harness, permissions, sandbox and trust are separate, individually tested modules — built as a working reference for people building their own agents.
 
 ### Layered security, honestly stated
 
 - Four permission tiers (plan read-only / confirm per-action / auto_edit / full)
 - Command blacklist + whitelist (accident prevention); Linux bubblewrap OS sandbox (boundary enforcement)
-- First-use repo-config trust confirmation (hostile-repo protection); web_fetch SSRF protection
+- First-use repo-config trust confirmation — `config.toml`, `.mcp.json`, skills, **custom commands and custom agents** are all gated (hostile-repo protection); web_fetch SSRF protection
 - The blacklist/whitelist are **accident prevention, not adversarial defense** — adversarial protection comes from the sandbox + permissions; use a VM for hostile code
 
 In confirm mode, every write is one keystroke away from allow / deny / custom reply:
@@ -87,14 +89,14 @@ coderio run "count the Python lines under src/ and summarize" --quiet
 - **Custom slash commands**: `.coderio/commands/*.md` (project/user layers) turn prompt templates into `/commands` with `$ARGUMENTS` substitution; built-ins can never be shadowed
 - **Custom subagents**: `.coderio/agents/*.md` define personas invokable via `task(subagent_type=...)` — you customize WHO the agent is, its capabilities stay on the read-only stack
 - **File rollback**: every structured agent write is auto-checkpointed; `/undo` reverts step by step (a bad edit is one command from gone)
-- **Plan artifact**: the task list auto-mirrors to `.coderio/plan.md`; edit it by hand and the agent adopts your version at the next turn
+- **Plan artifact**: the task list auto-mirrors to `.coderio/plan.md`; edit it by hand and the agent adopts your version at the next turn (read-only PLAN mode doesn't write it)
 - **Headless mode**: `coderio run "task"` one-shot execution (CI / scripts / benchmarks) with graded exit codes
 - **MCP support**: connect external tools via `.mcp.json` (Claude Code-compatible format), managed with `coderio mcp`
 - **Lifecycle hooks**: `[[hooks]]` run your commands at PreToolUse / PostToolUse / UserPromptSubmit (exit 2 = block) — IO contract compatible with Claude Code
 - **Three-layer skills**: bundled + user + project, progressive disclosure saves context
 - **Context governance**: deepagents auto-summarization + large-block offload, sqlite checkpoints across turns
 - **Subagents**: research (read-only, double-enforced) + general-purpose (inherits the main agent's full security stack)
-- **Engineering discipline**: 1080+ tests, coverage gated at 75% in CI, mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
+- **Engineering discipline**: 1280+ tests, coverage gated at 75% in CI, mypy hard gate, uv.lock, 3 OS × 2 Python CI matrix
 
 <details>
 <summary><b>Config example</b> (click to expand)</summary>
@@ -134,7 +136,8 @@ Type `/` inside the TUI for all commands (/resume sessions, /mode permissions, /
 
 ## Known limitations
 
-- The Windows write-sandbox currently equals job mode (true isolation awaits the ACL work — documented honestly); **macOS has no OS-level sandbox** (bubblewrap is Linux-only, so the sandbox tiers only take effect on Linux) — use a VM for adversarial scenarios
+- The Windows write-sandbox currently equals job mode (true isolation awaits the ACL work — documented honestly); sandboxed commands run through `cmd /c`, so quoting/`$VAR` semantics differ from the Git Bash plain path; **macOS has no OS-level sandbox** (bubblewrap is Linux-only) — use a VM for adversarial scenarios
+- Where a sandbox can't deliver (Linux without bubblewrap), degradation is explicit: tool output is marked `[sandbox unavailable: …]`, and `auto_allow_if_sandboxed` is disabled — execute prompts per command instead of running with "zero isolation + zero confirmation"
 - Blacklist/whitelist are accident-prevention by design (regex can be bypassed by obfuscation); use the sandbox / a VM for adversarial scenarios
 
 ## Origin

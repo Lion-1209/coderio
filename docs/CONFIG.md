@@ -63,8 +63,8 @@ API key 不写在 config 里，按 `provider_id` 存凭据文件（见下文）�
 | `network_allowed` | bool，`true` | `false` = 离线模式（web_fetch / web_search 直接拒绝） |
 | `whitelist_mode` | bool，`false` | `true` = 白名单模式：首个 token 不在允许集合里的命令进入确认流程（full 模式仍放行），不是硬阻断 |
 | `allowed_commands` | list[str]，`[]` | 白名单追加（仅 `whitelist_mode = true` 时生效）。如 `["docker", "kubectl"]` |
-| `sandbox_mode` | str，`"off"` | `off` / `job`（进程树资源限制 + 可靠杀死）/ `write`（Linux bubblewrap 真写隔离）。**Windows 上 `write` 目前等价于 `job`**，无文件写隔离——启动时会有显式警告 |
-| `auto_allow_if_sandboxed` | bool，`false` | 沙箱开启时 execute 免确认。**Windows 上 `write` 档不隔离写盘**，此组合等于移除唯一的门——启动会警告。黑名单仍然生效 |
+| `sandbox_mode` | str，`"off"` | `off` / `job`（进程树资源限制 + 可靠杀死）/ `write`（Linux bubblewrap 真写隔离）。**Windows 上 `write` 目前等价于 `job`**，无文件写隔离——启动时会有显式警告；**macOS 上沙箱档不生效**（无 OS 级沙箱）。沙箱无法提供而降级的场景（如 Linux 未装 bwrap）会在工具输出带 `[sandbox unavailable]` 标注 |
+| `auto_allow_if_sandboxed` | bool，`false` | 沙箱**在本平台确实提供边界**时 execute 免确认。平台感知：macOS / Linux 未装 bwrap / Linux `job` 档这三类"沙箱不生效"的组合下自动失效（execute 恢复逐条确认，并打印原因），不再出现"零隔离 + 零确认"。**Windows 上 `write` 档不隔离写盘**，此组合仍等于移除唯一的门——启动会警告。黑名单始终生效 |
 | `sandbox_fs` | 表（见下） | Linux bubblewrap 文件系统隔离四元组；Windows 忽略 |
 
 ### [tools.sandbox_fs]（四元组，Linux bwrap only）

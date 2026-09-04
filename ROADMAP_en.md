@@ -20,7 +20,7 @@ first to align on direction.
 Fixes over features. The current focus is backing the "reliable" claim with
 real evidence:
 
-- **Nightly eval against real providers**. The 1000+ existing tests mock the
+- **Nightly eval against real providers**. The 1200+ existing tests mock the
   model layer — they cannot prove compatibility with real provider streaming,
   tool-call shapes, or rate-limit behavior. The plan is automated
   verification against at least Zhipu and StepFun, as a regular pre-release
@@ -32,6 +32,11 @@ real evidence:
   constrains resources, and the write tier is equivalent to job — this is
   the biggest known shortcoming, documented honestly. The plan is true
   file-write isolation via Windows ACLs.
+- **Adversarial review as standard procedure**. Since 2026-09-04 every
+  release batch ships with an independent adversarial review (assume every
+  claim is false) + mutation verification (reintroduce the bug, confirm the
+  tests actually go red). The first round's haul is in the CHANGELOG's
+  audit batch.
 
 ## Next — up next
 
