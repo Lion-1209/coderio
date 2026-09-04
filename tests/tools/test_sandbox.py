@@ -539,3 +539,58 @@ def test_write_mode_degradation_is_model_visible(monkeypatch, tmp_path):
     assert code == 0
     assert out.startswith("[sandbox unavailable:"), f"degraded run must be marked, got: {out!r}"
     assert "hi" in out
+
+
+# ------------------------- win_sandbox init-failure degradation (release gate 2026-09-04)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_finalize_run_degrades_on_init_failure_ntstatus(monkeypatch):
+    """A child dying during initialization (NTSTATUS 0xC0000142 family, zero
+    output) means the restricted-token launch is broken in this environment —
+    run_sandboxed must degrade to a visibly-marked plain run instead of
+    returning a mysterious crash code (observed on a windows-latest runner
+    image roll: every sandboxed launch died at cmd.exe DLL init)."""
+    from coderio.tools import win_sandbox
+
+    def fake_plain(command, *, cwd, timeout, max_output_bytes):
+        return (0, "[sandbox unavailable: restricted-token launch failed — ran WITHOUT the sandbox]\nplain-ok\n")
+
+    monkeypatch.setattr(win_sandbox, "_run_plain_fallback", fake_plain)
+    code, out = win_sandbox._finalize_run(
+        "echo x", cwd=".", timeout=10, max_output_bytes=100_000, exit_code=3221225794, output=""
+    )
+    assert code == 0
+    assert "plain-ok" in out and "sandbox unavailable" in out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_finalize_run_keeps_real_nonzero_exit(monkeypatch):
+    """A command that legitimately exits nonzero keeps its real exit code —
+    the fallback must not fire (re-running would double its side effects)."""
+
+    from coderio.tools import win_sandbox
+
+    def must_not_fire(*a, **k):
+        raise AssertionError("fallback must not fire for a real run")
+
+    monkeypatch.setattr(win_sandbox, "_run_plain_fallback", must_not_fire)
+    # Ordinary nonzero exit with output: passthrough.
+    code, out = win_sandbox._finalize_run(
+        "broken-tool", cwd=".", timeout=10, max_output_bytes=100_000, exit_code=1, output="some error"
+    )
+    assert (code, out) == (1, "some error")
+    # NTSTATUS exit but WITH output: the command ran and crashed — keep it.
+    code, out = win_sandbox._finalize_run(
+        "crasher", cwd=".", timeout=10, max_output_bytes=100_000, exit_code=3221225794, output="crash log"
+    )
+    assert (code, out) == (3221225794, "crash log")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_run_plain_fallback_runs_and_marks():
+    """The plain fallback really runs the command and prefixes the marker."""
+    code, out = win_sandbox._run_plain_fallback("echo plain-fallback-ok", cwd=".", timeout=10, max_output_bytes=100_000)
+    assert code == 0
+    assert out.startswith("[sandbox unavailable:")
+    assert "plain-fallback-ok" in out

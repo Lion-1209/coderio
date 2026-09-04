@@ -189,7 +189,7 @@ select = ["E", "F", "W", "I", "S"]
 # on Linux, Restricted Token + Job Object on Windows) is the security boundary,
 # not subprocess filtering. S108 on linux_sandbox is the bwrap "--tmpfs /tmp"
 # arg — that path is INSIDE the namespace (a private tmpfs), never the host /tmp.
-"src/coderio/tools/win_sandbox.py" = ["S602", "S603"]
+"src/coderio/tools/win_sandbox.py" = ["S602", "S603", "S607"]
 "src/coderio/tools/linux_sandbox.py" = ["S603", "S108"]
 "src/coderio/tools/sandbox_runner.py" = ["S603"]
 # REPL onboarding check: S110 — best-effort config parse, failure means skip.

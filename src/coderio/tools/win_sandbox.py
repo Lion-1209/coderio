@@ -416,6 +416,89 @@ def _read_pipe_to_eof(pipe_handle: int, max_bytes: int = 512_000) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+# NTSTATUS codes meaning "the process died during initialization" —
+# STATUS_DLL_INIT_FAILED, STATUS_DLL_NOT_FOUND, STATUS_ACCESS_DENIED,
+# STATUS_ACCESS_VIOLATION. A child exiting with one of these and ZERO output
+# never really ran: the restricted-token launch itself is broken in this
+# environment (release-gate 2026-09-04: a windows-latest runner image roll
+# broke every sandboxed launch this way — cmd.exe died at DLL init, output
+# empty, while Job creation and assignment both succeeded).
+_NTSTATUS_INIT_FAILURES = frozenset({3221225794, 3221225781, 3221225506, 3221225477})
+
+
+def _run_plain_fallback(command: str, *, cwd: str, timeout: int, max_output_bytes: int) -> tuple[int, str]:
+    """Run the command WITHOUT the sandbox, visibly marked.
+
+    Degrades with Popen + taskkill tree kill (never a blind drain): the plain
+    path must not reintroduce the timeout hang the sandbox path already
+    solved (audit P0-6).
+    """
+    import subprocess
+
+    _log.warning("win_sandbox unusable in this environment — running the command WITHOUT the sandbox")
+    marker = "[sandbox unavailable: restricted-token launch failed — ran WITHOUT the sandbox]\n"
+    try:
+        proc = subprocess.Popen(
+            ["cmd", "/c", command],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+        )
+        try:
+            stdout_b, stderr_b = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            from coderio.tools.win_job import kill_process_tree
+
+            kill_process_tree(proc)
+            proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except Exception:  # noqa: S110, BLE001 — best-effort reap
+                pass
+            return (124, f"{marker}Command timed out after {timeout}s")
+        stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+        stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+        output = stdout
+        if stderr:
+            output += f"\n[stderr]\n{stderr}"
+        if len(output) > max_output_bytes:
+            output = output[:max_output_bytes] + f"\n\n... Output truncated at {max_output_bytes} bytes."
+        return (proc.returncode, marker + output)
+    except Exception as e:  # noqa: BLE001
+        return (1, f"{marker}Execution error: {e}")
+
+
+def _finalize_run(
+    command: str,
+    cwd: str,
+    *,
+    timeout: int,
+    max_output_bytes: int,
+    exit_code: int,
+    output: str,
+) -> tuple[int, str]:
+    """Post-process a sandboxed run: truncation + launch-failure degradation.
+
+    A child that exits with an initialization-failure NTSTATUS and ZERO output
+    never really ran — the sandbox launch is broken in this environment.
+    Degrade to a plain run with a visible marker (P1-11 principle: degradation
+    is honest, the work still happens). Only the well-known init-failure
+    NTSTATUS codes trigger this: a command that legitimately exits nonzero
+    keeps its real exit code — re-running it would double its side effects.
+    """
+    if exit_code in _NTSTATUS_INIT_FAILURES and not output.strip():
+        _log.warning(
+            "win_sandbox: child died during initialization (exit %#010x) — the restricted-token "
+            "launch is not usable here; falling back to a plain run",
+            exit_code,
+        )
+        return _run_plain_fallback(command, cwd=cwd, timeout=timeout, max_output_bytes=max_output_bytes)
+    if len(output) > max_output_bytes:
+        output = output[:max_output_bytes] + f"\n\n... Output truncated at {max_output_bytes} bytes."
+    return (exit_code, output)
+
+
 def run_sandboxed(
     command: str,
     cwd: str,
@@ -632,9 +715,14 @@ def run_sandboxed(
         output = stdout
         if stderr:
             output += f"\n[stderr]\n{stderr}"
-        if len(output) > max_output_bytes:
-            output = output[:max_output_bytes] + f"\n\n... Output truncated at {max_output_bytes} bytes."
-        return (exit_code.value, output)
+        return _finalize_run(
+            command,
+            cwd,
+            timeout=timeout,
+            max_output_bytes=max_output_bytes,
+            exit_code=exit_code.value,
+            output=output,
+        )
 
     except Exception as e:  # noqa: BLE001 — never crash the agent
         _log.warning("run_sandboxed failed (degrading to plain subprocess): %s", e)

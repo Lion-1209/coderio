@@ -115,7 +115,11 @@ weaker than the documentation's promise. All fixed and double-checked:
 - **P1-19** `win_sandbox` now checks `assign_to_job`'s return value (a
   failure previously meant no resource caps and a dead timeout tree-kill,
   silently); the `cmd /c` quoting/`$VAR` divergence between sandboxed and
-  plain runs is documented in the module docstring and README.
+  plain runs is documented in the module docstring and README. Found during
+  the release gate itself: when the restricted-token launch dies during
+  initialization (NTSTATUS 0xC0000142 family with zero output — observed on
+  a windows-latest runner image roll), `run_sandboxed` now degrades to a
+  visibly-marked plain run instead of returning a mysterious crash code.
 - **P2 hygiene**: `neutralize_base_prompt` removed (deepagents 0.7.6
   deprecated `BASE_AGENT_PROMPT` with zero internal consumption — the call
   was a no-op that raised a LangChainDeprecationWarning every startup);
