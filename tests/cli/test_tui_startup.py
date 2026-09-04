@@ -332,3 +332,43 @@ def test_tui_gate_non_file_tool_gets_no_detail(tmp_path):
     gate = TuiPermissionGate(PermissionMode.CONFIRM, tui=_FakeTui(), workdir=str(tmp_path))
     gate._ask("execute", {"command": "pytest -q"})
     assert seen["detail"] is None, "shell commands have no diff to preview"
+
+
+@pytest.mark.asyncio
+async def test_submit_recovers_from_cancel_before_start_wedge():
+    """P1-13 (2026-09-04): worker.cancel() landing between _spawn_turn and the
+    thread entering _run finishes the worker WITHOUT running its finally —
+    _is_running stays True and every later submit bounces. The app must
+    recover (reset the flag and accept the turn) instead of wedging."""
+    from coderio.cli.tui import CoderioTUI
+
+    class _DeadWorker:
+        is_finished = True
+
+    app = CoderioTUI()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        app._is_running = True
+        app._agent_worker = _DeadWorker()
+        ok = app._spawn_turn("hello after wedge")
+        assert ok is False, "stale flag must be cleared, but no second turn may spawn"
+        assert app._is_running is False, "the stale flag must be reset (de-wedged)"
+
+
+@pytest.mark.asyncio
+async def test_submit_still_refuses_when_turn_actually_running():
+    """The wedge recovery must not weaken the in-flight guard: a LIVE worker
+    (not finished) still refuses the second submit."""
+    from coderio.cli.tui import CoderioTUI
+
+    class _LiveWorker:
+        is_finished = False
+
+    app = CoderioTUI()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        app._is_running = True
+        app._agent_worker = _LiveWorker()
+        ok = app._spawn_turn("second submit")
+        assert ok is False, "a live turn must still refuse a second submit"
+        assert app._is_running is True

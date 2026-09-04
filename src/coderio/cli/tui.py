@@ -638,8 +638,22 @@ class CoderioTUI(App):
         flipped from the worker thread, too late to gate a rapid resubmit).
         """
         if self._is_running:
-            self._stream.queue_static("⏳ 回合进行中——按 Esc 中断当前任务后再提交。", "yellow")
-            return False
+            worker = self._agent_worker
+            if worker is not None and getattr(worker, "is_finished", False):
+                # Cancel-before-start edge (P1-13, release-gate round
+                # 2026-09-04): worker.cancel() landing between _spawn_turn and
+                # the thread actually entering _run marks the worker finished
+                # WITHOUT running its body — the `finally: _is_running = False`
+                # never executes, and every later submit would bounce off this
+                # guard forever. Clear the stale flag and ask for one
+                # resubmit: wedging the app is worse, double-spawning a turn
+                # into a finished worker's race window is worse still.
+                self._is_running = False
+                self._stream.queue_static("检测到上一回合状态未复位（可能被中断），请重新提交。", "yellow")
+                return False
+            else:
+                self._stream.queue_static("⏳ 回合进行中——按 Esc 中断当前任务后再提交。", "yellow")
+                return False
         self._is_running = True
         self._add_text(f"▸ you {line}", style="bold cyan")
         if not self._on_input:
@@ -732,10 +746,16 @@ class CoderioTUI(App):
     def action_interrupt(self) -> None:
         """Interrupt the currently-running agent turn (bound to Esc + Ctrl+C).
 
-        Sets the _interrupted flag (checked by is_interrupted() between rounds)
-        and cancels the worker as a backup. The agent thread sees the flag at
-        the next safe checkpoint (start of a new ReAct round) and raises
-        InterruptedError, which _run catches to show a '⚠ 已中断' panel.
+        Sets the _interrupted flag (checked by is_interrupted() between rounds):
+        the agent thread sees the flag at the next safe checkpoint (start of a
+        new round) and raises InterruptedError, which _run catches to show a
+        '⚠ 已中断' panel. The flag is the ONLY real stop mechanism — the Python
+        thread inside the worker cannot be force-stopped (see _spawn_turn).
+
+        cancel() below only affects a worker that hasn't STARTED yet (it
+        prevents a not-yet-running turn from ever beginning). That edge
+        finishes the worker without running _run's finally, leaving
+        _is_running stuck — _spawn_turn recovers from that state.
 
         If no agent is running, this is a no-op (Esc does nothing instead of
         quitting the TUI — the old behavior was ctrl+c=quit which killed the
@@ -744,9 +764,6 @@ class CoderioTUI(App):
         if not self._is_running:
             return  # nothing to interrupt
         self._stream.request_interrupt()
-        # Cancel the worker as a backup — this unblocks subprocess.run calls
-        # and model.stream() that might be waiting on I/O. The flag handles
-        # the clean exit; cancel handles the "stuck in I/O" case.
         if self._agent_worker is not None:
             try:
                 self._agent_worker.cancel()
