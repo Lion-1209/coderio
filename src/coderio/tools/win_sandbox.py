@@ -438,8 +438,13 @@ def _run_plain_fallback(command: str, *, cwd: str, timeout: int, max_output_byte
     _log.warning("win_sandbox unusable in this environment — running the command WITHOUT the sandbox")
     marker = "[sandbox unavailable: restricted-token launch failed — ran WITHOUT the sandbox]\n"
     try:
+        # Mirror the sandbox path's exact cmd convention: the WHOLE command
+        # wrapped in one outer quote pair, as a raw command line. A list-arg
+        # would let subprocess quote the command as a single argument and
+        # cmd's quote-stripping then mangles multi-token commands — observed
+        # as `powershell -Command "Start-Sleep 10"` exiting instantly with 0.
         proc = subprocess.Popen(
-            ["cmd", "/c", command],
+            f'cmd /c "{command}"',
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

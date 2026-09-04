@@ -594,3 +594,35 @@ def test_run_plain_fallback_runs_and_marks():
     assert code == 0
     assert out.startswith("[sandbox unavailable:")
     assert "plain-fallback-ok" in out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_run_plain_fallback_preserves_quoting_for_multitoken_commands():
+    """The fallback must wrap the command the same way the sandbox path does
+    (one outer quote pair on the raw cmd line). A list-arg form let cmd's
+    quote-stripping shred multi-token commands: `powershell -Command
+    "Start-Sleep -Seconds 10"` exited instantly with 0 instead of sleeping
+    (release gate 2026-09-04, second failure round)."""
+    import time
+
+    start = time.monotonic()
+    code, out = win_sandbox._run_plain_fallback(
+        'powershell -Command "Start-Sleep -Seconds 10"', cwd=".", timeout=2, max_output_bytes=100_000
+    )
+    elapsed = time.monotonic() - start
+    assert code == 124, f"expected timeout 124, got {code}: {out!r}"
+    assert elapsed < 6, f"timeout kill took {elapsed:.1f}s"
+    assert "[sandbox unavailable" in out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only sandbox path")
+def test_run_plain_fallback_truncates_multitoken_output():
+    """Same quoting rule, output side: a multi-token powershell producing 2KB
+    must be truncated at the cap (marker + truncation note present)."""
+    code, out = win_sandbox._run_plain_fallback(
+        "powershell -Command \"'x' * 2000\"", cwd=".", timeout=30, max_output_bytes=200
+    )
+    assert code == 0
+    assert "[sandbox unavailable" in out
+    assert "truncated" in out.lower()
+    assert len(out) < 200 + 200  # marker + cap + note, not the full 2KB
