@@ -144,7 +144,9 @@ def _validate_url_host(url: str) -> str | None:
 
 class WebFetchArgs(BaseModel):
     url: str = Field(description="URL to fetch (public internet, http/https only).")
-    timeout: int = Field(default=20, description="Request timeout in seconds.")
+    # Upper bound (P2, 2026-09-04): the model could pass timeout=10**9 and
+    # hold the whole turn hostage; 600s covers any legitimate slow fetch.
+    timeout: int = Field(default=20, ge=1, le=600, description="Request timeout in seconds (1-600).")
 
 
 class WebFetchTool:

@@ -1,10 +1,12 @@
+"""Small rendering helpers shared by the REPL/TUI.
+
+P2 cleanup (2026-09-04): render_markdown / render_error / render_tool_call
+were removed — they had zero production callers (only their own test file
+imported them); the real panels live inline in stream.py / tui.py with
+context-specific styling.
+"""
+
 from __future__ import annotations
-
-from typing import Any
-
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.text import Text
 
 
 def mask_key(key: str) -> str:
@@ -13,16 +15,3 @@ def mask_key(key: str) -> str:
     if not key or len(key) <= 8:
         return "****"
     return f"****{key[-4:]}"
-
-
-def render_markdown(text: str):
-    return Panel(Markdown(text), title="coderio", border_style="blue")
-
-
-def render_error(message: str):
-    return Panel(Text(message, style="red"), title="error", border_style="red")
-
-
-def render_tool_call(name: str, args: dict[str, Any]):
-    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    return Text(f"● {name}({args_str})", style="cyan")

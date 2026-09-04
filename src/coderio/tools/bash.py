@@ -19,7 +19,9 @@ _WIN_CANDIDATES = (
 
 class BashArgs(BaseModel):
     command: str = Field(description="The shell command to execute.")
-    timeout: int = Field(default=120, description="Timeout in seconds.")
+    # Upper bound (P2, 2026-09-04): the model could pass timeout=10**9 and
+    # hold the whole turn hostage; 3600s covers any legitimate long build.
+    timeout: int = Field(default=120, ge=1, le=3600, description="Timeout in seconds (1-3600).")
     run_in_background: bool = Field(default=False, description="Run detached; returns a pid.")
     cwd: str = Field(default="", description="Working directory for the command.")
 

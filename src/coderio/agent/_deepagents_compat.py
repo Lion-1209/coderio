@@ -56,26 +56,12 @@ def get_state_todos(state: Any) -> list | None:
     return getattr(state, TODOS_STATE_KEY, None)
 
 
-def neutralize_base_prompt() -> bool:
-    """Set deepagents' BASE_AGENT_PROMPT to empty string.
-
-    create_deep_agent appends BASE_AGENT_PROMPT after the caller's system_prompt,
-    causing conflicts (e.g. 'explore first' vs 'match effort', macOS path
-    examples vs virtual paths). coderio's prompt covers everything — setting
-    BASE to empty ensures only coderio's prompt reaches the model.
-
-    Returns True if successful, False if the internal API has changed (in
-    which case the duplicate prompt will appear but won't crash).
-    """
-    try:
-        import deepagents.graph as _dg_graph
-
-        if hasattr(_dg_graph, "BASE_AGENT_PROMPT") and _dg_graph.BASE_AGENT_PROMPT:
-            _dg_graph.BASE_AGENT_PROMPT = ""
-            return True
-    except Exception as e:
-        _log.warning("Could not neutralize BASE_AGENT_PROMPT (deepagents API may have changed): %s", e)
-    return False
+# NOTE: neutralize_base_prompt() was removed (P2 cleanup, 2026-09-04).
+# deepagents 0.7.6 deprecated BASE_AGENT_PROMPT with zero internal
+# consumption, so emptying it was a no-op against the model — but the
+# hasattr probe triggered a LangChainDeprecationWarning on every startup.
+# If a future deepagents re-introduces a base prompt, re-add the
+# neutralization here (single compat-layer choke point).
 
 
 def _tool_name(tool: Any) -> str | None:

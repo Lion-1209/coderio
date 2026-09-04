@@ -20,7 +20,10 @@ class StreamHandler(Protocol):
     def on_finish(self) -> None: ...
     # Optional hooks (have attr guards in run_step; NullStream implements them too):
     def on_thinking(self, text: str) -> None: ...  # 'is thinking' indicator
-    def on_truncated(self, stop_reason: str) -> None: ...  # output was cut off
+    # NOTE: on_truncated was removed (P2 cleanup 2026-09-04) — it was a ghost
+    # protocol method: declared here, never produced by any engine path, and
+    # implemented by no stream. Truncation is surfaced inline in tool results
+    # instead. If truncation events are ever needed, re-add with a producer.
     # Harness escalation release: the agent claimed completion despite an
     # unverified write / pending todos, and the gate exhausted its retries.
     def on_harness_warn(self, message: str) -> None: ...

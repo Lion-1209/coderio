@@ -143,14 +143,8 @@ def build_chat_model(cfg: Config, creds_path: Path | str | None = None):
                 f"no base_url is set in config.toml. Either use a known provider_id, "
                 f"or set [model] base_url and provider in config.toml."
             )
-        if kind == "anthropic":
-            return _build_client(
-                kind,
-                model=model_name,
-                base_url=m.base_url,
-                api_key=key,
-                max_tokens=max_tokens,
-            )
+        # (P2 cleanup 2026-09-04: the old `if kind == "anthropic"` branch here
+        # was byte-identical to the fallthrough below — one call suffices.)
         return _build_client(
             kind,
             model=model_name,
