@@ -66,7 +66,12 @@ def discover_repo_configs(search_from: Path | str) -> tuple[Path, list[Path]]:
       - ``.coderio/skills/`` directory (v3 audit #8: project-layer skills enter
         the system prompt on load and may carry ``tools.py`` that is exec'd on
         activation — a repo shipping ONLY skills previously loaded with zero
-        confirmation).
+        confirmation),
+      - ``.coderio/commands/`` and ``.coderio/agents/`` directories (audit
+        2026-09-04 P1-14: project-layer slash-command and agent prompt
+        templates are injected into the model verbatim — same injection
+        surface as skills, which ARE gated; the old scope let a repo ship
+        prompt templates that load with zero confirmation).
 
     Trust scope ⊇ load scope: whatever the loaders will find and apply, this
     finds too.
@@ -91,6 +96,13 @@ def discover_repo_configs(search_from: Path | str) -> tuple[Path, list[Path]]:
     skills_dir = proj / ".coderio" / "skills"
     if skills_dir.is_dir() and any(skills_dir.iterdir()):
         configs.append(skills_dir)
+
+    # Project-layer custom slash commands / agents: prompt templates injected
+    # into the model on load (audit 2026-09-04 P1-14). Same anchor as skills.
+    for extra in ("commands", "agents"):
+        d = proj / ".coderio" / extra
+        if d.is_dir() and any(d.iterdir()):
+            configs.append(d)
 
     # Store key root: the config.toml dir when present (the loader's anchor),
     # else the .mcp.json dir. Same launch point ⇒ same discovered set ⇒ same key.
@@ -223,10 +235,21 @@ def summarize_repo_configs(search_from: Path | str) -> str:
             rel = str(path)
         if path.is_dir():
             # Skills layer: list each skill; mark the ones that execute code.
-            lines.append(f"{rel}/ (project skills)")
-            for skill_dir in sorted(p for p in path.iterdir() if p.is_dir()):
-                marker = " ⚠ executes code (tools.py)" if (skill_dir / "tools.py").is_file() else ""
-                lines.append(f"  skill {skill_dir.name!r}{marker}")
+            if path.name == "skills":
+                lines.append(f"{rel}/ (project skills)")
+                for skill_dir in sorted(p for p in path.iterdir() if p.is_dir()):
+                    marker = " ⚠ executes code (tools.py)" if (skill_dir / "tools.py").is_file() else ""
+                    lines.append(f"  skill {skill_dir.name!r}{marker}")
+                continue
+            # Custom commands / agents layers: list each prompt template —
+            # these are injected into the model verbatim, so the user should
+            # see exactly which files they are trusting (audit P1-14). rglob
+            # matches the fingerprint's recursive hashing (adversarial review
+            # note: nested dirs are trusted by hash, so they must be shown).
+            label = "custom slash commands" if path.name == "commands" else "custom agents"
+            lines.append(f"{rel}/ (project {label})")
+            for f in sorted(p for p in path.rglob("*") if p.is_file()):
+                lines.append(f"  {f.relative_to(path).as_posix()}")
             continue
         lines.append(f"{rel} ({path.stat().st_size} bytes)")
         try:

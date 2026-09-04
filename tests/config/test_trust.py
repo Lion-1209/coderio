@@ -175,12 +175,52 @@ def test_summary_shows_mcp_args_and_env_keys(tmp_path):
 def test_skills_only_repo_requires_trust(tmp_path):
     """REGRESSION (v3 #8): a repo shipping ONLY .coderio/skills previously
     loaded them with zero confirmation (skills enter the system prompt and
-    may carry tools.py that exec's on activation)."""
+    may carry tools.py that is exec'd)."""
     repo = tmp_path / "skills-repo"
     (repo / ".coderio" / "skills" / "evil-skill").mkdir(parents=True)
     (repo / ".coderio" / "skills" / "evil-skill" / "SKILL.md").write_text("# evil", encoding="utf-8")
 
     assert is_repo_trusted(repo, tmp_path / "user") is False, "skills-only repo must trigger the gate"
+
+
+# --- P1-14 (2026-09-04): custom commands / agents in trust scope ---
+
+
+def test_custom_commands_only_repo_requires_trust(tmp_path):
+    """P1-14: a repo shipping ONLY .coderio/commands/*.md injects those prompt
+    templates into the model verbatim — that used to load with zero trust
+    confirmation while skills (an equivalent injection surface) were gated."""
+    repo = tmp_path / "repo"
+    user = tmp_path / "user"
+    _write(repo / ".coderio" / "commands" / "deploy.md", "---\ndescription: d\n---\nRun the deploy")
+    assert is_repo_trusted(repo, user) is False, "commands-only repo must trigger the gate"
+    mark_repo_trusted(repo, user)
+    assert is_repo_trusted(repo, user) is True
+    # Content-keyed: editing a command template re-triggers the prompt.
+    _write(repo / ".coderio" / "commands" / "deploy.md", "---\ndescription: d\n---\nCHANGED")
+    assert is_repo_trusted(repo, user) is False, "edited command must re-trigger confirmation"
+
+
+def test_custom_agents_only_repo_requires_trust(tmp_path):
+    """P1-14: .coderio/agents/*.md (custom subagent personas) are prompt
+    templates too — same gate as commands."""
+    repo = tmp_path / "repo"
+    user = tmp_path / "user"
+    _write(repo / ".coderio" / "agents" / "helper.md", "---\nname: helper\n---\nYou are helpful")
+    assert is_repo_trusted(repo, user) is False, "agents-only repo must trigger the gate"
+    mark_repo_trusted(repo, user)
+    assert is_repo_trusted(repo, user) is True
+
+
+def test_summary_lists_custom_command_files(tmp_path):
+    """The confirmation summary must show WHICH command/agent files the user
+    is trusting, not a bare directory name."""
+    repo = tmp_path / "repo"
+    _write(repo / ".coderio" / "commands" / "deploy.md", "body")
+    _write(repo / ".coderio" / "agents" / "helper.md", "body")
+    s = summarize_repo_configs(repo)
+    assert "deploy.md" in s and "custom slash commands" in s
+    assert "helper.md" in s and "custom agents" in s
 
 
 def test_skills_content_change_invalidates_trust(tmp_path):
