@@ -32,6 +32,7 @@ from coderio.agent.harness_middleware import HarnessMiddleware
 from coderio.agent.hooks import HookRunner
 from coderio.agent.stream import NullStream
 from coderio.session import Message
+from coderio.session.message import text_of_content
 from coderio.session.store import Session
 
 _log = logging.getLogger(__name__)
@@ -823,13 +824,22 @@ def _apply_turn_hooks(hook_runner, user_input, model, session, stream):
         HookRunner._sessions_started.add(session.id)
         ss = hook_runner.fire("SessionStart", {"source": "startup", "model": getattr(model, "model_name", "")})
         if ss.context:
-            user_input = f"{user_input}\n\n[hook context]\n{ss.context}"
+            if isinstance(user_input, str):
+                user_input = f"{user_input}\n\n[hook context]\n{ss.context}"
+            else:
+                # Multimodal content blocks: append the context as an extra
+                # text block — an f-string here would be str(list), dumping
+                # base64 image blobs into the prompt (audit P1-18).
+                user_input = [*user_input, {"type": "text", "text": f"[hook context]\n{ss.context}"}]
 
     # UserPromptSubmit: BEFORE session.append so a block leaves the session
     # clean, and injected context lands in both the persisted message and the
     # model input.
     if hook_runner.has_event("UserPromptSubmit"):
-        prompt_text = user_input if isinstance(user_input, str) else str(user_input)
+        # Hooks get the TEXT parts only (audit P1-18: str(list) on a
+        # multimodal prompt persisted base64 garbage, and on rejection the
+        # persisted "user message" was that garbage with the images lost).
+        prompt_text = text_of_content(user_input)
         ups = hook_runner.fire("UserPromptSubmit", {"prompt": prompt_text})
         if ups.blocked:
             session.append(Message.user(prompt_text))
@@ -838,7 +848,10 @@ def _apply_turn_hooks(hook_runner, user_input, model, session, stream):
                 stream.on_finish()
             return prompt_text, f"Prompt rejected by hook: {ups.reason}"
         if ups.context:
-            user_input = f"{prompt_text}\n\n[hook context]\n{ups.context}"
+            if isinstance(user_input, str):
+                user_input = f"{prompt_text}\n\n[hook context]\n{ups.context}"
+            else:
+                user_input = [*user_input, {"type": "text", "text": f"[hook context]\n{ups.context}"}]
     return user_input, None
 
 
@@ -951,11 +964,12 @@ def run_deep_agent(
     stream = stream or NullStream()
     from deepagents import create_deep_agent
 
-    from coderio.agent._deepagents_compat import neutralize_base_prompt
-
-    # Neutralize deepagents' BASE_AGENT_PROMPT via compat layer (graceful
-    # degradation if the internal API changes).
-    neutralize_base_prompt()
+    # NOTE: the old neutralize_base_prompt() call is gone — deepagents 0.7.6
+    # deprecated BASE_AGENT_PROMPT with ZERO internal consumption, so
+    # neutralizing it was a no-op against the model while triggering a
+    # LangChainDeprecationWarning on every startup (P2 cleanup, 2026-09-04).
+    # If a future deepagents re-introduces a base prompt, revisit via
+    # _deepagents_compat.
 
     project_dir = str(Path(spec.workdir).resolve() if spec.workdir else Path.cwd())
     # --- User hooks (agent/hooks.py): turn-level events fire here, tool-level

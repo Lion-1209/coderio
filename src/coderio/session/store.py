@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from coderio.session.message import Message
+from coderio.session.message import Message, text_of_content
 
 # In-process mutex for appends: the file lock below is BEST-EFFORT (2s
 # timeout, then an unlocked fall-through). Same-process threads hammering
@@ -256,13 +256,9 @@ class Session:
                         continue
                     count += 1  # user/assistant/tool line is a real message
                     if rec.get("role") == "user" and not first_user:
-                        # content may be str or a multimodal block list
-                        c = rec.get("content", "")
-                        if isinstance(c, list):
-                            c = " ".join(
-                                b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"
-                            )
-                        first_user = str(c).strip().replace("\n", " ")
+                        # content may be str or a multimodal block list —
+                        # text_of_content collapses it to the text parts.
+                        first_user = text_of_content(rec.get("content", "")).strip().replace("\n", " ")
             out.append(
                 {
                     "id": p.stem,

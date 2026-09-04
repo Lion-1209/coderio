@@ -72,15 +72,21 @@ def extract_images(text: str) -> list[tuple[str, str, str]]:
     return found
 
 
-def build_user_content(text: str) -> Union[str, list[dict]]:
+def build_user_content(text: str, images: list[tuple[str, str, str]] | None = None) -> Union[str, list[dict]]:
     """Build the user message content: plain str if no images, or a list of
     content blocks (text + image) for multimodal models.
 
     The image blocks use the Anthropic content-block format:
         {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
     which langchain-anthropic's HumanMessage accepts directly.
+
+    ``images`` lets a caller that ALREADY extracted (e.g. the TUI shows the
+    attached-file list) reuse that result instead of paying a second
+    read+encode of every file (audit P1-18: each image was read + base64'd
+    twice per message).
     """
-    images = extract_images(text)
+    if images is None:
+        images = extract_images(text)
     if not images:
         return text
     blocks: list[dict] = [{"type": "text", "text": text}]

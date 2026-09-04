@@ -284,9 +284,10 @@ def _cmd_export(ctx, arg: str) -> CommandResult:
     session = ctx.session
     if session is None or not getattr(session, "messages", None):
         return CommandResult(message="No conversation to export yet.")
-
     # Determine output path: explicit arg, or {session_id}.md in CWD.
     from pathlib import Path
+
+    from coderio.session.message import text_of_content
 
     if arg.strip():
         out_path = Path(arg.strip())
@@ -302,10 +303,12 @@ def _cmd_export(ctx, arg: str) -> CommandResult:
         if m.role == "system":
             continue  # skip phase_timeline / context_summary metadata
         if m.role == "user":
-            content = m.content if isinstance(m.content, str) else str(m.content)
-            lines.append(f"## 🧑 User\n\n{content}\n")
+            # text_of_content: a multimodal prompt's content-block list must
+            # collapse to its text parts — str(list) would dump megabytes of
+            # base64 image data into the export (audit P1-18).
+            lines.append(f"## 🧑 User\n\n{text_of_content(m.content)}\n")
         elif m.role == "assistant":
-            content = m.content if isinstance(m.content, str) else str(m.content)
+            content = text_of_content(m.content)
             lines.append(f"## 🤖 Assistant\n\n{content}\n")
             if m.tool_calls:
                 for tc in m.tool_calls:

@@ -79,3 +79,26 @@ def test_phase_timeline_json_is_serializable():
     )
     assert "explore" in line
     assert "complete" in line
+
+
+# ------------------------------------------------- text_of_content (P1-18)
+
+
+def test_text_of_content_passthrough_and_blocks():
+    from coderio.session.message import text_of_content
+
+    assert text_of_content("plain") == "plain"
+    blocks = [
+        {"type": "text", "text": "analyze"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}},
+        {"type": "text", "text": "this screenshot"},
+    ]
+    assert text_of_content(blocks) == "analyze this screenshot"
+    assert "QUJD" not in text_of_content(blocks), "base64 image data must never leak into text views"
+
+
+def test_text_of_content_non_string_fallback():
+    from coderio.session.message import text_of_content
+
+    assert text_of_content(None) == "None"
+    assert text_of_content(42) == "42"

@@ -5,6 +5,22 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
+def text_of_content(content: str | list) -> str:
+    """Text-only view of a message's content.
+
+    str passes through; a multimodal content-block list collapses to its text
+    parts. Never ``str(list)`` — that would dump megabytes of base64 image
+    data into exports, hook payloads, and persisted messages (audit P1-18:
+    a hook-rejected multimodal prompt was persisted as ``str(list)`` garbage
+    and the images were silently lost).
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
+    return str(content)
+
+
 @dataclass
 class ToolCall:
     id: str

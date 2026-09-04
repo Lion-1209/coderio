@@ -297,3 +297,30 @@ def test_slash_descriptions_covers_every_candidate():
     exit_desc = descs["/exit"]
     assert quit_desc == exit_desc == "exit the REPL"
     assert len(descs) >= len(SLASH_COMMANDS)
+
+
+def test_export_multimodal_persists_text_not_base64(tmp_path):
+    """P1-18 (2026-09-04): a multimodal user message must export its TEXT
+    parts — the old str(list) dumped the base64 blob (and the list repr) into
+    the markdown."""
+    from coderio.session.message import Message
+    from coderio.session.store import Session
+
+    sess = Session.create(tmp_path, {"model": "glm-5.2"})
+    sess.append(
+        Message.user(
+            [
+                {"type": "text", "text": "分析这张截图"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}},
+            ]
+        )
+    )
+    sess.append(Message.assistant("好的"))
+    ctx = _FakeCtx()
+    ctx.session = sess
+    out = tmp_path / "exported-mm.md"
+    handle_slash(f"/export {out}", ctx)
+    content = out.read_text(encoding="utf-8")
+    assert "分析这张截图" in content
+    assert "QUJD" not in content, "base64 image data must not leak into exports"
+    assert "'type': 'image'" not in content, "the raw content-block repr must not leak either"

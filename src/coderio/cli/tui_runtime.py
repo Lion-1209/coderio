@@ -288,7 +288,10 @@ class TuiRuntime:
                 f"📎 已附加 {len(imgs)} 张图片: " + ", ".join(p for p, _, _ in imgs),
                 style="dim",
             )
-        user_content = build_user_content(line)
+        # Reuse the extraction result for content building — the audit found
+        # every image being read + base64-encoded twice per message
+        # (once for the display list, once inside build_user_content).
+        user_content = build_user_content(line, images=imgs)
         # deepagents engine: provides context management, subagents, filesystem.
         # coderio's harness + permission + command review run as middleware.
         # Rebuilt per turn via the SAME factory as headless runs (P2-1):

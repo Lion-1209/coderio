@@ -77,3 +77,27 @@ def test_build_user_content_with_image(tmp_path):
     assert result[1]["type"] == "image"
     assert result[1]["source"]["type"] == "base64"
     assert result[1]["source"]["media_type"] == "image/jpeg"
+
+
+def test_build_user_content_reuses_preextracted_images(tmp_path, monkeypatch):
+    """P1-18: build_user_content(text, images=...) must not re-extract — the
+    TUI already paid one read+encode per image for its attachment list; the
+    old flow encoded every image twice per message."""
+    img = _make_img(tmp_path, "reuse.png")
+    text = f"看 @{img}"
+    pre = extract_images(text)
+
+    calls = []
+
+    def spy_extract(t):
+        calls.append(t)
+        return extract_images(t)
+
+    monkeypatch.setattr("coderio.cli.multimodal.extract_images", spy_extract)
+    content = build_user_content(text, images=pre)
+    assert calls == [], "pre-extracted images must bypass a second extraction"
+    assert isinstance(content, list) and content[0]["type"] == "text"
+    assert content[1] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": pre[0][2]},
+    }

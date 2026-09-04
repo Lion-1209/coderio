@@ -521,3 +521,23 @@ def test_hook_gets_coderio_vars_and_path(tmp_path, monkeypatch):
     assert "True" in out.context, "PATH must stay on the whitelist"
     assert "passed-through" in out.context, "CODERIO_* vars pass through"
     assert str(tmp_path) in out.context, "CODERIO_PROJECT_DIR must carry the project dir"
+
+
+def test_multimodal_rejection_persists_text_not_base64(tmp_path):
+    """P1-18 (2026-09-04): a blocking UserPromptSubmit hook on a MULTIMODAL
+    prompt must persist the prompt's TEXT parts. The old str(list) path
+    persisted the repr of the content-block list — base64 garbage in the
+    session, prompt text gone."""
+    from coderio.agent.deep_loop import _apply_turn_hooks
+    from coderio.session.store import Session
+
+    r = _runner(tmp_path, HookSpec(event="UserPromptSubmit", command="echo blocked >&2; exit 2"))
+    session = Session.create(tmp_path / "sess", {"model": "test"})
+    blocks = [
+        {"type": "text", "text": "analyze this screenshot"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}},
+    ]
+    _apply_turn_hooks(r, blocks, model=None, session=session, stream=None)
+    user_msgs = [m for m in session.messages if m.role == "user"]
+    assert user_msgs and user_msgs[0].content == "analyze this screenshot"
+    assert "QUJD" not in str([m.content for m in session.messages]), "base64 must not be persisted"
