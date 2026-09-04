@@ -25,11 +25,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware, hook_config
+from langchain.agents.middleware.types import hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
 from coderio.agent._deepagents_compat import get_state_todos
 from coderio.agent.harness import Harness, HarnessState
+from coderio.agent.sync_only import SyncOnlyMiddleware
 
 # Engine↔harness tool-name mapping. Single source of truth:
 # tools/taxonomy.py (2026-08-28 audit A2 — six ad-hoc copies drifted apart).
@@ -87,7 +88,7 @@ def _result_to_text(result: Any) -> str:
     return text
 
 
-class HarnessMiddleware(AgentMiddleware):
+class HarnessMiddleware(SyncOnlyMiddleware):
     """Enforces coderio's verification harness inside a deepagents agent loop.
 
     Holds a Harness instance (with its own TodoStore). Observes every tool call

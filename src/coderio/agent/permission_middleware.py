@@ -12,11 +12,12 @@ may execute based on the permission mode.
 
 from __future__ import annotations
 
-from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
+from coderio.agent.sync_only import SyncOnlyMiddleware
 
-class PermissionMiddleware(AgentMiddleware):
+
+class PermissionMiddleware(SyncOnlyMiddleware):
     """Enforces coderio's permission gate inside a deepagents agent loop.
 
     Intercepts every tool call via wrap_tool_call. Calls gate.check() with

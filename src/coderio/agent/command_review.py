@@ -29,8 +29,9 @@ misses degrade gracefully:
 
 from __future__ import annotations
 
-from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
+
+from coderio.agent.sync_only import SyncOnlyMiddleware
 
 # Tools whose CONTENT this middleware inspects. Note deepagents native names.
 # Single source of truth: tools/taxonomy.py (P2-2, 2026-09-02 audit).
@@ -65,7 +66,7 @@ def _augment_with_whitelist_note(result, note: str):
     return result
 
 
-class CommandReviewMiddleware(AgentMiddleware):
+class CommandReviewMiddleware(SyncOnlyMiddleware):
     """Inspects shell commands and network calls against a CommandPolicy.
 
     Sibling to PermissionMiddleware. Both run in wrap_tool_call; this one is

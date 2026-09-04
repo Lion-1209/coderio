@@ -32,11 +32,12 @@ import logging
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
+
+from coderio.agent.sync_only import SyncOnlyMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -121,16 +122,25 @@ class HookSpec:
     command: str
     matcher: str = ""  # regex against tool_name; "" matches all. Tool events only.
     timeout: int = DEFAULT_TIMEOUT
+    # Per-instance compiled-matcher cache (P2 cleanup 2026-09-04: this ran a
+    # fresh re.compile on every matches() call — per tool call, per hook).
+    # A real dataclass field (repr/compare excluded); None = not compiled yet
+    # or match-all spec.
+    _matcher_rx: re.Pattern | None = field(default=None, repr=False, compare=False)
 
     def compiled_matcher(self) -> re.Pattern | None:
         """None = match everything; invalid regex = never match (not crash)."""
+        if isinstance(self._matcher_rx, re.Pattern):
+            return self._matcher_rx
         if not self.matcher:
             return None
         try:
-            return re.compile(self.matcher)
+            rx = re.compile(self.matcher)
         except re.error:
             _log.warning("hook matcher %r is not a valid regex — hook never fires", self.matcher)
-            return re.compile(r"(?!x)x")  # unmatchable
+            rx = re.compile(r"(?!x)x")  # unmatchable
+        self._matcher_rx = rx
+        return rx
 
     def matches(self, tool_name: str) -> bool:
         rx = self.compiled_matcher()
@@ -341,9 +351,20 @@ class HookRunner:
             except Exception:  # noqa: S110 — grace expired; the kill already ran
                 pass
             return 124, b"", b"", True, effective_timeout
+        except Exception:
+            # Non-timeout communicate failure (broken pipe, OS error): the
+            # child would linger holding its pipes with nobody reaping it
+            # (third-party review note, 2026-09-04). Kill + reap best-effort,
+            # then surface the failure like a timeout.
+            kill_process_tree(proc)
+            try:
+                proc.communicate(timeout=1)
+            except Exception:  # noqa: S110 — best-effort reap
+                pass
+            raise
 
 
-class HooksMiddleware(AgentMiddleware):
+class HooksMiddleware(SyncOnlyMiddleware):
     """PreToolUse / PostToolUse as the OUTERMOST middleware.
 
     Inserted before Harness/Permission/CommandReview (see run_deep_agent): a
