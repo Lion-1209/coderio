@@ -142,7 +142,7 @@ jobs:
       - name: Download verified artifacts
         # No rebuild: publish EXACTLY the wheel/sdist verified in the release
         # job (2026-08-28 audit fix). No checkout needed either.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
