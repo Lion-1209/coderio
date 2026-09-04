@@ -26,7 +26,7 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 
 | 门 | 行为 |
 |---|---|
-| **VerifyGate** | 写了代码没跑验证就想结束 → 拦截、强制续跑。解析真实 exit code，**测试失败不算验证通过** |
+| **VerifyGate** | 写了代码没跑验证就想结束 → 拦截、强制续跑。解析真实 exit code，**测试失败不算验证通过**，`echo app.py` 这种"提一嘴"也不算 |
 | **CompletionGate** | TODO 没清完就宣布完成 → 拦截 |
 | **GroundingGate** | 引用从未读过的文件下结论 → 拦截 |
 | **PlanGate** | 没 TODO 就动手写码 → 软提醒 |
