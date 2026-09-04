@@ -64,13 +64,40 @@ def read_credentials(path: Path | str | None = None) -> dict[str, str]:
     try:
         with open(p, "rb") as f:
             data = tomllib.load(f)
-    except tomllib.TOMLDecodeError as e:
-        # Corrupt (e.g. half-written) credentials must not crash /setup — the
-        # user can rebuild by re-entering the key (same tolerance as the trust
-        # store). P2-2, 2026-09-03 audit.
-        _log.warning(
-            "credentials file %s is corrupt (%s) — treating as empty; re-run onboarding or /setup to rebuild it", p, e
-        )
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        # Corrupt credentials (manual edit gone wrong, or a truncated write
+        # from before the 2026-09-04 atomic-write fix) must not crash /setup.
+        # UnicodeDecodeError must be caught explicitly (third-party seam
+        # review, 2026-09-04): a non-UTF-8 file raises it from tomllib.load
+        # and it is NOT a TOMLDecodeError subclass — without it, /setup,
+        # onboarding and get_key all crash on a binary-corrupted file.
+        # But treating the file as empty and continuing let the NEXT save
+        # silently persist that emptiness — wiping every other stored key
+        # (audit P0-4). Back the corrupt bytes up first so they remain
+        # recoverable, then rebuild from empty.
+        backup = p.with_name(p.name + ".corrupt")
+        try:
+            if not backup.exists():
+                backup.write_bytes(p.read_bytes())
+                _log.warning(
+                    "credentials file %s is corrupt (%s) — backed up to %s and treating as "
+                    "empty; re-run onboarding or /setup to rebuild it",
+                    p,
+                    e,
+                    backup,
+                )
+            else:
+                # Deliberate: the FIRST backup is preserved — overwriting it
+                # with each new corruption would trade the original recoverable
+                # bytes for whatever broke latest (third-party review note).
+                _log.warning(
+                    "credentials file %s is corrupt (%s) — treating as empty (an earlier backup already exists at %s)",
+                    p,
+                    e,
+                    backup,
+                )
+        except OSError:
+            _log.warning("credentials file %s is corrupt (%s) — treating as empty; backing it up failed", p, e)
         return {}
     return {section: v.get("key", "") for section, v in data.items() if isinstance(v, dict)}
 
@@ -82,24 +109,36 @@ def write_credentials(mapping: dict[str, str], path: Path | str | None = None) -
     second provider via /setup doesn't erase the first provider's key. Keys for
     an existing provider_id are overwritten (re-entering a key updates it).
 
-    Harden order (2026-09-02 audit P3-7): the file is created and permission-
-    restricted BEFORE any key bytes hit the disk — restricting after the write
-    leaves a window where the plaintext keys sit under the directory's
-    inherited (world-readable) ACL.
+    Atomic write (2026-09-04 audit P0-4): the payload goes to a temp file in
+    the SAME directory, which is permission-restricted BEFORE any key bytes
+    hit the disk (P3-7), then renamed over the target with os.replace. The old
+    in-place truncate-and-rewrite had a crash window: a half-written file is
+    read back as {} (read_credentials tolerates corrupt TOML), and the NEXT
+    save would silently persist that emptiness — wiping every stored key.
+    A crash now leaves the previous credentials file intact.
     """
     p = Path(path) if path else _DEFAULT
     p.parent.mkdir(parents=True, exist_ok=True)
-    # Restrict BEFORE writing, unconditionally (icacls/chmod are idempotent):
-    # files created by older versions carry wide inherited ACLs, and the
-    # write-then-restrict order left a plaintext-keys window on every rewrite.
-    if not p.exists():
-        p.touch()
-    _restrict_permissions(p)
     existing = read_credentials(p)
     existing.update(mapping)
     data = {pid: {"key": key} for pid, key in existing.items()}
-    with open(p, "wb") as f:
-        tomli_w.dump(data, f)
+    # PID-suffixed temp (third-party adversarial review C5, 2026-09-04): a
+    # fixed ".tmp" name made two concurrent writers stomp each other's temp
+    # file (PermissionError + lost update). Per-process temps never collide.
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "wb"):
+            pass  # create the temp empty so restriction covers a zero-byte file
+        _restrict_permissions(tmp)
+        with open(tmp, "wb") as f:
+            tomli_w.dump(data, f)
+        os.replace(tmp, p)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass  # best-effort cleanup; the temp is already restricted
     _restrict_permissions(p)
     return p
 

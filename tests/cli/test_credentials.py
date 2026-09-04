@@ -1,4 +1,7 @@
+import os
 import sys
+
+import pytest
 
 from coderio.cli.credentials import get_key, read_credentials, write_credentials
 
@@ -43,31 +46,109 @@ def test_file_is_toml_format(tmp_path):
 
 
 def test_credentials_created_before_write_are_restricted(tmp_path, monkeypatch):
-    """P3-7: the file must exist and be permission-restricted BEFORE key bytes
-    hit the disk — write-then-restrict leaves the plaintext keys under the
-    directory's inherited ACL for a window."""
+    """P3-7 + P0-4 (2026-09-04): keys may only ever hit disk inside an
+    ALREADY-restricted file. Atomic write: the temp file is restricted while
+    still empty, the payload is written there, then it is renamed over the
+    target; the renamed file is restricted again afterwards (idempotent)."""
+
+    from pathlib import Path
 
     from coderio.cli import credentials as creds
 
     p = tmp_path / "sub" / "credentials"
     monkeypatch.setattr(creds, "_DEFAULT", p)
-    # POSIX-only assertion: on win32 _restrict_permissions shells out to icacls.
     calls = []
     real_restrict = creds._restrict_permissions
 
     def spy_restrict(path):
-        calls.append((path.exists(), p.read_bytes() if path.exists() else b""))
+        path = Path(path)
+        calls.append((path, path.exists(), path.read_bytes() if path.exists() else b""))
         real_restrict(path)
 
     monkeypatch.setattr(creds, "_restrict_permissions", spy_restrict)
     monkeypatch.setattr(creds.os, "chmod", lambda *a, **k: None)  # POSIX branch no-op
 
-    creds.write_credentials({"prov": {"key": "k"}}, p)
+    creds.write_credentials({"prov": "k"}, p)
 
-    # First restriction call happened at creation time — before content.
-    assert calls, "restrict must run at creation (write-then-restrict window closed)"
-    assert calls[0][0] is True and calls[0][1] == b"", "restrict must run on the EMPTY file"
-    assert b"prov" in p.read_bytes(), "keys land after the file is already restricted"
+    assert len(calls) >= 2, "restrict must run on the temp AND on the final file"
+    first_path, first_exists, first_body = calls[0]
+    assert first_exists and first_body == b"", "first restrict must run on the EMPTY temp file"
+    assert first_path != p and first_path.parent == p.parent, "temp must live in the same dir (atomic rename)"
+    assert b"prov" in p.read_bytes(), "keys land in the target file after the rename"
+    assert not p.with_name("credentials.tmp").exists(), "temp file must be cleaned up after the rename"
+
+
+def test_corrupt_credentials_backed_up_then_rebuilt(tmp_path):
+    """P0-4 (2026-09-04): a corrupt credentials file is backed up BEFORE being
+    treated as empty, so the next save can never silently destroy the old
+    key bytes. The rebuild works and the backup survives it."""
+    p = tmp_path / "credentials"
+    write_credentials({"alpha": "key-a"}, path=p)
+    p.write_bytes(b"[alpha\nkey = broken!!!")  # corrupt TOML
+
+    assert read_credentials(p) == {}
+    backup = p.with_name("credentials.corrupt")
+    assert backup.exists(), "corrupt bytes must be backed up before the empty fallback"
+    assert b"broken" in backup.read_bytes(), "the backup preserves the corrupt bytes verbatim"
+
+    # Rebuild: the save works and the backup survives it.
+    write_credentials({"beta": "key-b"}, path=p)
+    assert get_key("beta", path=p) == "key-b"
+    assert b"broken" in backup.read_bytes(), "rebuilding must not touch the corrupt backup"
+
+
+def test_write_leaves_no_temp_file(tmp_path):
+    """The atomic-write temp file (PID-suffixed, adversarial review C5) must
+    be gone after a successful save."""
+    p = tmp_path / "credentials"
+    write_credentials({"a": "k"}, path=p)
+    assert p.is_file()
+    assert list(tmp_path.glob("credentials*.tmp")) == [], "no temp file may survive the rename"
+
+
+def test_failed_rename_preserves_original(tmp_path, monkeypatch):
+    """Mutation round (2026-09-04): 'no temp left' is vacuous on HEAD, which
+    created no temp at all — it never proved the write is ATOMIC. Simulate a
+    crash at the rename: the previous credentials file must survive intact
+    and the temp must still be cleaned up."""
+    p = tmp_path / "credentials"
+    write_credentials({"alpha": "key-a"}, path=p)
+    original = p.read_bytes()
+
+    def crashing_replace(src, dst, *a, **kw):
+        raise OSError("simulated crash during rename")
+
+    monkeypatch.setattr(os, "replace", crashing_replace)
+    with pytest.raises(OSError):
+        write_credentials({"beta": "key-b"}, path=p)
+    assert p.read_bytes() == original, "a failed rename must leave the previous file intact"
+    assert list(tmp_path.glob("credentials*.tmp")) == [], "temp must be cleaned up even after failure"
+
+
+def test_corrupt_non_utf8_backed_up_not_crash(tmp_path, caplog):
+    """Seam review (2026-09-04): a NON-UTF-8 file raises UnicodeDecodeError
+    from tomllib.load, which is not a TOMLDecodeError — the old except let it
+    crash /setup, onboarding and get_key. It must take the same
+    backup-then-empty path as any other corruption."""
+    import logging
+
+    p = tmp_path / "credentials"
+    p.write_bytes(b"\xff\xfe\x00binary garbage")
+    with caplog.at_level(logging.WARNING):
+        assert read_credentials(p) == {}
+    backup = p.with_name("credentials.corrupt")
+    assert backup.exists() and backup.read_bytes() == b"\xff\xfe\x00binary garbage"
+    assert any("corrupt" in r.message for r in caplog.records)
+
+
+def test_second_provider_write_preserves_first(tmp_path):
+    """The merge contract: adding a second provider must not erase the first
+    (this is the path the pre-atomic-write crash window used to wipe)."""
+    p = tmp_path / "credentials"
+    write_credentials({"alpha": "key-a"}, path=p)
+    write_credentials({"beta": "key-b"}, path=p)
+    assert get_key("alpha", path=p) == "key-a"
+    assert get_key("beta", path=p) == "key-b"
 
 
 def test_credentials_windows_no_username_keeps_inheritance(tmp_path, monkeypatch, caplog):
