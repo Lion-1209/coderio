@@ -4,6 +4,19 @@ from coderio.tools.web_fetch import WebFetchTool
 from coderio.tools.web_search import WebSearchTool
 
 
+def _mock_dns(monkeypatch, ip: str = "93.184.216.34"):
+    """Force every hostname to resolve to a public IP — web tests must not
+    depend on real DNS (external review 2026-09-05: fake-IP proxies make
+    example.com resolve into the blocked 198.18/15 range, which correctly
+    trips the SSRF guard and would fail these tests anywhere)."""
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+
 def test_web_search_returns_results(monkeypatch):
     """web_search now uses ddgs (DuckDuckGo). Mock the DDGS.text iterator."""
 
@@ -67,6 +80,7 @@ def test_web_fetch_extracts_text(monkeypatch):
             return _Resp()
 
     monkeypatch.setattr(httpx, "Client", _Client)
+    _mock_dns(monkeypatch)  # URL validation resolves the host BEFORE the (mocked) fetch
     tool = WebFetchTool()
     out = tool.run(url="http://example.com")
     assert "Hello world" in out

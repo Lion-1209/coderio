@@ -1,5 +1,10 @@
 name: CI
 
+# Action SHAs are pinned to full commits (external review 2026-09-05, P1-3):
+# mutable tags held write/OIDC permissions, so an upstream re-point would
+# widen the supply-chain attack surface. Bump via a PR that updates the SHA
+# (and its version comment) together.
+
 on:
   push:
     branches: [main]
@@ -10,8 +15,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
       - name: Install ruff
@@ -40,7 +45,7 @@ jobs:
       PYTHONUTF8: "1"
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # uv replaces pip for dependency installation (2026-08-14 migration).
       # uv.lock is a first-class lockfile for both uv and Dependabot: CI gets
@@ -48,7 +53,7 @@ jobs:
       # constraints AND regenerates uv.lock in its PRs — the two mechanisms
       # cooperate instead of fighting (the bare requirements-dev.txt approach
       # had Dependabot produce internally-inconsistent updates; see PR #6).
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true

@@ -4,13 +4,30 @@ The blocklist is enforced at the _validate_url_host layer (scheme + resolved
 IP checks) BEFORE any network request is made, so these tests need no network
 access — every blocked case fails at parse/DNS layer (literal IPs) which is
 deterministic.
+
+DNS is MOCKED for hostname cases (external review 2026-09-05): a proxy with
+fake-IP DNS resolved example.com into 198.18.0.127, which correctly tripped
+the SSRF guard and failed the public-host test. Tests must not depend on
+real-world DNS answers.
 """
 
 from __future__ import annotations
 
+import socket
+
 import pytest
 
 from coderio.tools.web_fetch import WebFetchTool, _validate_url_host
+
+
+def _mock_dns(monkeypatch, ip: str):
+    """Force every hostname to resolve to `ip` (A record)."""
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
 
 # ----------------------------------------------------- blocked targets
 
@@ -36,11 +53,33 @@ def test_ssrf_blocked_targets(url):
     assert reason is not None, f"{url} must be blocked by SSRF protection"
 
 
-def test_ssrf_public_host_allowed():
-    """A public hostname passes host validation (the request itself may still
-    fail offline — that's fine, validation is what we test here)."""
+def test_ssrf_public_host_allowed(monkeypatch):
+    """A public hostname passes host validation (DNS is mocked to a real
+    public IP — the request itself may still fail offline, validation is what
+    we test here)."""
+    _mock_dns(monkeypatch, "93.184.216.34")
     assert _validate_url_host("https://example.com") is None
     assert _validate_url_host("http://example.com/path?q=1") is None
+
+
+def test_ssrf_hostname_resolution_checked_per_name(monkeypatch):
+    """Resolved hostnames are validated exactly like literal IPs: a name that
+    resolves into any blocked range is rejected (parameterized over the
+    private / benchmark / CGNAT-metadata classes)."""
+    for ip in ("10.0.0.7", "198.18.5.5", "100.100.200.200"):
+        _mock_dns(monkeypatch, ip)
+        reason = _validate_url_host("http://some-host.example")
+        assert reason is not None, f"hostname resolving to {ip} must be blocked"
+
+
+def test_ssrf_ipv6_resolution_blocked(monkeypatch):
+    """A hostname resolving to an IPv6 loopback (AAAA record) is blocked too."""
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", port or 0, 0, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert _validate_url_host("http://some-host.example") is not None
 
 
 @pytest.mark.parametrize(
@@ -79,8 +118,10 @@ def test_ssrf_error_message_is_actionable():
     assert "169.254.169.254" in out
 
 
-def test_ssrf_loopback_named_host():
-    """`localhost` resolves to 127.0.0.1 — blocked at the DNS-resolution step."""
+def test_ssrf_loopback_named_host(monkeypatch):
+    """`localhost` resolving to 127.0.0.1 — blocked at the DNS-resolution step
+    (DNS mocked: must not depend on the host file)."""
+    _mock_dns(monkeypatch, "127.0.0.1")
     reason = _validate_url_host("http://localhost:3000/")
     assert reason is not None and "loopback" in reason
 
