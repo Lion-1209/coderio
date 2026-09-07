@@ -257,6 +257,8 @@ def build_runtime(
 
     if session is None:
         save = save_dir or Path(cfg.session.save_dir).expanduser()
+        if cfg.session.retention_days > 0:
+            Session.prune_old_sessions(save, cfg.session.retention_days)
         session = Session.create(save, {"model": cfg.model.default, "provider": cfg.model.provider})
 
     active = ActiveSkills()

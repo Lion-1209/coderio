@@ -1,4 +1,5 @@
 import os
+import pathlib
 import threading
 import time
 
@@ -295,3 +296,69 @@ def test_windows_lock_mutex_survives_file_growth(tmp_path):
             f.close()
     finally:
         proc.wait(timeout=10)
+
+
+# --------------------------------- file governance (audit P2, 2026-09-04)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL semantics; POSIX asserts 0600 directly")
+def test_created_session_file_owner_only(tmp_path):
+    """Sessions persist user messages verbatim and HAVE leaked secrets before
+    (a 64-char API key was once persisted as a user message) — the file must
+    not be world-readable, matching the credentials/trust-store standard.
+    On Windows, st_mode does not reflect NTFS ACLs: assert via icacls that
+    inheritance was stripped and only the owner holds an explicit grant."""
+    import subprocess
+
+    s = Session.create(tmp_path, {"model": "test"})
+    # GBK console output on CJK-locale Windows: capture bytes, decode leniently.
+    out = subprocess.run(["icacls", str(s.path)], capture_output=True)  # noqa: S603
+    assert out.returncode == 0
+    text = out.stdout.decode("utf-8", errors="replace")
+    assert "(I)" not in text, "inherited permissions must be stripped (owner-only file)"
+    assert ":(F)" in text, "the owner must retain full control"
+
+
+def test_prune_old_sessions_respects_retention(tmp_path):
+    """retention_days > 0 deletes jsonl files older than the cutoff (mtime);
+    fresh files survive; retention_days=0 keeps everything (deleting user
+    data must be opt-in)."""
+    import time as _time
+
+    old = tmp_path / "old-session.jsonl"
+    old.write_text('{"type": "meta"}\n', encoding="utf-8")
+    fresh = tmp_path / "fresh-session.jsonl"
+    fresh.write_text('{"type": "meta"}\n', encoding="utf-8")
+    ten_days_ago = _time.time() - 10 * 86400
+    os.utime(old, (ten_days_ago, ten_days_ago))
+
+    assert Session.prune_old_sessions(tmp_path, 0) == 0, "retention disabled must delete nothing"
+    assert old.exists() and fresh.exists()
+
+    deleted = Session.prune_old_sessions(tmp_path, 7)
+    assert deleted == 1, "the 10-day-old session must be pruned at retention_days=7"
+    assert not old.exists()
+    assert fresh.exists(), "fresh sessions must survive"
+
+
+def test_prune_old_sessions_survives_undeletable_file(tmp_path, monkeypatch, caplog):
+    """Best-effort pruning: one undeletable file must not abort the sweep —
+    the rest still gets pruned, the failure is logged."""
+    import logging as _logging
+
+    dead = tmp_path / "dead.jsonl"
+    dead.write_text("{}", encoding="utf-8")
+    old = tmp_path / "old.jsonl"
+    old.write_text("{}", encoding="utf-8")
+    ten_days_ago = time.time() - 10 * 86400
+    os.utime(dead, (ten_days_ago, ten_days_ago))
+    os.utime(old, (ten_days_ago, ten_days_ago))
+
+    def refusing_unlink(self):
+        raise PermissionError("refusing")
+
+    monkeypatch.setattr(pathlib.Path, "unlink", refusing_unlink)
+    with caplog.at_level(_logging.WARNING):
+        deleted = Session.prune_old_sessions(tmp_path, 7)
+    assert deleted == 0
+    assert any("could not prune" in r.message for r in caplog.records)

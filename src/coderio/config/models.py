@@ -143,6 +143,11 @@ class CliConfig:
 @dataclass
 class SessionConfig:
     save_dir: str = "~/.coderio/sessions"
+    # Session jsonl files older than this many days are pruned at startup
+    # (mtime-based). 0 = keep forever (the honest default — deleting user
+    # data must be opt-in). Sessions can contain pasted secrets, so a
+    # retention policy is the documented answer to unbounded growth.
+    retention_days: int = 0
 
 
 @dataclass

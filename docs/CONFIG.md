@@ -90,6 +90,7 @@ allow_read  = ["secrets/public.pem"]           # 从 deny_read 里凿开只读�
 | `[skills]` | `harness` | `true` | 四道验证门开关（`false` = agent 想说完成就说完成） |
 | `[skills]` | `repo_url` | Lion-Skills | `coderio skills install` 的默认仓库 |
 | `[session]` | `save_dir` | `"~/.coderio/sessions"` | 会话 jsonl 与 sqlite 检查点的存放目录 |
+| `[session]` | `retention_days` | `0` | 会话 jsonl 超过该天数（按文件 mtime）在启动时清除；`0` = 永不过期（默认，删除用户数据必须显式开启）。会话文件以属主只读权限落盘 |
 | `[cli]` | `theme` | `"dark"` | TUI 主题 |
 | `[cli]` | `show_tool_output` | `true` | TUI 里显示工具输出摘要行 |
 

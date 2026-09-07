@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import string
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Iterator
 
 from coderio.session.message import Message, text_of_content
+
+_log = logging.getLogger(__name__)
 
 # In-process mutex for appends: the file lock below is BEST-EFFORT (2s
 # timeout, then an unlocked fall-through). Same-process threads hammering
@@ -169,7 +172,39 @@ class Session:
         sess = cls(path=path, id=sid, meta=meta, messages=[])
         with _locked_append(path) as f:
             f.write(json.dumps({"type": "meta", **meta}, ensure_ascii=False) + "\n")
+        # Owner-only permissions (audit P2, 2026-09-04): user messages are
+        # persisted verbatim and HAVE leaked secrets before (a 64-char API
+        # key was once persisted as a user message) — the file must not be
+        # world-readable, matching the credentials/trust-store standard.
+        try:
+            from coderio.cli.credentials import _restrict_permissions
+
+            _restrict_permissions(path)
+        except Exception as e:  # noqa: BLE001 — hardening is best-effort
+            _log.warning("could not restrict session file permissions: %s", e)
         return sess
+
+    @staticmethod
+    def prune_old_sessions(save_dir: str | Path, retention_days: int) -> int:
+        """Delete session jsonl files older than ``retention_days`` (mtime).
+
+        Returns the number deleted. 0 or negative = keep forever (the config
+        default — deleting user data must be opt-in). Best-effort: individual
+        delete failures are logged and skipped.
+        """
+        if retention_days <= 0:
+            return 0
+        d = _resolve_save_dir(save_dir)
+        cutoff = time.time() - retention_days * 86400
+        deleted = 0
+        for p in d.glob("*.jsonl"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    deleted += 1
+            except OSError as e:
+                _log.warning("could not prune session file %s: %s", p, e)
+        return deleted
 
     def append(self, msg: Message) -> None:
         self.messages.append(msg)
