@@ -37,6 +37,7 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from coderio.agent._content import result_to_text as _result_to_text
 from coderio.agent.sync_only import SyncOnlyMiddleware
 
 _log = logging.getLogger(__name__)
@@ -418,12 +419,6 @@ class HooksMiddleware(SyncOnlyMiddleware):
         return result
 
 
-def _result_to_text(result: Any) -> str:
-    """Best-effort text extraction from ToolMessage / ExecuteResponse / str."""
-    for attr in ("content", "output"):
-        v = getattr(result, attr, None)
-        if isinstance(v, str):
-            return v
-    if isinstance(result, str):
-        return result
-    return str(result)
+# (P2 2026-09-04) The previous local _result_to_text variant dropped exit
+# codes (PostToolUse tool_response had no exit status) and ReadResult errors;
+# the shared import above fixes both.

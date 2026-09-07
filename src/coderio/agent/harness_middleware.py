@@ -28,6 +28,7 @@ from typing import Any
 from langchain.agents.middleware.types import hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
+from coderio.agent._content import result_to_text as _result_to_text
 from coderio.agent._deepagents_compat import get_state_todos
 from coderio.agent.harness import Harness, HarnessState
 from coderio.agent.sync_only import SyncOnlyMiddleware
@@ -48,44 +49,6 @@ def _stream_supports_phase(stream: Any) -> bool:
     the live-verify PrintStream opt in by defining on_phase_change.
     """
     return stream is not None and hasattr(stream, "on_phase_change")
-
-
-def _result_to_text(result: Any) -> str:
-    """Normalize a deepagents tool result (ToolMessage/str/object) to text for
-    the harness success/failure heuristic.
-
-    For ExecuteResponse (deepagents shell results), appends the exit_code as
-    ``[exit_code: N]`` so the harness's VerifyGate can parse it. Without this,
-    a failed test run (exit != 0) would be treated as "verified" because the
-    raw output text doesn't contain the exit code marker.
-    """
-    if isinstance(result, str):
-        return result
-    # deepagents ReadResult has an `error` attr for failed reads, and `file_data`
-    # for successful ones. Extract the error so the harness's not-found detection
-    # (harness.py: "not found" in result) works.
-    error = getattr(result, "error", None)
-    if isinstance(error, str) and error:
-        return error
-    # Build the text from content/output fields.
-    text = ""
-    content = getattr(result, "content", None)
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
-    else:
-        output = getattr(result, "output", None)
-        if isinstance(output, str):
-            text = output
-        elif result is not None:
-            text = str(result)
-    # Append exit_code marker if the result has one (ExecuteResponse). This
-    # lets _parse_exit_code in harness.py extract it for VerifyGate.
-    exit_code = getattr(result, "exit_code", None)
-    if exit_code is not None and "[exit_code:" not in text:
-        text = f"{text}\n[exit_code: {exit_code}]"
-    return text
 
 
 class HarnessMiddleware(SyncOnlyMiddleware):

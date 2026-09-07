@@ -28,6 +28,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from coderio.agent._content import content_to_text as _content_to_text
 from coderio.agent.harness_middleware import HarnessMiddleware
 from coderio.agent.hooks import HookRunner
 from coderio.agent.stream import NullStream
@@ -36,15 +37,6 @@ from coderio.session.message import text_of_content
 from coderio.session.store import Session
 
 _log = logging.getLogger(__name__)
-
-
-def _content_to_text(content: Any) -> str:
-    """Normalize content (str or list of Anthropic blocks) to text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-    return str(content) if content else ""
 
 
 def _extract_thinking(content: Any) -> str:
