@@ -65,3 +65,31 @@ def test_edit_replace_all(tmp_path):
     tool = EditFileTool()
     tool.run(path=str(f), old_string="foo", new_string="x", replace_all=True)
     assert f.read_text(encoding="utf-8") == "x\nx\n"
+
+
+# --------------------------------------------- read cap (audit P2, 2026-09-04)
+
+
+def test_read_file_caps_oversized_single_line(tmp_path):
+    """A minified single-line bundle must not push megabytes into one tool
+    result: the read is capped with a visible truncation notice. The
+    production engine is covered by deepagents' own caps — this defends the
+    standalone tool."""
+    big = tmp_path / "minified.js"
+    big.write_bytes(b"var x=1;" * 400_000)  # ~3.2MB, single line
+
+    out = ReadFileTool().run(str(big))
+    assert len(out) < 2 * 1024 * 1290, f"output must be bounded, got {len(out)} chars"
+    assert "truncated" in out.lower()
+
+
+def test_read_file_normal_files_unaffected(tmp_path):
+    """The cap must not disturb normal reads (line numbers, offset/limit)."""
+    f = tmp_path / "code.py"
+    f.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+    tool = ReadFileTool()
+    out = tool.run(str(f))
+    assert "1\ta = 1" in out
+    assert "[file truncated" not in out
+    paged = tool.run(str(f), offset=2, limit=1)
+    assert "2\tb = 2" in paged and "a = 1" not in paged

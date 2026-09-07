@@ -4,6 +4,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+# Defensive read cap (audit P2, 2026-09-04): this tool reads the whole file
+# before slicing lines, so a minified single-line bundle would push tens of MB
+# into one tool result. The production engine is covered by deepagents' own
+# caps (2000-line pagination + 20k-token result limit) — this defends the
+# standalone tool.
+_MAX_READ_BYTES = 2 * 1024 * 1024
+
 
 class ReadFileArgs(BaseModel):
     path: str = Field(
@@ -35,9 +42,12 @@ class ReadFileTool:
         if p.is_dir():
             return f"Error: path is a directory: {path}"
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")
+            with p.open("rb") as f:
+                data = f.read(_MAX_READ_BYTES + 1)
         except OSError as e:
             return f"Error reading file: {e}"
+        truncated = len(data) > _MAX_READ_BYTES
+        text = data[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
         lines = text.splitlines()
         if offset > 0:
             start_idx = max(0, offset - 1)
@@ -48,4 +58,10 @@ class ReadFileTool:
         else:
             end_idx = len(lines)
         numbered = [f"{i}\t{line}" for i, line in enumerate(lines[start_idx:end_idx], start_idx + 1)]
-        return "\n".join(numbered)
+        result = "\n".join(numbered)
+        if truncated:
+            result += (
+                f"\n[file truncated at {_MAX_READ_BYTES} bytes — use grep to locate content "
+                "beyond this point, or read with offset/limit after narrowing]"
+            )
+        return result

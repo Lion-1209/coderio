@@ -120,3 +120,45 @@ def test_python_fallback_used_when_no_rg(tmp_path):
     _make_files(tmp_path, {"a.py": "match_here"})
     out = GrepTool().run(pattern="match", path=str(tmp_path))
     assert "a.py" in out
+
+
+# --------------------------------- fallback caps (audit P2, 2026-09-04)
+
+
+def test_python_fallback_skips_oversized_files(tmp_path):
+    """Files over the size cap are skipped without reading (a minified bundle
+    would otherwise be read fully on every search)."""
+    from coderio.tools.grep_tool import GrepTool
+
+    big = tmp_path / "bundle.min.js"
+    big.write_bytes(b"needle" + b"x" * (2 * 1024 * 1024))  # 2MB, over the cap
+    small = tmp_path / "small.txt"
+    small.write_text("needle here", encoding="utf-8")
+
+    out = GrepTool()._python_fallback(pattern="needle", path=str(tmp_path), glob="", output_mode="content")
+    assert "small.txt" in out
+    assert "bundle.min.js" not in out, "oversized files must be skipped without reading"
+
+
+def test_python_fallback_content_hit_cap(tmp_path):
+    """A loose pattern on many matching lines is capped with a visible note —
+    a pattern like 'a' must not flood the context with thousands of hits."""
+    from coderio.tools.grep_tool import GrepTool
+
+    f = tmp_path / "many.txt"
+    f.write_text("match me\n" * 5000, encoding="utf-8")
+
+    out = GrepTool()._python_fallback(pattern="match", path=str(f), glob="", output_mode="content")
+    assert "truncated" in out.lower()
+    assert out.count("match me") <= 2000
+
+
+def test_python_fallback_count_mode_unaffected_by_content_cap(tmp_path):
+    """count mode counts ALL matches — the content-hit cap must not change
+    the total."""
+    from coderio.tools.grep_tool import GrepTool
+
+    f = tmp_path / "many.txt"
+    f.write_text("match me\n" * 5000, encoding="utf-8")
+    out = GrepTool()._python_fallback(pattern="match", path=str(f), glob="", output_mode="count")
+    assert "5000 matches" in out

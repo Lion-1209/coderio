@@ -7,6 +7,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+# Fallback caps (audit P2, 2026-09-04): files over 1MB are skipped in the
+# Python fallback (a minified bundle would be read fully for every match),
+# content output is capped so a loose pattern can't flood the context, and
+# ripgrep's stdout is capped symmetrically. The production engine uses
+# deepagents' grep (output-capped) — these defend the standalone tool.
+_MAX_GREP_FILE_BYTES = 1024 * 1024
+_MAX_CONTENT_HITS = 2000
+_MAX_OUTPUT_CHARS = 100_000
+
 
 class GrepArgs(BaseModel):
     pattern: str = Field(description="Regex pattern to search for.")
@@ -52,13 +61,20 @@ class GrepTool:
         cmd += [pattern, path]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            return (proc.stdout or "").strip() or "No matches"
+            out = (proc.stdout or "").strip() or "No matches"
+            if len(out) > _MAX_OUTPUT_CHARS:
+                out = out[:_MAX_OUTPUT_CHARS] + "\n[truncated — narrow the pattern or path]"
+            return out
         except FileNotFoundError:
             return self._python_fallback(pattern, path, glob, output_mode)
 
     def _python_fallback(self, pattern: str, path: str, glob: str, output_mode: str) -> str:
         base = Path(path)
-        if glob:
+        if base.is_file():
+            # rg accepts a bare file path; the fallback previously rglob'd it
+            # (yields nothing on a file) and silently returned "No matches".
+            files = [base]
+        elif glob:
             files = list(base.rglob(glob))
         else:
             files = list(base.rglob("*"))
@@ -66,10 +82,15 @@ class GrepTool:
         content_hits = []
         matched_files = []
         total = 0
+        hit_cap_reached = False
         for f in files:
+            if hit_cap_reached:
+                break
             if not f.is_file():
                 continue
             try:
+                if f.stat().st_size > _MAX_GREP_FILE_BYTES:
+                    continue  # oversized: skipped, not read (minified bundles)
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
@@ -83,8 +104,14 @@ class GrepTool:
                         break
                     elif output_mode == "content":
                         content_hits.append(f"{f}:{i}:{line}")
+                        if len(content_hits) >= _MAX_CONTENT_HITS:
+                            hit_cap_reached = True
+                            break
         if output_mode == "count":
             return f"{total} matches"
         if output_mode == "files_with_matches":
             return "\n".join(matched_files) if matched_files else "No matches"
-        return "\n".join(content_hits) if content_hits else "No matches"
+        result = "\n".join(content_hits) if content_hits else "No matches"
+        if hit_cap_reached:
+            result += f"\n[truncated: hit cap of {_MAX_CONTENT_HITS} matches — narrow the pattern or path]"
+        return result
