@@ -227,29 +227,14 @@ def summarize_repo_configs(search_from: Path | str) -> str:
     activation) — so nothing dangerous hides behind a bare filename.
     """
     root, configs = discover_repo_configs(search_from)
-    lines = []
+    lines: list[str] = []
     for path in configs:
         try:
             rel = path.relative_to(root).as_posix()
         except ValueError:
             rel = str(path)
         if path.is_dir():
-            # Skills layer: list each skill; mark the ones that execute code.
-            if path.name == "skills":
-                lines.append(f"{rel}/ (project skills)")
-                for skill_dir in sorted(p for p in path.iterdir() if p.is_dir()):
-                    marker = " ⚠ executes code (tools.py)" if (skill_dir / "tools.py").is_file() else ""
-                    lines.append(f"  skill {skill_dir.name!r}{marker}")
-                continue
-            # Custom commands / agents layers: list each prompt template —
-            # these are injected into the model verbatim, so the user should
-            # see exactly which files they are trusting (audit P1-14). rglob
-            # matches the fingerprint's recursive hashing (adversarial review
-            # note: nested dirs are trusted by hash, so they must be shown).
-            label = "custom slash commands" if path.name == "commands" else "custom agents"
-            lines.append(f"{rel}/ (project {label})")
-            for f in sorted(p for p in path.rglob("*") if p.is_file()):
-                lines.append(f"  {f.relative_to(path).as_posix()}")
+            _summarize_dir(path, rel, lines)
             continue
         lines.append(f"{rel} ({path.stat().st_size} bytes)")
         try:
@@ -258,72 +243,102 @@ def summarize_repo_configs(search_from: Path | str) -> str:
             lines.append("  <unreadable>")
             continue
         if path.name == "config.toml":
-            # Parse TOML structurally so multi-line strings, inline tables, and
-            # nested values can't hide hook commands (P2-1 regression test:
-            # a multi-line `command = """\n...\n"""` was previously invisible
-            # because only raw lines containing a sensitive key were echoed).
-            try:
-                with open(path, "rb") as _f:
-                    data = tomllib.load(_f)
-            except Exception:
-                data = None
-            if data is None:
-                # Unparseable TOML: the loader will refuse this config later
-                # (fail-closed — hooks never run), but the user should SEE
-                # that, not a bare byte count. The raw-grep fallback below
-                # echoes all sensitive-looking lines INCLUDING command lines
-                # (third-party review: the old fallback excluded them on the
-                # assumption the structural path had already shown them —
-                # but on parse failure that path printed nothing, hiding the
-                # hooks entirely).
-                lines.append("  <unparseable config.toml — the loader will reject this file>")
-                for ln in text.splitlines():
-                    s = ln.strip()
-                    if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
-                        lines.append(f"  {s}")
-            else:
-                hooks = data.get("hooks", [])
-                if isinstance(hooks, list) and hooks:
-                    lines.append("  [[hooks]]")
-                    for h in hooks:
-                        # Shape guard (third-party review): `hooks = [1]` or
-                        # `hooks = "junk"` previously crashed here (h.get on
-                        # non-dict) — taking down coderio at the trust prompt
-                        # before the loader's tolerant _parse_hooks could
-                        # simply skip the malformed entry.
-                        if not isinstance(h, dict):
-                            continue
-                        cmd = h.get("command")
-                        if cmd:
-                            lines.append(f"    command = {cmd!r}")
-                        ev = h.get("event")
-                        if ev:
-                            lines.append(f"    event = {ev!r}")
-                # Echo every line mentioning a sensitive key (non-hook keys).
-                # Also skips the top-level `hooks = [...]` inline form — the
-                # structural block above already rendered each hook's command.
-                for ln in text.splitlines():
-                    s = ln.strip()
-                    if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
-                        if (
-                            not s.startswith("[[hooks]]")
-                            and not s.startswith("command =")
-                            and not s.startswith("event =")
-                            and not s.startswith("hooks =")
-                        ):
-                            lines.append(f"  {s}")
+            _summarize_config_toml(path, text, lines)
         else:  # .mcp.json — list servers (they spawn/connect at startup)
-            try:
-                servers = json.loads(text).get("mcpServers", {})
-                for name, cfg in servers.items():
-                    cfg = cfg or {}
-                    parts = [str(cfg.get(k)) for k in ("command", "url") if cfg.get(k)]
-                    if cfg.get("args"):
-                        parts.append(" ".join(str(a) for a in cfg["args"]))
-                    if cfg.get("env"):
-                        keys = ",".join(cfg["env"].keys())
-                        parts.append(f"env:[{keys}]")
-                    lines.append(f"  server {name!r}: {' '.join(parts) or '?'}")
-            except json.JSONDecodeError:
-                lines.append("  <invalid JSON>")
+            _summarize_mcp_json(text, lines)
     return "\n".join(lines)
+
+
+def _summarize_dir(path: Path, rel: str, lines: list[str]) -> None:
+    """Render a trusted DIRECTORY entry: skills, custom commands, or agents."""
+    if path.name == "skills":
+        # Skills layer: list each skill; mark the ones that execute code.
+        lines.append(f"{rel}/ (project skills)")
+        for skill_dir in sorted(p for p in path.iterdir() if p.is_dir()):
+            marker = " ⚠ executes code (tools.py)" if (skill_dir / "tools.py").is_file() else ""
+            lines.append(f"  skill {skill_dir.name!r}{marker}")
+        return
+    # Custom commands / agents layers: list each prompt template — these are
+    # injected into the model verbatim, so the user should see exactly which
+    # files they are trusting (audit P1-14). rglob matches the fingerprint's
+    # recursive hashing (adversarial review note: nested dirs are trusted by
+    # hash, so they must be shown).
+    label = "custom slash commands" if path.name == "commands" else "custom agents"
+    lines.append(f"{rel}/ (project {label})")
+    for f in sorted(p for p in path.rglob("*") if p.is_file()):
+        lines.append(f"  {f.relative_to(path).as_posix()}")
+
+
+def _summarize_config_toml(path: Path, text: str, lines: list[str]) -> None:
+    """Render config.toml: parse TOML structurally so multi-line strings,
+    inline tables, and nested values can't hide hook commands (P2-1 regression
+    test: a multi-line `command = \"\"\"\\n...\\n\"\"\"` was previously invisible
+    because only raw lines containing a sensitive key were echoed)."""
+    try:
+        with open(path, "rb") as _f:
+            data = tomllib.load(_f)
+    except Exception:
+        data = None
+    if data is None:
+        # Unparseable TOML: the loader will refuse this config later
+        # (fail-closed — hooks never run), but the user should SEE that, not a
+        # bare byte count. The raw-grep fallback below echoes all sensitive-
+        # looking lines INCLUDING command lines (third-party review: the old
+        # fallback excluded them on the assumption the structural path had
+        # already shown them — but on parse failure that path printed nothing,
+        # hiding the hooks entirely).
+        lines.append("  <unparseable config.toml — the loader will reject this file>")
+        _echo_sensitive_lines(text.splitlines(), lines)
+        return
+    hooks = data.get("hooks", [])
+    if isinstance(hooks, list) and hooks:
+        lines.append("  [[hooks]]")
+        _render_toml_hooks(hooks, lines)
+    # Echo every line mentioning a sensitive key (non-hook keys). Also skips
+    # the top-level `hooks = [...]` inline form — the structural block above
+    # already rendered each hook's command.
+    for ln in text.splitlines():
+        s = ln.strip()
+        if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
+            if not s.startswith(("[[hooks]]", "command =", "event =", "hooks =")):
+                lines.append(f"  {s}")
+
+
+def _render_toml_hooks(hooks: list, lines: list[str]) -> None:
+    for h in hooks:
+        # Shape guard (third-party review): `hooks = [1]` or
+        # `hooks = "junk"` previously crashed here (h.get on non-dict) —
+        # taking down coderio at the trust prompt before the loader's
+        # tolerant _parse_hooks could simply skip the malformed entry.
+        if not isinstance(h, dict):
+            continue
+        cmd = h.get("command")
+        if cmd:
+            lines.append(f"    command = {cmd!r}")
+        ev = h.get("event")
+        if ev:
+            lines.append(f"    event = {ev!r}")
+
+
+def _echo_sensitive_lines(source_lines: list[str], lines: list[str]) -> None:
+    for ln in source_lines:
+        s = ln.strip()
+        if any(k in s for k in _SENSITIVE_KEYS) and "=" in s:
+            lines.append(f"  {s}")
+
+
+def _summarize_mcp_json(text: str, lines: list[str]) -> None:
+    """Render .mcp.json servers (they spawn/connect at startup)."""
+    try:
+        servers = json.loads(text).get("mcpServers", {})
+        for name, cfg in servers.items():
+            cfg = cfg or {}
+            parts = [str(cfg.get(k)) for k in ("command", "url") if cfg.get(k)]
+            if cfg.get("args"):
+                parts.append(" ".join(str(a) for a in cfg["args"]))
+            if cfg.get("env"):
+                keys = ",".join(cfg["env"].keys())
+                parts.append(f"env:[{keys}]")
+            lines.append(f"  server {name!r}: {' '.join(parts) or '?'}")
+    except json.JSONDecodeError:
+        lines.append("  <invalid JSON>")

@@ -504,6 +504,145 @@ def _finalize_run(
     return (exit_code, output)
 
 
+def _acquire_primary_token(advapi32, wt, kernel32):
+    """Steps 1-2: create a LUA_TOKEN (reduced integrity — more reliable than
+    WRITE_RESTRICTED, which causes STATUS_DLL_INIT_FAILED because the child
+    can't load DLLs) and duplicate it as a primary token for
+    CreateProcessAsUserW.
+
+    Returns ``(primary_token, h_primary)`` on success — the caller MUST keep
+    ``h_primary`` open until after the launch (CreateProcessAsUserW reads the
+    token through it) and close it afterwards — or an ``(-1, reason)``
+    failure tuple. The base token is closed here: once duplicated it is no
+    longer needed.
+    """
+    import ctypes
+
+    token = create_restricted_token()
+    if token is None:
+        # Token creation failed — degrade gracefully (caller falls back).
+        return (-1, "failed to create restricted token (sandbox unavailable)")
+
+    TOKEN_ALL_ACCESS = 0xF01FF
+    TokenPrimary = 1
+    h_primary = wt.HANDLE()
+    ok = advapi32.DuplicateTokenEx(
+        token,
+        TOKEN_ALL_ACCESS,
+        None,  # default security attributes
+        2,  # SecurityImpersonation level — required for CreateProcessAsUser
+        TokenPrimary,
+        ctypes.byref(h_primary),
+    )
+    if not ok:
+        _log.warning("DuplicateTokenEx failed (err=%s)", ctypes.get_last_error())
+        return (-1, "failed to duplicate restricted token")
+    kernel32.CloseHandle(token)
+    return int(h_primary.value), h_primary
+
+
+def _close_handles(kernel32, *handles) -> None:
+    """Best-effort CloseHandle for every non-null handle (handles are a
+    limited resource; leaking them degrades the system over a long session)."""
+    for h in handles:
+        if h:
+            kernel32.CloseHandle(h)
+
+
+def _create_output_pipes(kernel32, wt):
+    """Steps 3: stdout/stderr pipe pairs for capturing child output.
+
+    CreatePipe makes pairs of inheritable read/write handles; the child
+    inherits the write ends and we read from the read ends after it exits.
+    Returns the four HANDLE objects, or an ``(-1, reason)`` failure tuple
+    (partial handles are closed before returning).
+    """
+    import ctypes
+
+    class _SECURITY_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wt.DWORD),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", wt.BOOL),
+        ]
+
+    sa = _SECURITY_ATTRIBUTES()
+    sa.nLength = ctypes.sizeof(sa)
+    sa.bInheritHandle = True  # child inherits the write end
+
+    HANDLE_FLAG_INHERIT = 0x00000001
+
+    stdout_read_h = wt.HANDLE()
+    stdout_write_h = wt.HANDLE()
+    ok = kernel32.CreatePipe(ctypes.byref(stdout_read_h), ctypes.byref(stdout_write_h), ctypes.byref(sa), 0)
+    if not ok:
+        return (-1, "stdout pipe creation failed")
+    # Ensure the READ end is NOT inheritable (only the write end goes to child).
+    kernel32.SetHandleInformation(stdout_read_h, HANDLE_FLAG_INHERIT, 0)
+
+    stderr_read_h = wt.HANDLE()
+    stderr_write_h = wt.HANDLE()
+    ok = kernel32.CreatePipe(ctypes.byref(stderr_read_h), ctypes.byref(stderr_write_h), ctypes.byref(sa), 0)
+    if not ok:
+        kernel32.CloseHandle(stdout_read_h)
+        kernel32.CloseHandle(stdout_write_h)
+        return (-1, "stderr pipe creation failed")
+    kernel32.SetHandleInformation(stderr_read_h, HANDLE_FLAG_INHERIT, 0)
+    return stdout_read_h, stdout_write_h, stderr_read_h, stderr_write_h
+
+
+def _wait_and_collect(kernel32, proc_handle, job, stdout_read, stderr_read, *, command, cwd, timeout, max_output_bytes):
+    """Steps 7-8: wait for the child, kill the tree on timeout, then collect
+    and finalize the output."""
+    import ctypes
+
+    WAIT_TIMEOUT = 0x00000102
+    WAIT_FAILED = 0xFFFFFFFF
+    timeout_ms = int(timeout * 1000)
+    wait_result = kernel32.WaitForSingleObject(proc_handle, timeout_ms)
+
+    if wait_result == WAIT_TIMEOUT:
+        # Timed out — kill the ENTIRE process tree via the Job Object.
+        # TerminateJobObject kills the process assigned to the job AND all
+        # its descendants (grandchildren included), which is exactly what
+        # we need for `cmd /c powershell` chains. This is why we created
+        # the process suspended and assigned it to the job before resume.
+        if job is not None:
+            kernel32.TerminateJobObject(job, 1)
+        else:
+            # No job (creation failed earlier) — best-effort direct kill.
+            kernel32.TerminateProcess(proc_handle, 1)
+        # Wait briefly for the kill to complete so we can drain output.
+        kernel32.WaitForSingleObject(proc_handle, 2000)
+        # Drain any partial output the child produced before being killed.
+        stdout = _read_pipe_to_eof(stdout_read, max_output_bytes)
+        stderr = _read_pipe_to_eof(stderr_read, max_output_bytes)
+        output = stdout
+        if stderr:
+            output += f"\n[stderr]\n{stderr}"
+        return (124, f"Command timed out after {timeout}s\n{output[:max_output_bytes]}")
+
+    if wait_result == WAIT_FAILED:
+        return (1, f"WaitForSingleObject failed (err={kernel32.GetLastError()})")
+
+    # Step 8: get exit code + drain output.
+    exit_code = ctypes.c_ulong()
+    kernel32.GetExitCodeProcess(proc_handle, ctypes.byref(exit_code))
+    stdout = _read_pipe_to_eof(stdout_read, max_output_bytes)
+    stderr = _read_pipe_to_eof(stderr_read, max_output_bytes)
+    output = stdout
+    if stderr:
+        output += f"\n[stderr]\n{stderr}"
+    return _finalize_run(
+        command,
+        cwd,
+        timeout=timeout,
+        max_output_bytes=max_output_bytes,
+        exit_code=exit_code.value,
+        output=output,
+    )
+
+
 def run_sandboxed(
     command: str,
     cwd: str,
@@ -549,7 +688,6 @@ def run_sandboxed(
     advapi32 = ctypes.windll.advapi32  # type: ignore[attr-defined]
     kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
 
-    token = None
     job = None
     proc_handle = None
     stdout_read = None
@@ -558,84 +696,30 @@ def run_sandboxed(
     try:
         from coderio.tools.win_job import assign_to_job, create_job_with_limits
 
-        # Step 1: create a LUA_TOKEN (reduced integrity). LUA_TOKEN is more
-        # reliable than WRITE_RESTRICTED — it doesn't cause STATUS_DLL_INIT_FAILED
-        # because the child can still load DLLs (it just runs at lower integrity,
-        # unable to write to system directories). See create_restricted_token docstring.
-        token = create_restricted_token()
-        if token is None:
-            # Token creation failed — degrade gracefully (caller falls back).
-            return (-1, "failed to create restricted token (sandbox unavailable)")
+        acquired = _acquire_primary_token(advapi32, wt, kernel32)
+        if isinstance(acquired[1], str):
+            return acquired  # (-1, reason) failure tuple
+        primary_token, h_primary = acquired
 
-        # Step 2: duplicate the token as a primary token (CreateProcessAsUser
-        # needs a primary token, CreateRestrictedToken gives us one already,
-        # but DuplicateTokenEx ensures the right access rights for the child).
-        TOKEN_ALL_ACCESS = 0xF01FF
-        TokenPrimary = 1
-        h_primary = wt.HANDLE()
-        ok = advapi32.DuplicateTokenEx(
-            token,
-            TOKEN_ALL_ACCESS,
-            None,  # default security attributes
-            2,  # SecurityImpersonation level — required for CreateProcessAsUser
-            TokenPrimary,
-            ctypes.byref(h_primary),
-        )
-        if not ok:
-            _log.warning("DuplicateTokenEx failed (err=%s)", ctypes.get_last_error())
-            return (-1, "failed to duplicate restricted token")
-        primary_token = int(h_primary.value)
-
-        # Step 3: set up stdout/stderr pipes for capturing child output.
-        # CreatePipe makes a pair of inheritable read/write handles. The child
-        # inherits the write ends; we read from the read ends after it exits.
-        class _SECURITY_ATTRIBUTES(ctypes.Structure):
-            _fields_ = [
-                ("nLength", wt.DWORD),
-                ("lpSecurityDescriptor", ctypes.c_void_p),
-                ("bInheritHandle", wt.BOOL),
-            ]
-
-        sa = _SECURITY_ATTRIBUTES()
-        sa.nLength = ctypes.sizeof(sa)
-        sa.bInheritHandle = True  # child inherits the write end
-
-        stdout_read_h = wt.HANDLE()
-        stdout_write_h = wt.HANDLE()
-        ok = kernel32.CreatePipe(ctypes.byref(stdout_read_h), ctypes.byref(stdout_write_h), ctypes.byref(sa), 0)
-        if not ok:
-            return (-1, "stdout pipe creation failed")
-        # Ensure the READ end is NOT inheritable (only the write end goes to child).
-        HANDLE_FLAG_INHERIT = 0x00000001
-        kernel32.SetHandleInformation(stdout_read_h, HANDLE_FLAG_INHERIT, 0)
-
-        stderr_read_h = wt.HANDLE()
-        stderr_write_h = wt.HANDLE()
-        ok = kernel32.CreatePipe(ctypes.byref(stderr_read_h), ctypes.byref(stderr_write_h), ctypes.byref(sa), 0)
-        if not ok:
-            kernel32.CloseHandle(stdout_read_h)
-            kernel32.CloseHandle(stdout_write_h)
-            return (-1, "stderr pipe creation failed")
-        kernel32.SetHandleInformation(stderr_read_h, HANDLE_FLAG_INHERIT, 0)
+        stdout_read_h, stdout_write_h, stderr_read_h, stderr_write_h = _create_output_pipes(kernel32, wt)
+        stdout_read = stdout_read_h.value
+        stderr_read = stderr_read_h.value
 
         # stdin: NULL handle (child gets no stdin — DEVNULL equivalent).
         stdin_write_h = 0
 
-        stdout_read = stdout_read_h.value
-        stderr_read = stderr_read_h.value
-
-        # Step 4: create the Job Object BEFORE launching the process.
-        # The process will be created suspended, assigned to this job, then
-        # resumed — ensuring all descendants (e.g. `cmd /c powershell`'s
-        # powershell.exe grandchild) are in the job from the start. This fixes
-        # the timeout-kill bug where grandchildren escaped job assignment and
-        # kept running after timeout (sleep 5 + timeout 2 ran the full 5s).
+        # Create the Job Object BEFORE launching the process. The process is
+        # created suspended, assigned to this job, then resumed — ensuring all
+        # descendants (e.g. `cmd /c powershell`'s powershell.exe grandchild)
+        # are in the job from the start. This fixes the timeout-kill bug where
+        # grandchildren escaped job assignment and kept running after timeout
+        # (sleep 5 + timeout 2 ran the full 5s).
         job = create_job_with_limits(process_limit=128)
         if job is None:
             _log.warning("win_sandbox: Job Object creation failed — running without resource limits")
 
-        # Step 5: launch the process SUSPENDED so we can assign it to the job
-        # before it starts executing (and spawns children that would escape).
+        # Launch the process SUSPENDED so we can assign it to the job before
+        # it starts executing (and spawns children that would escape).
         command_line = f'cmd /c "{command}"'
         proc_handle, thread_handle, pid = _create_process_with_token(
             command_line,
@@ -647,8 +731,9 @@ def run_sandboxed(
             suspended=(job is not None),  # only suspend if we have a job to assign
         )
 
-        # Close our copy of the write ends (child has its own; ours staying
-        # open would keep ReadFile blocking forever waiting for EOF).
+        # Close our copies of the write ends and the primary token (child has
+        # its own; ours staying open would keep ReadFile blocking forever
+        # waiting for EOF).
         kernel32.CloseHandle(stdout_write_h)
         kernel32.CloseHandle(stderr_write_h)
         kernel32.CloseHandle(h_primary)
@@ -661,9 +746,9 @@ def run_sandboxed(
             return (-1, "CreateProcessAsUserW failed — cannot launch sandboxed child")
 
         try:
-            # Step 6: assign the SUSPENDED process to the Job Object, then
-            # resume its main thread. Now any children it spawns are in the
-            # job too — TerminateJobObject on timeout will kill them all.
+            # Assign the SUSPENDED process to the Job Object, then resume its
+            # main thread. Now any children it spawns are in the job too —
+            # TerminateJobObject on timeout will kill them all.
             if job is not None and pid:
                 if not assign_to_job(job, pid):
                     # Third-party audit P1-19 (2026-09-04): the return value
@@ -682,66 +767,23 @@ def run_sandboxed(
         finally:
             kernel32.CloseHandle(thread_handle)
 
-        # Step 7: wait for the child to exit (with timeout).
-        WAIT_TIMEOUT = 0x00000102
-        WAIT_FAILED = 0xFFFFFFFF
-        timeout_ms = int(timeout * 1000)
-        wait_result = kernel32.WaitForSingleObject(proc_handle, timeout_ms)
-
-        if wait_result == WAIT_TIMEOUT:
-            # Timed out — kill the ENTIRE process tree via the Job Object.
-            # TerminateJobObject kills the process assigned to the job AND all
-            # its descendants (grandchildren included), which is exactly what
-            # we need for `cmd /c powershell` chains. This is why we created
-            # the process suspended and assigned it to the job before resume.
-            if job is not None:
-                kernel32.TerminateJobObject(job, 1)
-            else:
-                # No job (creation failed earlier) — best-effort direct kill.
-                kernel32.TerminateProcess(proc_handle, 1)
-            # Wait briefly for the kill to complete so we can drain output.
-            kernel32.WaitForSingleObject(proc_handle, 2000)
-            # Drain any partial output the child produced before being killed.
-            stdout = _read_pipe_to_eof(stdout_read, max_output_bytes)
-            stderr = _read_pipe_to_eof(stderr_read, max_output_bytes)
-            output = stdout
-            if stderr:
-                output += f"\n[stderr]\n{stderr}"
-            return (124, f"Command timed out after {timeout}s\n{output[:max_output_bytes]}")
-
-        if wait_result == WAIT_FAILED:
-            return (1, f"WaitForSingleObject failed (err={kernel32.GetLastError()})")
-
-        # Step 8: get exit code + drain output.
-        exit_code = wt.DWORD()
-        kernel32.GetExitCodeProcess(proc_handle, ctypes.byref(exit_code))
-        stdout = _read_pipe_to_eof(stdout_read, max_output_bytes)
-        stderr = _read_pipe_to_eof(stderr_read, max_output_bytes)
-        output = stdout
-        if stderr:
-            output += f"\n[stderr]\n{stderr}"
-        return _finalize_run(
-            command,
-            cwd,
+        return _wait_and_collect(
+            kernel32,
+            proc_handle,
+            job,
+            stdout_read,
+            stderr_read,
+            command=command,
+            cwd=cwd,
             timeout=timeout,
             max_output_bytes=max_output_bytes,
-            exit_code=exit_code.value,
-            output=output,
         )
 
     except Exception as e:  # noqa: BLE001 — never crash the agent
         _log.warning("run_sandboxed failed (degrading to plain subprocess): %s", e)
         return (-1, f"sandbox setup failed: {e}")
     finally:
-        # Clean up all handles (handles are a limited resource; leaking them
-        # degrades the system over a long agent session).
-        if proc_handle:
-            kernel32.CloseHandle(proc_handle)
-        if token:
-            kernel32.CloseHandle(token)
-        if job:
-            kernel32.CloseHandle(job)
-        if stdout_read:
-            kernel32.CloseHandle(stdout_read)
-        if stderr_read:
-            kernel32.CloseHandle(stderr_read)
+        # Best-effort handle cleanup (handles are a limited resource; leaking
+        # them degrades the system over a long agent session). The base
+        # restricted token is closed inside _acquire_primary_token.
+        _close_handles(kernel32, proc_handle, job, stdout_read, stderr_read)

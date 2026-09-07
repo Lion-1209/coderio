@@ -158,6 +158,62 @@ def _expand_var_braces(tok: str) -> str:
 _WIN_ABS_TARGET_RE = re.compile(r"^[a-zA-Z]:")
 
 
+def _env_split_string_value(tokens: list[str]) -> str | None:
+    """`env -S "rm -rf /"`: -S/--split-string's VALUE is the command itself
+    (GNU env split-string) — return it so the caller can re-check the value
+    as a command. Handles the plain, `=`, and glued `-S"..."` forms (audit
+    P1/P2, 2026-09-03)."""
+    if not tokens or _norm_exe(tokens[0]) != "env":
+        return None
+    for k, tok in enumerate(tokens[1:], 1):
+        if tok in ("-S", "--split-string") and k + 1 < len(tokens):
+            return tokens[k + 1]
+        if tok.startswith("--split-string="):
+            return tok.split("=", 1)[1]
+        if tok.startswith("-S") and len(tok) > 2:
+            # glued form -S"rm -rf /": the value CONTAINS spaces, so the
+            # whitespace split shredded it — rejoin the tail (audit P1)
+            return tok[2:] + (" " + " ".join(tokens[k + 1 :]) if k + 1 < len(tokens) else "")
+    return None
+
+
+def _rm_has_recursive_flag(rm_tokens: list[str]) -> bool:
+    """Do rm's arguments contain a recursive indicator?
+    - `--recursive` (any case) — `--Force` is NOT recursive
+    - short flag groups containing r/R (`-fr`, `-rf`, `-Rf`) — `-f` alone is not
+    """
+    for t in rm_tokens:
+        if t.startswith("--"):
+            if re.match(r"^--recursive$", t, re.IGNORECASE):
+                return True
+        elif t.startswith("-") and len(t) > 1:
+            # Short flag group: must contain r or R to be recursive.
+            if "r" in t[1:] or "R" in t[1:]:
+                return True
+    return False
+
+
+def _rm_dangerous_target(t: str) -> bool:
+    """Is this single rm argument a dangerous delete target?
+    ${HOME} normalizes to $HOME (2026-09-04 audit); Windows drive-letter
+    absolute paths and UNC paths join POSIX absolute paths as dangerous —
+    Git Bash's rm happily deletes `D:\\stuff`, same footgun class as
+    `rm -rf /stuff`. $USERPROFILE / $env:USERPROFILE are the Windows-native
+    home spellings (third-party adversarial review, 2026-09-04: only $HOME
+    was covered)."""
+    stripped = _expand_var_braces(_dequote(t))
+    low = stripped.lower()
+    return bool(
+        stripped.startswith("/")
+        or stripped.startswith("~")
+        or stripped.startswith("$HOME")
+        or low.startswith(("$userprofile", "$env:userprofile", "%userprofile%"))
+        or stripped.startswith("*")
+        or stripped.startswith("\\\\")
+        or _WIN_ABS_TARGET_RE.match(stripped)
+    )
+
+
 def _check_recursive_rm(command: str) -> str | None:
     """Python-level check for dangerous rm commands with recursive flags.
 
@@ -175,79 +231,27 @@ def _check_recursive_rm(command: str) -> str | None:
     Returns a reason string if blocked, or None if safe.
     """
     tokens = command.strip().split()
-    # `env -S "rm -rf /"`: -S/--split-string's VALUE is the command itself
-    # (GNU env split-string) — re-check the value as a command (audit P2).
-    if tokens and _norm_exe(tokens[0]) == "env":
-        for k, tok in enumerate(tokens[1:], 1):
-            val = None
-            if tok in ("-S", "--split-string") and k + 1 < len(tokens):
-                val = tokens[k + 1]
-            elif tok.startswith("--split-string="):
-                val = tok.split("=", 1)[1]
-            elif tok.startswith("-S") and len(tok) > 2:
-                # glued form -S"rm -rf /": the value CONTAINS spaces, so the
-                # whitespace split shredded it — rejoin the tail (audit P1)
-                val = tok[2:] + (" " + " ".join(tokens[k + 1 :]) if k + 1 < len(tokens) else "")
-            if val:
-                nested = _check_recursive_rm(val.strip("\"'"))
-                if nested:
-                    return nested
-                break
+    env_val = _env_split_string_value(tokens)
+    if env_val:
+        nested = _check_recursive_rm(env_val.strip("\"'"))
+        if nested:
+            return nested
+
     # Walk past env/sudo/doas prefixes (with their flags/values) to find the
     # command position, then past `source`/`.` wrappers. _skip_exec_prefixes
     # handles `sudo -u root rm` / `env -i rm` / `sudo -- rm` / `doas rm`
     # (2026-09-03 audit: the old entry check extracted `-u` as the command
     # name and bailed before the prefix stepper ever ran).
     idx = _skip_exec_prefixes(tokens)
-    name = _norm_exe(tokens[idx]) if idx < len(tokens) else ""
-    if name != "rm":
-        return None
     if idx >= len(tokens) or _norm_exe(tokens[idx]) != "rm":
         return None
 
     rm_tokens = tokens[idx + 1 :]
     if not rm_tokens:
         return None
-
-    has_recursive = False
-    for t in rm_tokens:
-        if t.startswith("--"):
-            # --recursive (any case) is the recursive indicator.
-            # --Force / --force are NOT recursive indicators.
-            if re.match(r"^--recursive$", t, re.IGNORECASE):
-                has_recursive = True
-        elif t.startswith("-") and len(t) > 1 and not t.startswith("--"):
-            # Short flag group: must contain r or R to be recursive.
-            # -f alone → not recursive. -fr, -rf, -Rf → recursive.
-            if "r" in t[1:] or "R" in t[1:]:
-                has_recursive = True
-
-    if not has_recursive:
+    if not _rm_has_recursive_flag(rm_tokens):
         return None
-
-    # Check for dangerous targets among rm's arguments. ${HOME} normalizes to
-    # $HOME (2026-09-04 audit); Windows drive-letter absolute paths and UNC
-    # paths join POSIX absolute paths as dangerous targets — Git Bash's rm
-    # happily deletes `D:\stuff`, same footgun class as `rm -rf /stuff`.
-    # $USERPROFILE / $env:USERPROFILE are the Windows-native home spellings
-    # (third-party adversarial review, 2026-09-04: only $HOME was covered).
-    has_dangerous = False
-    for t in rm_tokens:
-        stripped = _expand_var_braces(_dequote(t))
-        low = stripped.lower()
-        if (
-            stripped.startswith("/")
-            or stripped.startswith("~")
-            or stripped.startswith("$HOME")
-            or low.startswith(("$userprofile", "$env:userprofile", "%userprofile%"))
-            or stripped.startswith("*")
-            or stripped.startswith("\\\\")
-            or _WIN_ABS_TARGET_RE.match(stripped)
-        ):
-            has_dangerous = True
-            break
-
-    if not has_dangerous:
+    if not any(_rm_dangerous_target(t) for t in rm_tokens):
         return None
 
     norm = [_expand_var_braces(_dequote(t)) for t in rm_tokens]
