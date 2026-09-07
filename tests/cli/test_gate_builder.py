@@ -1,9 +1,11 @@
-"""Tests for the sandbox-aware permission gate builder (audit P1-11, 2026-09-04).
+"""Tests for the sandbox-aware permission gate builder (audit P1-11, 2026-09-04;
+boundary-kind model per gpt5.6-sol review, 2026-09-05).
 
 auto_allow_if_sandboxed may only auto-approve execute when the configured
-sandbox ACTUALLY provides a boundary on the current platform — "sandbox_mode
-!= off" alone gave macOS / Linux-without-bwrap users zero isolation AND zero
-confirmation.
+sandbox ACTUALLY provides a filesystem write boundary — "sandbox_mode != off"
+alone gave macOS / Linux-without-bwrap / Windows users zero isolation AND
+zero confirmation. The boundary-kind model (filesystem / resource / none)
+replaces the old boolean: auto-allow requires "filesystem".
 """
 
 import pytest
@@ -16,60 +18,84 @@ def _cfg(**tools) -> Config:
     return Config(tools=ToolsConfig(permission_mode="confirm", **tools))
 
 
-def test_sandbox_boundary_off_is_not_effective():
-    assert repl._sandbox_boundary("off") == (False, None)
+def test_sandbox_boundary_off_is_none():
+    assert repl._sandbox_boundary("off") == ("none", None)
 
 
-def test_sandbox_boundary_windows_effective(monkeypatch):
-    """Windows Job Object caps + tree kill exist (file-write isolation does
-    not — that gap keeps its own warning at the gate)."""
+def test_sandbox_boundary_windows_is_resource():
+    """Windows Job Object caps process count but NOT file writes — a real
+    boundary kind, not filesystem (gpt5.6-sol P1-2)."""
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(repl.sys, "platform", "win32")
-    assert repl._sandbox_boundary("write") == (True, None)
+    try:
+        kind, gap = repl._sandbox_boundary("write")
+        assert kind == "resource" and gap is None
+    finally:
+        monkeypatch.undo()
 
 
-def test_sandbox_boundary_darwin_never_effective(monkeypatch):
+def test_sandbox_boundary_darwin_is_none():
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(repl.sys, "platform", "darwin")
-    effective, gap = repl._sandbox_boundary("write")
-    assert effective is False
-    assert gap and "macOS" in gap
+    try:
+        kind, gap = repl._sandbox_boundary("write")
+        assert kind == "none" and gap and "macOS" in gap
+    finally:
+        monkeypatch.undo()
 
 
-def test_sandbox_boundary_linux_job_unimplemented(monkeypatch):
+def test_sandbox_boundary_linux_job_is_none():
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(repl.sys, "platform", "linux")
-    effective, gap = repl._sandbox_boundary("job")
-    assert effective is False
-    assert gap and "job" in gap
+    try:
+        kind, gap = repl._sandbox_boundary("job")
+        assert kind == "none" and gap and "job" in gap
+    finally:
+        monkeypatch.undo()
 
 
 def test_sandbox_boundary_linux_write_follows_bwrap(monkeypatch):
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(repl.sys, "platform", "linux")
     try:
         from coderio.tools import linux_sandbox
+
+        monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: True)
+        assert repl._sandbox_boundary("write") == ("filesystem", None)
+        monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: False)
+        kind, gap = repl._sandbox_boundary("write")
+        assert kind == "none" and gap and "bubblewrap" in gap
+    finally:
+        monkeypatch.undo()
+
+
+def test_auto_allow_disabled_when_boundary_is_not_filesystem(monkeypatch, capsys):
+    """A1 (gpt5.6-sol P1-2): auto-allow requires "filesystem" — Windows
+    resource, macOS none, Linux-no-bwrap all disable it with a printed
+    reason."""
+    for platform, mode in (("win32", "job"), ("darwin", "write"), ("linux", "job")):
+        monkeypatch.setattr(repl.sys, "platform", platform)
+        gate = repl.build_gate(_cfg(sandbox_mode=mode, auto_allow_if_sandboxed=True))
+        assert getattr(gate, "_auto_allow_execute", False) is False, (
+            f"auto-allow must be disabled on {platform}/{mode} (boundary is not filesystem)"
+        )
+
+
+def test_auto_allow_works_when_boundary_is_filesystem(monkeypatch):
+    """Linux + bwrap + write mode + opt-in → auto-allow works."""
+    monkeypatch.setattr(repl.sys, "platform", "linux")
+    try:
+        from coderio.tools import linux_sandbox
+
+        monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: True)
     except ImportError:
-        pytest.skip("linux_sandbox not importable on this platform")
-    monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: True)
-    assert repl._sandbox_boundary("write") == (True, None)
-    monkeypatch.setattr(linux_sandbox, "bwrap_available", lambda: False)
-    effective, gap = repl._sandbox_boundary("write")
-    assert effective is False and gap and "bubblewrap" in gap
-
-
-def test_auto_allow_disabled_when_sandbox_not_effective(monkeypatch, capsys):
-    """P1-11 core: macOS + sandbox_mode=write + auto_allow_if_sandboxed →
-    the gate must NOT auto-approve execute (zero isolation must never mean
-    zero confirmation), and the user must be told why."""
-    monkeypatch.setattr(repl.sys, "platform", "darwin")
+        pass  # linux_sandbox module may not exist on Windows — bwrap_available just won't be monkeypatched
     gate = repl.build_gate(_cfg(sandbox_mode="write", auto_allow_if_sandboxed=True))
-    assert getattr(gate, "_auto_allow_execute", False) is False, (
-        "auto-allow must be disabled when the sandbox provides no boundary"
-    )
-    err = capsys.readouterr().err
-    assert "auto_allow_if_sandboxed" in err, "the disablement must be surfaced, never silent"
-
-
-def test_auto_allow_still_works_when_sandbox_effective(monkeypatch):
-    """The tightening must not break the real use case: Windows + job mode +
-    opt-in → auto-allow stays on (with its known-limitation warning)."""
-    monkeypatch.setattr(repl.sys, "platform", "win32")
-    gate = repl.build_gate(_cfg(sandbox_mode="job", auto_allow_if_sandboxed=True))
     assert getattr(gate, "_auto_allow_execute", False) is True
+
+
+def test_gate_without_auto_allow_opt_in_stays_safe():
+    """Default (auto_allow_if_sandboxed=False) → never auto-allows regardless
+    of platform or sandbox."""
+    gate = repl.build_gate(_cfg(sandbox_mode="write"))
+    assert getattr(gate, "_auto_allow_execute", False) is False

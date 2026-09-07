@@ -267,6 +267,14 @@ async def load_mcp_tools(
             _log.warning("MCP server %r failed to load (skipped): %s", server_name, e)
 
     _log.info("Loaded %d MCP tools from %d servers", len(all_tools), len(connections))
+    # Tag every loaded tool as MCP-sourced (audit P1-1, 2026-09-05): the
+    # permission gate reads this marker to apply capability-first gating —
+    # unannotated tools still carry the marker, so an unknown MCP tool can
+    # never masquerade as a built-in in the gate's eyes. The adapter dumps
+    # server annotations (readOnlyHint/destructiveHint) into the same mapping.
+    for tool in all_tools:
+        meta = getattr(tool, "metadata", None)
+        tool.metadata = {"mcp": True, **meta} if isinstance(meta, dict) else {"mcp": True}
     return all_tools
 
 

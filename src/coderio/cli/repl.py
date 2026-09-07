@@ -100,36 +100,37 @@ def build_turn_spec(
     )
 
 
-def _sandbox_boundary(sandbox_mode: str) -> tuple[bool, str | None]:
-    """Does the configured sandbox mode actually provide a boundary HERE?
+def _sandbox_boundary(sandbox_mode: str) -> tuple[str, str | None]:
+    """What boundary does the configured sandbox actually provide HERE?
 
-    Returns (effective, gap_reason). Third-party audit P1-11 (2026-09-04):
-    auto-allow used to key off `sandbox_mode != "off"` alone, so on macOS
-    (no OS sandbox) and Linux without bubblewrap the user got "zero isolation
-    + zero confirmation" — execute ran with the parent's full permissions and
-    no prompt. Now a sandbox that can't deliver counts as off for gating
-    purposes (it still degrades at run time, with a model-visible marker —
-    see sandbox_runner).
+    Returns (kind, gap_reason) where kind is:
+      - "filesystem" — a real write boundary (Linux bwrap write mode)
+      - "resource"   — process/resource limits only (Windows Job Object)
+      - "none"       — the sandbox cannot deliver on this platform
+
+    Third-party audit P1-11 (2026-09-04) + gpt5.6-sol review (2026-09-05):
+    auto-allow is gated on "filesystem" — a Job Object bounds process count
+    but NOT file writes, so auto-approving execute behind it was "zero
+    isolation + zero confirmation". The rule is now one sentence: auto-allow
+    only when a real write boundary exists.
     """
     if sandbox_mode == "off":
-        return False, None
+        return "none", None
     if sys.platform == "win32":
-        # Job Object resource caps + tree kill exist (file-write isolation
-        # does not — warned separately at the gate).
-        return True, None
+        return "resource", None
     if sys.platform == "darwin":
-        return False, "macOS 暂无 OS 级沙箱（bwrap 仅支持 Linux）"
+        return "none", "macOS 暂无 OS 级沙箱（bwrap 仅支持 Linux）"
     # Linux
     if sandbox_mode == "write":
         try:
             from coderio.tools.linux_sandbox import bwrap_available
 
             if bwrap_available():
-                return True, None
-            return False, "Linux 未安装 bubblewrap，write 沙箱将降级为直接执行"
+                return "filesystem", None
+            return "none", "Linux 未安装 bubblewrap，write 沙箱将降级为直接执行"
         except ImportError:
-            return False, "linux_sandbox 模块不可用，write 沙箱将降级为直接执行"
-    return False, "Linux 下 job 档暂无实现（等价直接执行）"
+            return "none", "linux_sandbox 模块不可用，write 沙箱将降级为直接执行"
+    return "none", "Linux 下 job 档暂无实现（等价直接执行）"
 
 
 def build_gate(cfg: Config, console=None, tui=None):
@@ -151,26 +152,17 @@ def build_gate(cfg: Config, console=None, tui=None):
     still applies via CommandReviewMiddleware. PLAN mode is unaffected.
     """
     mode = PermissionMode.normalize(cfg.tools.permission_mode)
-    # auto_allow_execute is meaningful only when a sandbox actually provides a
-    # boundary on THIS platform + the user opted in. FULL mode already allows
-    # everything; PLAN stays read-only.
+    # auto_allow_execute is gated on "filesystem" — the ONLY boundary kind
+    # that justifies skipping the confirm prompt (audit P1-11 + gpt5.6-sol
+    # review: a Job Object caps process count but NOT file writes, so
+    # "resource" is zero-write-isolation and must not auto-approve).
     sandbox_mode = cfg.tools.sandbox_mode
-    sandbox_effective, sandbox_gap = _sandbox_boundary(sandbox_mode)
-    auto_exec = sandbox_effective and cfg.tools.auto_allow_if_sandboxed
-    # HONEST WARNING (2026-08-28 audit, extended 2026-09-03; tightened
-    # 2026-09-04 per the third-party audit P1-11): auto-allow is only granted
-    # when a real boundary exists. Where it doesn't — macOS (no OS sandbox),
-    # Linux job (unimplemented), Linux write without bubblewrap — auto-allow
-    # is DISABLED (execute prompts per command) instead of silently running
-    # "zero isolation + zero confirmation". Warn on every gate build.
+    boundary_kind, boundary_gap = _sandbox_boundary(sandbox_mode)
+    auto_exec = boundary_kind == "filesystem" and cfg.tools.auto_allow_if_sandboxed
     warn = None
-    if sandbox_mode != "off" and cfg.tools.auto_allow_if_sandboxed and not sandbox_effective:
-        warn = f"⚠ [sandbox] {sandbox_gap}。auto_allow_if_sandboxed 不生效：execute 将逐条确认（黑名单仍生效）。"
-    elif auto_exec and sandbox_mode in ("job", "write") and sys.platform == "win32":
-        warn = (
-            "⚠ [sandbox] Windows 下沙箱暂无文件写隔离（job/write 均为资源限制）。"
-            "auto_allow_if_sandboxed 已开启，execute 将无确认执行（黑名单仍生效）。"
-        )
+    if sandbox_mode != "off" and cfg.tools.auto_allow_if_sandboxed and not auto_exec:
+        gap = boundary_gap or "当前平台沙箱不提供文件写边界"
+        warn = f"⚠ [sandbox] {gap}。auto_allow_if_sandboxed 不生效：execute 将逐条确认（黑名单仍生效）。"
     if warn:
         if console is not None:
             console.print(warn, style="yellow")

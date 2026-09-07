@@ -125,6 +125,15 @@ class PermissionGate:
         """
         self._mode = PermissionMode.normalize(mode)
         self._auto_allow_execute = auto_allow_execute
+        # MCP tool capabilities, set at wiring time via set_mcp_capabilities
+        # (audit P1-1, 2026-09-05). Empty = no MCP tools known → the gate
+        # falls back to the pre-existing name heuristic for anything that
+        # looks external.
+        self._mcp_capabilities: dict[str, dict] = {}
+
+    def set_mcp_capabilities(self, capabilities: dict[str, dict]) -> None:
+        """Wire the MCP capability map collected from the loaded tool list."""
+        self._mcp_capabilities = dict(capabilities or {})
 
     @property
     def mode(self) -> str:
@@ -150,8 +159,22 @@ class PermissionGate:
             # tool just because "filesystem_write_file" isn't in DESTRUCTIVE_TOOLS.
             pass
         else:
-            # Read-only tool (built-in or MCP) — allow regardless of mode.
-            return True
+            caps = self._mcp_capabilities.get(tool_name)
+            if caps is None:
+                # Built-in read-only tool — allow regardless of mode.
+                return True
+            # MCP-sourced tool (marker set at load time): capability-first
+            # (external review P1-1 — slack_send_message used to run in
+            # PLAN mode because "send" wasn't a keyword).
+            if caps.get("readOnlyHint") is True:
+                return True
+            if self._mode == PermissionMode.FULL:
+                return True
+            if caps.get("destructiveHint") is not True:
+                # unknown capability: never silently passes below FULL
+                return self._ask(tool_name, args)
+            # destructiveHint declared → fall through to tier logic below
+            # (PLAN blocks, CONFIRM asks, FULL allows)
         # FULL: auto-allow everything.
         if self._mode == PermissionMode.FULL:
             return True

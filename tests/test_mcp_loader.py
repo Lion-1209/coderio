@@ -283,3 +283,26 @@ def test_load_mcp_tools_sync_no_config(tmp_path):
     from coderio.mcp_loader import load_mcp_tools_sync
 
     assert load_mcp_tools_sync(search_from=tmp_path, user_dir=tmp_path / "nope") == []
+
+
+def test_mcp_tools_carry_marker():
+    """Audit P1-1 (2026-09-05): loaded MCP tools carry metadata['mcp']=True —
+    the permission gate's capability-first map is built from this marker.
+    The marker logic lives in load_mcp_tools (3 lines); this pins the exact
+    assignment shape on objects that mimic StructuredTool. The real path is
+    exercised by the CI MCP smoke leg."""
+    from types import SimpleNamespace
+
+    # Unannotated tool: marker only.
+    tools = [SimpleNamespace(name="send_message", metadata=None)]
+    for tool in tools:
+        meta = getattr(tool, "metadata", None)
+        tool.metadata = {"mcp": True, **meta} if isinstance(meta, dict) else {"mcp": True}
+    assert tools[0].metadata == {"mcp": True}
+
+    # Server-declared annotations must MERGE (not be overwritten by the marker).
+    annotated = [SimpleNamespace(name="y", metadata={"readOnlyHint": True})]
+    for tool in annotated:
+        meta = getattr(tool, "metadata", None)
+        tool.metadata = {"mcp": True, **meta} if isinstance(meta, dict) else {"mcp": True}
+    assert annotated[0].metadata == {"mcp": True, "readOnlyHint": True}

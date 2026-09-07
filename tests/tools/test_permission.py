@@ -304,3 +304,73 @@ def test_auto_allow_execute_property_reflects_flag():
     """The auto_allow_execute property exposes the flag for introspection."""
     assert _AlwaysAllow("confirm").auto_allow_execute is False
     assert _AlwaysAllow("confirm", auto_allow_execute=True).auto_allow_execute is True
+
+
+# ------------------------- MCP capability gating (external review P1-1, 2026-09-05)
+
+
+class _AskDenied(PermissionGate):
+    """Records _ask calls and DENIES — PLAN-ish semantics for assertions."""
+
+    def __init__(self, mode):
+        super().__init__(mode)
+        self.asked: list[str] = []
+
+    def _ask(self, tool_name, args):
+        self.asked.append(tool_name)
+        return False
+
+
+_MCP_CAPS = {
+    "slack_send_message": {"mcp": True},
+    "notion_update_page": {"mcp": True},
+    "filesystem_move_file": {"mcp": True},
+    "stripe_refund_payment": {"mcp": True},
+}
+
+
+def test_mcp_unknown_capability_confirms_in_plan():
+    """Audit P1-1: unknown-capability MCP tools (slack_send_message etc.)
+    used to run silently in PLAN mode — the name keyword list had no entry
+    for 'send'/'update'/'move'/'refund'. They now go to the confirm path and
+    are denied when the user refuses."""
+    gate = _AskDenied("plan")
+    gate.set_mcp_capabilities(_MCP_CAPS)
+    for name in _MCP_CAPS:
+        assert gate.check(name, {}) is False, f"{name} must not silently run in PLAN"
+        assert name in gate.asked, f"{name} must go through the confirm path"
+
+
+def test_mcp_readonly_hint_allows_every_tier():
+    """Capability-first: the server's readOnlyHint is trusted over the name
+    heuristic — a read-only MCP tool stays fluid in PLAN exploration."""
+    gate = _AskDenied("plan")
+    gate.set_mcp_capabilities({"docs_search": {"mcp": True, "readOnlyHint": True}})
+    assert gate.check("docs_search", {}) is True
+    assert gate.asked == []
+
+
+def test_mcp_destructive_hint_blocks_in_plan():
+    """A DECLARED destructive MCP tool falls to the tier logic: PLAN blocks
+    outright (read-only tier), without prompting."""
+    gate = _AskDenied("plan")
+    gate.set_mcp_capabilities({"db_drop_table": {"mcp": True, "destructiveHint": True}})
+    assert gate.check("db_drop_table", {}) is False
+    assert gate.asked == []
+
+
+def test_mcp_full_mode_allows_unknown_capability():
+    gate = _AskDenied("full")
+    gate.set_mcp_capabilities({"slack_send_message": {"mcp": True}})
+    assert gate.check("slack_send_message", {}) is True
+    assert gate.asked == []
+
+
+def test_gate_without_capabilities_keeps_legacy_behavior():
+    """No capability map wired (e.g. the research subagent's bare PLAN gate)
+    → pre-capability behavior is unchanged. That path is safe because the
+    research subagent's visibility whitelist (see _deepagents_compat) never
+    shows MCP-prefixed tools to its model — pinned in
+    test_research_whitelist_blocks_mcp_style_names."""
+    gate = _AskDenied("plan")
+    assert gate.check("slack_send_message", {}) is True

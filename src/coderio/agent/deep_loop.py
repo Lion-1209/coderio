@@ -457,6 +457,26 @@ def _build_extra_tools(tools, skill_store, active_skills, anchor_dir=None):
     return extra
 
 
+def _collect_mcp_capabilities(tools) -> dict[str, dict]:
+    """Collect MCP tool metadata for the permission gate (audit P1-1,
+    2026-09-05).
+
+    mcp_loader tags every loaded tool with ``metadata["mcp"] = True`` and
+    langchain-mcp-adapters dumps the server's tool annotations
+    (readOnlyHint/destructiveHint) into the same mapping. The gate reads this
+    map capability-first; tools without the marker (coderio built-ins,
+    skills) are unaffected.
+    """
+    caps: dict[str, dict] = {}
+    for t in tools or []:
+        meta = getattr(t, "metadata", None)
+        if isinstance(meta, dict) and meta.get("mcp"):
+            name = getattr(t, "name", "")
+            if name:
+                caps[name] = meta
+    return caps
+
+
 def _readonly_subagent_middleware(command_policy=None, hook_runner=None) -> list:
     """Assemble the READ-ONLY middleware stack shared by the research subagent
     and every user-defined custom subagent (hooks → PermissionMiddleware(PLAN)
@@ -985,6 +1005,13 @@ def run_deep_agent(
     backend = build_backend(spec)
     subagents = build_subagents(spec, stream, hook_runner, project_dir)
     extra_lc_tools = _build_extra_tools(spec.tools, spec.skill_store, spec.active_skills, anchor_dir=project_dir)
+
+    # MCP capability gating (external review 2026-09-05 P1-1): the permission
+    # gate reads server annotations (readOnlyHint/destructiveHint) for MCP
+    # tools instead of guessing from names — an unknown MCP tool in PLAN mode
+    # now goes to confirm instead of silently running.
+    if spec.gate is not None and hasattr(spec.gate, "set_mcp_capabilities"):
+        spec.gate.set_mcp_capabilities(_collect_mcp_capabilities(spec.tools))
 
     build_kwargs: dict[str, Any] = {
         "model": spec.model,
