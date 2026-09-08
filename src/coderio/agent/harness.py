@@ -524,12 +524,20 @@ class Harness:
     stream: Any = None
 
     # ------------------------------------------------------------------ observe
-    def observe(self, name: str, args: dict, result: str) -> None:
+    def observe(self, name: str, args: dict, result: str, *, exit_code: int | None = None) -> None:
         """Update internal state from a tool execution (called after every tool).
 
         - successful write tool  -> record path as an unverified write
         - read tool              -> record the path/pattern as "actually read"
         - bash (any result)      -> writes are now "verified attempt", clear + reset
+
+        ``exit_code``: structured exit code from the middleware, extracted from
+        the result OBJECT's ``.exit_code`` attribute before text conversion.
+        When provided, it takes precedence over text-marker parsing (ROADMAP:
+        ToolResult structuring — the text format is a legacy carrier that can
+        break when the upstream wording changes). ``None`` = fall back to
+        text-marker parsing (the deepagents ToolMessage path, where the
+        attribute is lost in conversion).
         """
         if not self.enabled:
             return
@@ -589,7 +597,11 @@ class Harness:
             #       only exit 0 clears the unverified-writes list.
             command = str(args.get("command", ""))
             if _command_verifies_written(command, self.state.writes_since_verify):
-                exit_code = _parse_exit_code(result)
+                # Structured exit_code from the middleware takes precedence
+                # (ROADMAP ToolResult structuring); text-marker parsing is
+                # the legacy fallback for deepagents ToolMessage results
+                # where the attribute was lost in conversion.
+                code = exit_code if exit_code is not None else _parse_exit_code(result)
                 # A command that FAILED TO RUN at all (permission denied, tool
                 # error) can never count as verification — parse its exit code
                 # would miss these because they carry no marker at all.
@@ -601,7 +613,7 @@ class Harness:
                 # in this branch.)
                 if not _is_success(result):
                     pass  # Did not run → not verified; writes stay pending.
-                elif exit_code is not None and exit_code != 0:
+                elif code is not None and code != 0:
                     # Verification FAILED. Do NOT clear writes_since_verify — the
                     # agent must fix the code and re-run. Do NOT increment
                     # verify_attempts here: that counter is the _verify_gate's

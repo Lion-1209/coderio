@@ -152,7 +152,13 @@ class HarnessMiddleware(SyncOnlyMiddleware):
 
         # Feed ground truth to the harness (translate deepagents → coderio names).
         coderio_name = _to_harness_name(name)
-        self.harness.observe(coderio_name, args, result_text)
+        # ROADMAP ToolResult structuring: extract the structured exit_code
+        # from the result OBJECT before text conversion loses it, and pass
+        # it to observe() so the harness doesn't re-parse text markers.
+        # Falls back to None (text-marker parsing) when the result has no
+        # .exit_code attribute (deepagents ToolMessage path).
+        structured_exit_code = getattr(result, "exit_code", None)
+        self.harness.observe(coderio_name, args, result_text, exit_code=structured_exit_code)
 
         # Sync deepagents' write_todos into the harness's TodoStore so
         # CompletionGate can check for pending todos. Only sync when the tool

@@ -931,3 +931,46 @@ def test_phase_debounce_across_repeated_reads():
         h.observe("read_file", {"path": f"f{i}.py"}, "contents")
     explore_calls = [c for c in stream.calls if c[0] == "explore"]
     assert len(explore_calls) == 1  # debounced
+
+
+# --------------------------------- ToolResult structuring (ROADMAP, 2026-09-04)
+
+
+def test_verify_gate_structured_exit_code_takes_precedence():
+    """ROADMAP ToolResult structuring: the middleware can pass a structured
+    exit_code (extracted from the result OBJECT's .exit_code attr) that
+    takes precedence over text-marker parsing. This means the harness's
+    VerifyGate works even if the upstream text format changes."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    # The text says "success" but the structured exit_code says failure:
+    h.observe("bash", {"command": "python a.py"}, "[Command succeeded with exit code 0]", exit_code=1)
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "structured exit_code 1 must override text saying exit 0"
+
+
+def test_verify_gate_structured_exit_code_zero_clears_writes():
+    """Structured exit_code 0 clears unverified writes without text parsing."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "python a.py"}, "no markers in this text", exit_code=0)
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, "structured exit_code 0 must clear writes"
+
+
+def test_verify_gate_text_parsing_fallback_when_no_structured():
+    """When exit_code is not provided (deepagents ToolMessage path), the
+    text-marker parsing fallback still works."""
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "python a.py"}, "output\n[Command failed with exit code 1]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is True, "text-marker exit 1 must keep writes pending"
+
+
+def test_verify_gate_text_parsing_fallback_exit_zero():
+    h = _harness()
+    h.observe("write_file", {"path": "a.py"}, "Wrote 10 chars to a.py")
+    h.observe("bash", {"command": "python a.py"}, "output\n[exit_code: 0]")
+    cont, _, _ = h.check_termination("done")
+    assert cont is False, "text-marker exit 0 must clear writes"
