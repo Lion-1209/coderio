@@ -374,3 +374,22 @@ def test_gate_without_capabilities_keeps_legacy_behavior():
     test_research_whitelist_blocks_mcp_style_names."""
     gate = _AskDenied("plan")
     assert gate.check("slack_send_message", {}) is True
+
+
+def test_bare_plan_gate_ask_denies_instead_of_crashing():
+    """F2 fix (adversarial review, 2026-09-05): the bare PermissionGate's
+    _ask used to raise NotImplementedError — a PLAN-gate main agent
+    encountering an unknown-capability MCP tool crashed the entire turn.
+    Fail-closed: can't ask = deny."""
+    gate = PermissionGate("plan")
+    gate.set_mcp_capabilities({"slack_send_message": {"mcp": True}})
+    result = gate.check("slack_send_message", {})
+    assert result is False, "bare PLAN gate must deny (fail-closed), not crash"
+
+
+def test_bare_confirm_gate_ask_denies_instead_of_crashing():
+    """Same fail-closed for CONFIRM mode bare gate."""
+    gate = PermissionGate("confirm")
+    gate.set_mcp_capabilities({"slack_send_message": {"mcp": True}})
+    result = gate.check("slack_send_message", {})
+    assert result is False

@@ -425,3 +425,57 @@ def test_contract_toolmessage_permission_denied_does_not_clear_writes():
     assert mw.harness.state.writes_since_verify == ["a.py"], (
         "permission-denied execute delivered as a real ToolMessage must NOT clear writes"
     )
+
+
+# ---------------- artifact exit_code path (adversarial F1 fix, 2026-09-05)
+
+
+def test_wrap_tool_call_reads_artifact_exit_code():
+    """F1 fix (adversarial review, 2026-09-05): deepagents converts
+    ExecuteResponse → ToolMessage INSIDE the handler, moving exit_code into
+    .artifact['exit_code'] — the middleware never sees .exit_code attr. The
+    middleware must read the artifact dict to get the structured value."""
+    from langchain_core.messages import ToolMessage
+
+    mw = HarnessMiddleware()
+    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 1 chars")
+    msg = ToolMessage(content="out\n[Command succeeded with exit code 0]", tool_call_id="x")
+    msg.artifact = {"exit_code": 1}  # the REAL structured data (deepagents puts it here)
+    req = _tool_call_request("execute", {"command": "pytest"})
+    mw.wrap_tool_call(req, lambda r: msg)
+    cont, _, _ = mw.harness.check_termination("done")
+    assert cont is True, (
+        "artifact exit_code=1 must keep writes pending even though text says success — "
+        "the structured channel must fire on the real production shape"
+    )
+
+
+def test_wrap_tool_call_artifact_exit_code_zero_clears():
+    """Artifact exit_code=0 (success) must clear writes — the text must
+    DISAGREE with the artifact so the test proves the structured channel (not
+    the text fallback) is doing the clearing (mutation round fix)."""
+    from langchain_core.messages import ToolMessage
+
+    mw = HarnessMiddleware()
+    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 1 chars")
+    msg = ToolMessage(content="out\n[exit_code: 1]", tool_call_id="x")  # text lies: says failure
+    msg.artifact = {"exit_code": 0}  # structured truth: success
+    req = _tool_call_request("execute", {"command": "python a.py"})
+    mw.wrap_tool_call(req, lambda r: msg)
+    assert mw.harness.state.writes_since_verify == [], (
+        "structured exit_code=0 must clear writes even when text says exit 1"
+    )
+
+
+def test_wrap_tool_call_no_artifact_falls_back_to_text():
+    """Without .artifact (or with empty artifact), the text-marker parsing
+    fallback must still work (backward compat)."""
+    from langchain_core.messages import ToolMessage
+
+    mw = HarnessMiddleware()
+    mw.harness.observe("write_file", {"path": "a.py"}, "Wrote 1 chars")
+    msg = ToolMessage(content="out\n[exit_code: 0]", tool_call_id="x")
+    # No .artifact attribute at all
+    req = _tool_call_request("execute", {"command": "python a.py"})
+    mw.wrap_tool_call(req, lambda r: msg)
+    assert mw.harness.state.writes_since_verify == [], "text fallback must still clear on exit 0"

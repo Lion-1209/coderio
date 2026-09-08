@@ -198,7 +198,15 @@ class PermissionGate:
         return self._ask(tool_name, args)
 
     def _ask(self, tool_name: str, args: dict[str, Any]) -> bool | str:
-        raise NotImplementedError
+        """Base implementation: fail-closed deny.
+
+        Subclasses override to prompt (Tui/Rich) or auto-approve (Auto).
+        The bare gate is used where no prompting surface exists (research
+        subagents, MCP capability-unknown path) — "can't ask = deny" is the
+        safe answer (adversarial review F2: raising NotImplementedError
+        crashed the entire turn when a PLAN-gate main agent encountered an
+        unknown-capability MCP tool)."""
+        return False
 
 
 def _default_prompt(tool_name: str, args) -> bool:

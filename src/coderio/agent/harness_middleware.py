@@ -153,11 +153,19 @@ class HarnessMiddleware(SyncOnlyMiddleware):
         # Feed ground truth to the harness (translate deepagents → coderio names).
         coderio_name = _to_harness_name(name)
         # ROADMAP ToolResult structuring: extract the structured exit_code
-        # from the result OBJECT before text conversion loses it, and pass
-        # it to observe() so the harness doesn't re-parse text markers.
-        # Falls back to None (text-marker parsing) when the result has no
-        # .exit_code attribute (deepagents ToolMessage path).
+        # from the result OBJECT before it's needed by the harness. Priority:
+        # 1. `.exit_code` attr (ExecuteResponse direct-call path, e.g. tests)
+        # 2. `.artifact["exit_code"]` (deepagents ToolMessage production path —
+        #    deepagents converts ExecuteResponse → ToolMessage INSIDE the
+        #    handler, moving exit_code into the artifact dict; the middleware
+        #    never sees the raw ExecuteResponse — seam + adversarial round
+        #    confirmed this, 2026-09-05)
+        # Falls back to None (text-marker parsing) when neither is present.
         structured_exit_code = getattr(result, "exit_code", None)
+        if structured_exit_code is None:
+            artifact = getattr(result, "artifact", None)
+            if isinstance(artifact, dict):
+                structured_exit_code = artifact.get("exit_code")
         self.harness.observe(coderio_name, args, result_text, exit_code=structured_exit_code)
 
         # Sync deepagents' write_todos into the harness's TodoStore so
