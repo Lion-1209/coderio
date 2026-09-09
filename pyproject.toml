@@ -42,7 +42,6 @@ classifiers = [
 authors = [
     { name = "coderio contributors" },
 ]
-project-urls = { Homepage = "https://github.com/Lion-1209/coderio", Repository = "https://github.com/Lion-1209/coderio", Issues = "https://github.com/Lion-1209/coderio/issues", Changelog = "https://github.com/Lion-1209/coderio/blob/main/CHANGELOG.md", Documentation = "https://github.com/Lion-1209/coderio/blob/main/docs/coderio-architecture.md" }
 dependencies = [
     "ddgs>=4.0",
     # deepagents: we subclass internals (LocalShellBackend.execute) and depend
@@ -67,6 +66,18 @@ dependencies = [
     "tomli-w>=1.0",
     "typer>=0.12",
 ]
+
+# PEP 621 sub-table. The earlier inline `project-urls = {...}` key was valid
+# TOML but NOT a PEP 621 field — hatchling silently ignored it, so built wheels
+# carried no Project-URL headers and the PyPI page showed empty links (found
+# via the pypi.org/pypi/coderio/json API on 2026-09-09). Takes effect at the
+# next release.
+[project.urls]
+Homepage = "https://github.com/Lion-1209/coderio"
+Repository = "https://github.com/Lion-1209/coderio"
+Issues = "https://github.com/Lion-1209/coderio/issues"
+Changelog = "https://github.com/Lion-1209/coderio/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Lion-1209/coderio/blob/main/docs/coderio-architecture.md"
 
 [project.optional-dependencies]
 dev = [

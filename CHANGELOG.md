@@ -6,6 +6,16 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [Unreleased]
+
+### Fixed
+
+- **PyPI 项目页外链为空**：仓库里一直写着项目 URLs，但用的是内联键
+  `project-urls = {...}`——它不是 PEP 621 字段，hatchling 静默忽略，构建出的
+  wheel 没有 Project-URL 头（线上 0.5.0 的 `info.project_urls` 为 null）。
+  改为标准的 `[project.urls]` 子表（Homepage/Repository/Issues/Changelog/
+  Documentation），随下次发版生效。
+
 ## [0.5.0] — 2026-09-04
 
 ### Security — 2026-09-04 third-party audit batch (P0; each fix re-verified by an independent adversarial round, mutation-tested, and runtime-audited)
