@@ -8,6 +8,15 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **httpx2 2.10.0 → 2.12.0**（连带 httpcore2 → 2.12.0）：PyPI 漏洞库 2026-09-09
+  收录 httpx2 2.10.0 的三条 CVE（CVE-2026-84379 / CVE-2026-84380，修复于 2.11.0；
+  CVE-2026-84382，修复于 2.12.0）。httpx2 经 langchain-openai → openai SDK 进入
+  依赖树（2026-08-14 进锁）；同一份锁 09-08 审计通过、09-09 被全矩阵 6 腿拦下——
+  依赖集合没变，是公告新发布。`uv lock --upgrade-package httpx2` 定向升级后
+  pip-audit 复审 0 漏洞。
+
 ### Fixed
 
 - **PyPI 项目页外链为空**：仓库里一直写着项目 URLs，但用的是内联键
