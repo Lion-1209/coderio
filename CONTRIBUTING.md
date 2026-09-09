@@ -87,3 +87,32 @@ Include:
 - The model and provider you're using.
 - Steps to reproduce.
 - The session file if relevant (`~/.coderio/sessions/*.jsonl`).
+
+## Contribution terms
+
+> 条款要点（中文摘要，以英文为准）：提交 PR 或以任何形式贡献代码/文档，即表示你同意贡献以
+> MIT 授权本项目，并授予项目所有者不可撤销的再许可权利（用于未来可能的商业组件双许可）；
+> 你保留自己贡献的版权。不接受的个别情况请在提交前提出，一般都可以协商。
+
+By submitting a pull request, or posting code, docs, or any other
+contribution to this repository, you agree that:
+
+1. Your contribution is licensed to the project under the repository's
+   current license (MIT), **and**
+2. You grant the project owner (Lion / Lion-1209) a perpetual,
+   irrevocable, worldwide, royalty-free, non-exclusive right to use,
+   reproduce, modify, sublicense (including under other licenses), and
+   distribute your contribution as part of this project or products
+   based on it, **and**
+3. You confirm you have the legal right to submit it (your own work, or
+   work you are authorized to contribute). If you contribute in the
+   course of employment, you confirm your employer approves this
+   submission.
+
+Bug-report material (logs, traces, photos) attached to issues is used
+only to reproduce and fix problems. You keep the copyright to your
+contribution. These terms keep the project permissively licensed while
+preserving the owner's ability to evolve licensing later (e.g.
+dual-licensing around future commercial components). If you need your
+contribution handled under different terms, say so in the issue/PR
+**before** submitting and we'll work it out — most cases are fine.
