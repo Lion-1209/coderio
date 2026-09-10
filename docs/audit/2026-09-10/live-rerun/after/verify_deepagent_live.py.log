@@ -1,0 +1,126 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmp_2fzrxa9
+
+============================================================
+TEST 1: deepagent writes to real disk (virtual_mode=True)
+============================================================
+Traceback (most recent call last):
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver_after.py", line 44, in <module>
+    try: result=ns['main']();print('SCRIPT_EXIT',result)
+                ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/scripts/verify_deepagent_live.py", line 54, in main
+    ans = run_deep_agent(
+          ^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver_after.py", line 41, in observed
+    try: return original(*args,**kwargs,stream=AuditStream())
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/src/coderio/agent/deep_loop.py", line 1047, in run_deep_agent
+    final_text = _run_stream(
+                 ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/src/coderio/agent/deep_loop.py", line 687, in _run_stream
+    mode, event = next(chunk_iter)
+                  ^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/main.py", line 2967, in stream
+    for _ in runner.tick(
+             ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py", line 344, in tick
+    _panic_or_proceed(
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py", line 687, in _panic_or_proceed
+    raise exc
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/_executor.py", line 80, in done
+    task.result()
+  File "<AUDIT_ROOT>/.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "<AUDIT_ROOT>/.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/_retry.py", line 617, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py", line 707, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py", line 447, in invoke
+    ret = self.func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 1482, in model_node
+    result = wrap_model_call_handler(request, _execute_model_sync)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 339, in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/deepagents/middleware/filesystem.py", line 3084, in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 329, in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 339, in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/deepagents/middleware/subagents.py", line 731, in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 329, in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 339, in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/deepagents/middleware/summarization.py", line 1392, in wrap_model_call
+    return handler(request.override(messages=truncated_messages))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 329, in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 339, in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/middleware/todo.py", line 256, in wrap_model_call
+    return handler(request.override(system_message=new_system_message))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 329, in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_anthropic/middleware/prompt_caching.py", line 170, in wrap_model_call
+    return handler(self._apply_caching(request))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain/agents/factory.py", line 1450, in _execute_model_sync
+    output = model_.invoke(messages)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_core/runnables/base.py", line 6002, in invoke
+    return self.bound.invoke(
+           ^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py", line 476, in invoke
+    self.generate_prompt(
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py", line 1865, in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py", line 1672, in generate
+    self._generate_with_cache(
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py", line 1969, in _generate_with_cache
+    for chunk in self._stream(messages, stop=stop, **kwargs):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_anthropic/chat_models.py", line 1662, in _stream
+    stream = self._create(payload)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langchain_anthropic/chat_models.py", line 1634, in _create
+    return self._client.messages.create(**payload)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/anthropic/_utils/_utils.py", line 294, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/anthropic/resources/messages/messages.py", line 1048, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/anthropic/_base_client.py", line 1536, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/anthropic/_base_client.py", line 1195, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.RateLimitError: Error code: 429 - {'error': {'message': 'request limited RPM reached, current: 11, limit: 10. Please top up at https://platform.stepfun.com/top-up. Rate limit rules: https://platform.stepfun.com/docs/zh/pricing/details#%E9%98%B6%E6%A2%AF%E9%99%90%E9%80%9F', 'type': 'rate_limited'}}
+During task with name 'model' and id '2d045681-6ad5-b939-1562-a81109c23a52'
+SCRIPT_EXIT 1

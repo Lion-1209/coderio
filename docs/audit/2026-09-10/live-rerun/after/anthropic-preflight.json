@@ -1,0 +1,17 @@
+{
+  "protocol": "anthropic",
+  "url": "https://api.stepfun.com/v1/messages",
+  "model": "step-3.7-flash",
+  "status": 200,
+  "seconds": 0.93,
+  "response": {
+    "model": "step-3.7-flash",
+    "usage": {
+      "input_tokens": 16,
+      "output_tokens": 64,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "text": "OK"
+  }
+}

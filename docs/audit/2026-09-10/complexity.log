@@ -1,0 +1,256 @@
+C901 `_shell_backend_cls` is too complex (24 > 10)
+  --> src/coderio/agent/deep_loop.py:53:5
+   |
+53 | def _shell_backend_cls():
+   |     ^^^^^^^^^^^^^^^^^^
+54 |     """LocalShellBackend subclass that decodes subprocess output lossibly on Windows.
+   |
+
+C901 `_emit_message` is too complex (15 > 10)
+    --> src/coderio/agent/deep_loop.py:1203:5
+     |
+1203 | def _emit_message(m, stream, session, seen_ids: set, turn_writes: list, tc_args: dict | None = None) -> str:
+     |     ^^^^^^^^^^^^^
+1204 |     """Map a complete langchain message to stream callbacks + session persistence.
+     |
+
+C901 `_segment_runs_written_file` is too complex (11 > 10)
+   --> src/coderio/agent/harness.py:388:5
+    |
+388 | def _segment_runs_written_file(segment: str, written_files: list[str]) -> bool:
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+389 |     """File-reference branch of _command_verifies_written: the segment must
+390 |     MENTION a written file AND its command head must actually run that file.
+    |
+
+C901 `observe` is too complex (16 > 10)
+   --> src/coderio/agent/harness.py:527:9
+    |
+526 |     # ------------------------------------------------------------------ observe
+527 |     def observe(self, name: str, args: dict, result: str, *, exit_code: int | None = None) -> None:
+    |         ^^^^^^^
+528 |         """Update internal state from a tool execution (called after every tool).
+    |
+
+C901 `wrap_tool_call` is too complex (13 > 10)
+   --> src/coderio/agent/harness_middleware.py:136:9
+    |
+135 |     # ------------------------------------------------------- observe tool calls
+136 |     def wrap_tool_call(self, request, handler):
+    |         ^^^^^^^^^^^^^^
+137 |         """Observe every tool execution (ground truth) + apply PlanGate nudge.
+    |
+
+C901 `after_model` is too complex (11 > 10)
+   --> src/coderio/agent/harness_middleware.py:231:9
+    |
+229 |     # ------------------------------------------------------- intercept termination
+230 |     @hook_config(can_jump_to=["model"])
+231 |     def after_model(self, state, runtime):
+    |         ^^^^^^^^^^^
+232 |         """The model produced output. If it wants to end (no tool_calls) but the
+233 |         harness says verification is missing, force the loop to continue.
+    |
+
+C901 `load_project_instructions` is too complex (11 > 10)
+  --> src/coderio/agent/project_instructions.py:43:5
+   |
+43 | def load_project_instructions(search_from: str | Path, stop_at: str | Path | None = None) -> str:
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     """Find and read AGENTS.md (fallback CLAUDE.md).
+   |
+
+C901 `_cmd_export` is too complex (11 > 10)
+   --> src/coderio/cli/commands.py:278:5
+    |
+278 | def _cmd_export(ctx, arg: str) -> CommandResult:
+    |     ^^^^^^^^^^^
+279 |     """Export the current session to a markdown file.
+    |
+
+C901 `handle_slash` is too complex (22 > 10)
+   --> src/coderio/cli/commands.py:327:5
+    |
+327 | def handle_slash(line: str, ctx) -> CommandResult:
+    |     ^^^^^^^^^^^^
+328 |     parts = line.strip().split(maxsplit=1)
+329 |     cmd = parts[0]
+    |
+
+C901 `mcp_add` is too complex (11 > 10)
+   --> src/coderio/cli/mcp_cmd.py:98:5
+    |
+ 98 | def mcp_add(
+    |     ^^^^^^^
+ 99 |     name: str,
+100 |     *,
+    |
+
+C901 `_menu` is too complex (11 > 10)
+  --> src/coderio/cli/onboarding.py:30:5
+   |
+30 | def _menu(prompt_fn) -> ProviderInfo | str:
+   |     ^^^^^
+31 |     """Display grouped provider menu; return chosen ProviderInfo or 'skip'."""
+32 |     # Group providers for the menu display.
+   |
+
+C901 `run_onboarding` is too complex (11 > 10)
+   --> src/coderio/cli/onboarding.py:217:5
+    |
+217 | def run_onboarding(prompt_fn, password_fn, creds_file: Path | None = None) -> OnboardingResult | None:
+    |     ^^^^^^^^^^^^^^
+218 |     """Run the interactive wizard. Returns None if user skips."""
+219 |     print("No API key configured yet — starting setup wizard:")
+    |
+
+C901 `run_headless` is too complex (18 > 10)
+  --> src/coderio/cli/run_cmd.py:79:5
+   |
+79 | def run_headless(
+   |     ^^^^^^^^^^^^
+80 |     task: str,
+81 |     *,
+   |
+
+C901 `request_confirmation` is too complex (11 > 10)
+  --> src/coderio/cli/stream_controller.py:96:9
+   |
+95 |     # ----------------------------------------------------- cross-thread confirmation
+96 |     def request_confirmation(self, tool_name: str, args: dict, detail: str | None = None) -> bool | str:
+   |         ^^^^^^^^^^^^^^^^^^^^
+97 |         """Ask the user to allow/deny/custom-respond to a write operation.
+   |
+
+C901 `on_key` is too complex (18 > 10)
+   --> src/coderio/cli/tui.py:543:9
+    |
+541 |         self.query_one(CommandMenu).refresh_for(event.value)
+542 |
+543 |     def on_key(self, event) -> None:
+    |         ^^^^^^
+544 |         """Handle command-menu navigation + inline confirmation keys."""
+545 |         # Custom-reply mode: Enter submits the user's text as a str result.
+    |
+
+C901 `_spawn_turn` is too complex (12 > 10)
+   --> src/coderio/cli/tui.py:625:9
+    |
+623 |             event.input.value = ""
+624 |
+625 |     def _spawn_turn(self, line: str) -> bool:
+    |         ^^^^^^^^^^^
+626 |         """Echo + start the agent worker for one user line. Shared by Enter
+627 |         (on_input_submitted) and the ➤ send button so both paths stay
+    |
+
+C901 `on_list_view_selected` is too complex (11 > 10)
+   --> src/coderio/cli/tui_onboarding.py:387:9
+    |
+385 |     # --- event handlers ---
+386 |
+387 |     def on_list_view_selected(self, event: ListView.Selected) -> None:
+    |         ^^^^^^^^^^^^^^^^^^^^^
+388 |         """ListView item selected (Enter pressed)."""
+389 |         lv = self.query_one("#onboard-list", ListView)
+    |
+
+C901 `_handle_slash_line` is too complex (22 > 10)
+   --> src/coderio/cli/tui_runtime.py:120:9
+    |
+118 |         self._send_to_engine(line)
+119 |
+120 |     def _handle_slash_line(self, line: str) -> None:
+    |         ^^^^^^^^^^^^^^^^^^
+121 |         from pathlib import Path as _P
+    |
+
+C901 `_normalize_connection` is too complex (17 > 10)
+   --> src/coderio/mcp_loader.py:100:5
+    |
+100 | def _normalize_connection(server_name: str, cfg: dict) -> dict:
+    |     ^^^^^^^^^^^^^^^^^^^^^
+101 |     """Convert a .mcp.json entry to langchain-mcp-adapters connection format.
+    |
+
+C901 `load_mcp_tools` is too complex (11 > 10)
+   --> src/coderio/mcp_loader.py:197:11
+    |
+197 | async def load_mcp_tools(
+    |           ^^^^^^^^^^^^^^
+198 |     search_from: str | Path = ".",
+199 |     user_dir: str | Path | None = None,
+    |
+
+C901 `_locked_append` is too complex (11 > 10)
+  --> src/coderio/session/store.py:29:5
+   |
+28 | @contextmanager
+29 | def _locked_append(path: str | Path, timeout: float = 2.0) -> Iterator[object]:
+   |     ^^^^^^^^^^^^^^
+30 |     """Open a file for append with a best-effort cross-platform exclusive lock.
+   |
+
+C901 `build_diff_preview` is too complex (12 > 10)
+  --> src/coderio/tools/confirm_diff.py:81:5
+   |
+81 | def build_diff_preview(
+   |     ^^^^^^^^^^^^^^^^^^
+82 |     tool_name: str,
+83 |     args: dict,
+   |
+
+C901 `_python_fallback` is too complex (16 > 10)
+  --> src/coderio/tools/grep_tool.py:71:9
+   |
+69 |             return self._python_fallback(pattern, path, glob, output_mode)
+70 |
+71 |     def _python_fallback(self, pattern: str, path: str, glob: str, output_mode: str) -> str:
+   |         ^^^^^^^^^^^^^^^^
+72 |         base = Path(path)
+73 |         if base.is_file():
+   |
+
+C901 `run` is too complex (13 > 10)
+  --> src/coderio/tools/note.py:35:9
+   |
+33 |         return self._dir / f"{safe}.md"
+34 |
+35 |     def run(self, action: str, name: str = "", content: str = "") -> str:
+   |         ^^^
+36 |         if action == "list":
+37 |             self._dir.mkdir(parents=True, exist_ok=True)
+   |
+
+C901 `check` is too complex (14 > 10)
+   --> src/coderio/tools/permission.py:146:9
+    |
+144 |         return self._auto_allow_execute
+145 |
+146 |     def check(self, tool_name: str, args: dict[str, Any]) -> bool | str:
+    |         ^^^^^
+147 |         # note tool: only WRITE/APPEND/DELETE are destructive. read/list are
+148 |         # read-only and shouldn't prompt (same as read_file/ls).
+    |
+
+C901 `run_with_sandbox` is too complex (16 > 10)
+  --> src/coderio/tools/sandbox_runner.py:29:5
+   |
+29 | def run_with_sandbox(
+   |     ^^^^^^^^^^^^^^^^
+30 |     command: str,
+31 |     cwd: str,
+   |
+
+C901 `run` is too complex (12 > 10)
+  --> src/coderio/tools/todo.py:36:9
+   |
+34 |         self.store = store
+35 |
+36 |     def run(
+   |         ^^^
+37 |         self,
+38 |         action: str,
+   |
+
+Found 27 errors.

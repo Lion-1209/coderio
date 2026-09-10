@@ -1,0 +1,43 @@
+........................................................................ [  5%]
+....s................................................................... [ 10%]
+........................................................................ [ 16%]
+.........................................ss............................. [ 21%]
+........................................................................ [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 37%]
+........................................................................ [ 43%]
+........................................................................ [ 48%]
+........................................................................ [ 54%]
+........................................................................ [ 59%]
+...ss................................................................... [ 64%]
+................s....................................................... [ 70%]
+........................................................................ [ 75%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+........................s............................................... [ 91%]
+..............................................sssss.........sssss....... [ 97%]
+.............................sssss..                                     [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/agent/test_deep_loop_unit.py:419: bash resolution cache is Windows-only
+SKIPPED [1] tests/agent/test_perf_baseline.py:113: requires CODERIO_PERF_TESTS=1 + API key + deepagents
+SKIPPED [1] tests/agent/test_perf_baseline.py:134: requires CODERIO_PERF_TESTS=1 + API key + deepagents
+SKIPPED [1] tests/session/test_store.py:222: P0-5 regression is Windows msvcrt-specific; POSIX flock locks the whole file
+SKIPPED [1] tests/session/test_store.py:304: Windows ACL semantics; POSIX asserts 0600 directly
+SKIPPED [1] tests/test_seams.py:806: Windows-only seam test — env forwarding not yet implemented on Win32
+SKIPPED [1] tests/tools/test_grep_tool.py:116: rg is installed — Python fallback not exercised
+SKIPPED [1] tests/tools/test_sandbox.py:273: Windows-only Restricted Token
+SKIPPED [1] tests/tools/test_sandbox.py:288: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:296: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:304: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:331: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:547: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:567: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:590: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:599: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_sandbox.py:618: Windows-only sandbox path
+SKIPPED [1] tests/tools/test_win_job.py:56: Windows-only ctypes path
+SKIPPED [1] tests/tools/test_win_job.py:67: Windows-only ctypes path
+SKIPPED [1] tests/tools/test_win_job.py:78: Windows-only ctypes path
+SKIPPED [1] tests/tools/test_win_job.py:96: taskkill is Windows-only
+SKIPPED [1] tests/tools/test_win_job.py:120: Windows-only tree kill
+1310 passed, 22 skipped in 96.53s (0:01:36)

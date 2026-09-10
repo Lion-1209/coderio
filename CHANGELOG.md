@@ -10,6 +10,11 @@ All notable changes to coderio are documented here. The format follows
 
 ### Security
 
+- **Corrupt credentials backup permissions**: restrict a newly created
+  `.corrupt` backup before copying potentially recoverable API keys into it.
+  POSIX backups now retain 0600 under a normal 022 umask; exclusive creation
+  preserves the first backup. A real-filesystem regression covers this path.
+
 - **httpx2 2.10.0 → 2.12.0**（连带 httpcore2 → 2.12.0）：PyPI 漏洞库 2026-09-09
   收录 httpx2 2.10.0 的三条 CVE（CVE-2026-84379 / CVE-2026-84380，修复于 2.11.0；
   CVE-2026-84382，修复于 2.12.0）。httpx2 经 langchain-openai → openai SDK 进入
@@ -18,6 +23,17 @@ All notable changes to coderio are documented here. The format follows
   pip-audit 复审 0 漏洞。
 
 ### Fixed
+
+- **Live verification scripts**: migrate both harness/deepagent scripts to
+  `TurnSpec`. They still passed removed keyword arguments after the engine
+  refactor and raised TypeError before reaching the provider. Regression
+  tests replace only the model and exercise the real graph and tools.
+
+- **POSIX sandbox fallback timeout**: `job` and degraded `write` now kill the
+  process group before reaping the shell. Previously the timeout killed only
+  the shell, leaving child processes running; degraded timeout results now
+  retain the visible sandbox warning. Real-process regression tests cover the
+  production backend in `off`, `job`, and degraded `write` modes.
 
 - **PyPI 项目页外链为空**：仓库里一直写着项目 URLs，但用的是内联键
   `project-urls = {...}`——它不是 PEP 621 字段，hatchling 静默忽略，构建出的

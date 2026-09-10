@@ -1,0 +1,105 @@
+.FFF                                                                     [100%]
+=================================== FAILURES ===================================
+______________________ test_timeout_kills_descendant[job] ______________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_timeout_kills_descendant_1')
+mode = 'job'
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+    @pytest.mark.parametrize("mode", ["off", "job", "write"])
+    def test_timeout_kills_descendant(tmp_path: Path, mode: str) -> None:
+        if mode == "write" and bwrap_available():
+            pytest.skip("write uses bubblewrap here; this regression covers the plain fallback")
+        pidfile = tmp_path / "child.pid"
+        child = (
+            f"import os,time; from pathlib import Path; Path({str(pidfile)!r}).write_text(str(os.getpid())); "
+            "time.sleep(30)"
+        )
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(child)} & wait"
+        backend = make_shell_backend(root_dir=tmp_path, sandbox_mode=mode)
+        pid = None
+        try:
+            result = backend.execute(command, timeout=2)
+            assert result.exit_code == 124
+            pid = int(pidfile.read_text())
+            deadline = time.monotonic() + 2
+            while True:
+                state = subprocess.run(  # noqa: S603
+                    ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+                ).stdout.strip()
+                if not state or state.startswith("Z"):
+                    break
+>               assert time.monotonic() < deadline, f"descendant {pid} survived timeout: {state}"
+E               AssertionError: descendant 67014 survived timeout: S
+E               assert 262427.791088208 < 262427.7349165
+E                +  where 262427.791088208 = <built-in function monotonic>()
+E                +    where <built-in function monotonic> = time.monotonic
+
+tests/tools/test_posix_process_tree.py:42: AssertionError
+_____________________ test_timeout_kills_descendant[write] _____________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_timeout_kills_descendant_2')
+mode = 'write'
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+    @pytest.mark.parametrize("mode", ["off", "job", "write"])
+    def test_timeout_kills_descendant(tmp_path: Path, mode: str) -> None:
+        if mode == "write" and bwrap_available():
+            pytest.skip("write uses bubblewrap here; this regression covers the plain fallback")
+        pidfile = tmp_path / "child.pid"
+        child = (
+            f"import os,time; from pathlib import Path; Path({str(pidfile)!r}).write_text(str(os.getpid())); "
+            "time.sleep(30)"
+        )
+        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(child)} & wait"
+        backend = make_shell_backend(root_dir=tmp_path, sandbox_mode=mode)
+        pid = None
+        try:
+            result = backend.execute(command, timeout=2)
+            assert result.exit_code == 124
+            pid = int(pidfile.read_text())
+            deadline = time.monotonic() + 2
+            while True:
+                state = subprocess.run(  # noqa: S603
+                    ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+                ).stdout.strip()
+                if not state or state.startswith("Z"):
+                    break
+>               assert time.monotonic() < deadline, f"descendant {pid} survived timeout: {state}"
+E               AssertionError: descendant 67067 survived timeout: S
+E               assert 262431.914414875 < 262431.877238791
+E                +  where 262431.914414875 = <built-in function monotonic>()
+E                +    where <built-in function monotonic> = time.monotonic
+
+tests/tools/test_posix_process_tree.py:42: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  coderio.tools.sandbox_runner:sandbox_runner.py:100 sandbox_mode=write but bubblewrap not installed — falling back to plain run
+____________ test_corrupt_backup_is_private_under_permissive_umask _____________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_corrupt_backup_is_private0')
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits; Windows uses ACLs")
+    def test_corrupt_backup_is_private_under_permissive_umask(tmp_path: Path) -> None:
+        p = tmp_path / "credentials"
+        old_umask = os.umask(0o022)
+        try:
+            write_credentials({"audit": "fake-audit-key"}, p)
+            damaged = p.read_bytes() + b"\n[broken"
+            p.write_bytes(damaged)
+            assert read_credentials(p) == {}
+            backup = p.with_name("credentials.corrupt")
+            assert backup.read_bytes() == damaged
+>           assert backup.stat().st_mode & 0o777 == 0o600
+E           AssertionError: assert (33188 & 511) == 384
+E            +  where 33188 = os.stat_result(st_mode=33188, st_ino=13389828, st_dev=16777234, st_nlink=1, st_uid=501, st_gid=20, st_size=39, st_atime=1789029136, st_mtime=1789029136, st_ctime=1789029136).st_mode
+E            +    where os.stat_result(st_mode=33188, st_ino=13389828, st_dev=16777234, st_nlink=1, st_uid=501, st_gid=20, st_size=39, st_atime=1789029136, st_mtime=1789029136, st_ctime=1789029136) = stat()
+E            +      where stat = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_corrupt_backup_is_private0/credentials.corrupt').stat
+
+tests/cli/test_credentials_backup_permissions.py:23: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  coderio.cli.credentials:credentials.py:82 credentials file /private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_corrupt_backup_is_private0/credentials is corrupt (Expected ']' at the end of a table declaration (at end of document)) — backed up to /private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-29/test_corrupt_backup_is_private0/credentials.corrupt and treating as empty; re-run onboarding or /setup to rebuild it
+=========================== short test summary info ============================
+FAILED tests/tools/test_posix_process_tree.py::test_timeout_kills_descendant[job]
+FAILED tests/tools/test_posix_process_tree.py::test_timeout_kills_descendant[write]
+FAILED tests/cli/test_credentials_backup_permissions.py::test_corrupt_backup_is_private_under_permissive_umask
+3 failed, 1 passed in 10.91s

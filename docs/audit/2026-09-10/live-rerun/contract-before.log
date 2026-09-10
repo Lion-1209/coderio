@@ -1,0 +1,205 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_harness_live_uses_real_engine[test_verify_gate_fires-hello.py-print('hello-harness')] _
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d5a7c50>
+function = 'test_verify_gate_fires', filename = 'hello.py'
+content = "print('hello-harness')"
+
+    @pytest.mark.parametrize(
+        "function,filename,content",
+        [
+            ("test_verify_gate_fires", "hello.py", "print('hello-harness')"),
+            ("test_verify_gate_passes", "greet.py", "print('greetings')"),
+            ("test_harness_disabled", "skip.py", "print('x')"),
+        ],
+    )
+    def test_harness_live_uses_real_engine(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        function: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        script = load_script("verify_harness_live.py", monkeypatch)
+        script.MODEL = make_model(
+            write_message(filename, content, "w"), execute_message(filename, "e"), AIMessage(content="Done")
+        )
+>       getattr(script, function)(tmp_path)
+
+tests/agent/test_live_script_contract.py:80:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en0')
+
+    def test_verify_gate_fires(tmp):
+        """The natural failure mode: model writes code and forgets to verify.
+
+        We use a NATURAL prompt (no "don't run it" sabotage). The agent, left to
+        itself, tends to write-then-summarize. The harness must catch that and force
+        an execute call — OR escalate to a visible warning if the model keeps
+        refusing. Either way, an unverified write must NEVER pass silently.
+        """
+        section("TEST 1: verify gate fires (natural write-then-summarize)")
+        session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
+>       run_deep_agent(
+            "在当前目录创建 hello.py，内容是 print('hello-harness')，写好就告诉我完成了。",
+            MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
+        )
+E       TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+
+scripts/verify_harness_live.py:77: TypeError
+----------------------------- Captured stdout call -----------------------------
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com/step_plan
+
+================================================================
+TEST 1: verify gate fires (natural write-then-summarize)
+================================================================
+_ test_harness_live_uses_real_engine[test_verify_gate_passes-greet.py-print('greetings')] _
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d5a7e00>
+function = 'test_verify_gate_passes', filename = 'greet.py'
+content = "print('greetings')"
+
+    @pytest.mark.parametrize(
+        "function,filename,content",
+        [
+            ("test_verify_gate_fires", "hello.py", "print('hello-harness')"),
+            ("test_verify_gate_passes", "greet.py", "print('greetings')"),
+            ("test_harness_disabled", "skip.py", "print('x')"),
+        ],
+    )
+    def test_harness_live_uses_real_engine(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        function: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        script = load_script("verify_harness_live.py", monkeypatch)
+        script.MODEL = make_model(
+            write_message(filename, content, "w"), execute_message(filename, "e"), AIMessage(content="Done")
+        )
+>       getattr(script, function)(tmp_path)
+
+tests/agent/test_live_script_contract.py:80:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en1')
+
+    def test_verify_gate_passes(tmp):
+        """Write + run passes cleanly."""
+        section("TEST 2: verify gate passes (write then run)")
+        session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
+>       run_deep_agent(
+            "在当前目录创建 greet.py，内容是 print('greetings')，然后用 execute 运行它确认输出。",
+            MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
+        )
+E       TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+
+scripts/verify_harness_live.py:99: TypeError
+----------------------------- Captured stdout call -----------------------------
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com/step_plan
+
+================================================================
+TEST 2: verify gate passes (write then run)
+================================================================
+_ test_harness_live_uses_real_engine[test_harness_disabled-skip.py-print('x')] _
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en2')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ea0b290>
+function = 'test_harness_disabled', filename = 'skip.py', content = "print('x')"
+
+    @pytest.mark.parametrize(
+        "function,filename,content",
+        [
+            ("test_verify_gate_fires", "hello.py", "print('hello-harness')"),
+            ("test_verify_gate_passes", "greet.py", "print('greetings')"),
+            ("test_harness_disabled", "skip.py", "print('x')"),
+        ],
+    )
+    def test_harness_live_uses_real_engine(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        function: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        script = load_script("verify_harness_live.py", monkeypatch)
+        script.MODEL = make_model(
+            write_message(filename, content, "w"), execute_message(filename, "e"), AIMessage(content="Done")
+        )
+>       getattr(script, function)(tmp_path)
+
+tests/agent/test_live_script_contract.py:80:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+tmp = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_harness_live_uses_real_en2')
+
+    def test_harness_disabled(tmp):
+        """harness_enabled=False keeps original behavior even on a write-and-skip task."""
+        section("TEST 3: harness disabled (regression guard — original behavior)")
+        session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
+>       run_deep_agent(
+            "在当前目录创建 skip.py，内容是 print('x')，写好就告诉我完成了。",
+            MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
+            harness_enabled=False,
+        )
+E       TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+
+scripts/verify_harness_live.py:112: TypeError
+----------------------------- Captured stdout call -----------------------------
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com/step_plan
+
+================================================================
+TEST 3: harness disabled (regression guard — original behavior)
+================================================================
+_____________________ test_deepagent_live_uses_real_engine _____________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-37/test_deepagent_live_uses_real_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e9dbda0>
+
+    def test_deepagent_live_uses_real_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        script = load_script("verify_deepagent_live.py", monkeypatch)
+        script.MODEL = make_model(
+            write_message("marker.py", "print('deepagent-ok')", "w1"),
+            execute_message("marker.py", "e1"),
+            AIMessage(content="Done"),
+            write_message("calc.py", "print(1+1)", "w2"),
+            execute_message("calc.py", "e2"),
+            AIMessage(content="Done"),
+        )
+>       assert script.main() == 0
+               ^^^^^^^^^^^^^
+
+tests/agent/test_live_script_contract.py:94:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def main():
+        workdir = Path(tempfile.mkdtemp())
+        print(f"[workdir] {workdir}")
+
+        section("TEST 1: deepagent writes to real disk (virtual_mode=True)")
+        session = Session.create(save_dir=workdir / "sessions", meta={"model": MODEL_NAME})
+>       ans = run_deep_agent(
+            "Create /marker.py with content print('deepagent-ok'), then tell me done.",
+            MODEL, session, workdir=workdir, recursion_limit=30,
+        )
+E       TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+
+scripts/verify_deepagent_live.py:54: TypeError
+----------------------------- Captured stdout call -----------------------------
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com/step_plan
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmpj1zap4t3
+
+============================================================
+TEST 1: deepagent writes to real disk (virtual_mode=True)
+============================================================
+=========================== short test summary info ============================
+FAILED tests/agent/test_live_script_contract.py::test_harness_live_uses_real_engine[test_verify_gate_fires-hello.py-print('hello-harness')]
+FAILED tests/agent/test_live_script_contract.py::test_harness_live_uses_real_engine[test_verify_gate_passes-greet.py-print('greetings')]
+FAILED tests/agent/test_live_script_contract.py::test_harness_live_uses_real_engine[test_harness_disabled-skip.py-print('x')]
+FAILED tests/agent/test_live_script_contract.py::test_deepagent_live_uses_real_engine
+4 failed in 0.48s
