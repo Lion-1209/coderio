@@ -1,0 +1,14 @@
+off elapsed 1.02 exit 124 output Command timed out after 1s ps
+job elapsed 1.02 exit 124 output Command timed out after 1s ps
+sandbox_mode=write but bubblewrap not installed — falling back to plain run
+write elapsed 1.02 exit 124 output [sandbox unavailable: bubblewrap not installed — ran WITHOUT the configured write sandbox]
+Command timed out after 1s ps
+credentials file /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/coderio-audit-kr8k77my/credentials is corrupt (Expected '=' after a key in a key/value pair (at end of document)) — backed up to /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/coderio-audit-kr8k77my/credentials.corrupt and treating as empty; re-run onboarding or /setup to rebuild it
+credential mode 0o600
+backup mode 0o600
+http://127.0.0.1:1 Error fetching http://127.0.0.1:1: blocked by SSRF protection — loopback address 127.0.0.1 is not allowed. coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.
+http://10.0.0.1 Error fetching http://10.0.0.1: blocked by SSRF protection — private address 10.0.0.1 is not allowed. coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.
+http://[::1] Error fetching http://[::1]: blocked by SSRF protection — loopback address ::1 is not allowed. coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.
+http://[fe80::1%lo0] Error fetching http://[fe80::1%lo0]: blocked by SSRF protection — private address fe80::1%lo0 is not allowed. coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.
+http://100.100.200.200 Error fetching http://100.100.200.200: blocked by SSRF protection — address 100.100.200.200 is not allowed (shared/special-purpose range 100.64.0.0/10). coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.
+http://<LOCAL_HOST>.local Error fetching http://<LOCAL_HOST>.local: blocked by SSRF protection — loopback address ::1 is not allowed. coderio's web_fetch may only reach public internet hosts over http/https; private networks, loopback, and link-local addresses (including cloud metadata services) are not fetchable.

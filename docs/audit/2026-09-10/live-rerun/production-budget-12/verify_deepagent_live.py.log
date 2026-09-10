@@ -1,0 +1,22 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmptddy6suz
+
+============================================================
+TEST 1: deepagent writes to real disk (virtual_mode=True)
+============================================================
+>>> final: Verified: running `/marker.py` outputs `deepagent-ok` with exit code 0.
+>>> marker.py on disk: True
+>>> content: print('deepagent-ok')
+
+============================================================
+TEST 2: harness middleware observes writes
+============================================================
+>>> execute (verification) calls: 1
+    (harness intercepts unverified 'done'; model may or may not comply
+     — this is the known experimental limitation)
+
+============================================================
+RESULT
+============================================================
+PASS: deepagent engine writes to real disk + harness middleware runs
+SCRIPT_EXIT 0

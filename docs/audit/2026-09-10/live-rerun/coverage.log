@@ -1,0 +1,105 @@
+........................................................................ [  5%]
+....s................................................................... [ 10%]
+........................................................................ [ 16%]
+.............................................ss......................... [ 21%]
+........................................................................ [ 26%]
+........................................................................ [ 32%]
+........................................................................ [ 37%]
+........................................................................ [ 43%]
+........................................................................ [ 48%]
+........................................................................ [ 53%]
+........................................................................ [ 59%]
+.......ss............................................................... [ 64%]
+....................s................................................... [ 70%]
+........................................................................ [ 75%]
+........................................................................ [ 80%]
+........................................................................ [ 86%]
+............................s........................................... [ 91%]
+..................................................sssss.........sssss... [ 97%]
+.................................sssss..                                 [100%]
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.12.14-final-0 _______________
+
+Name                                         Stmts   Miss  Cover
+----------------------------------------------------------------
+src/coderio/__init__.py                          3      0   100%
+src/coderio/agent/__init__.py                    4      0   100%
+src/coderio/agent/_content.py                   29      1    97%
+src/coderio/agent/_deepagents_compat.py         48     12    75%
+src/coderio/agent/command_review.py             44      5    89%
+src/coderio/agent/custom_agents.py              41      2    95%
+src/coderio/agent/deep_loop.py                 515     54    90%
+src/coderio/agent/harness.py                   249      5    98%
+src/coderio/agent/harness_middleware.py        112     12    89%
+src/coderio/agent/hooks.py                     164     23    86%
+src/coderio/agent/permission_middleware.py      18      0   100%
+src/coderio/agent/plan_artifact.py              83      2    98%
+src/coderio/agent/project_instructions.py       72     10    86%
+src/coderio/agent/prompts.py                    47      3    94%
+src/coderio/agent/skill_tool.py                 34      0   100%
+src/coderio/agent/state.py                      58      1    98%
+src/coderio/agent/stream.py                     26      0   100%
+src/coderio/agent/sync_only.py                   3      0   100%
+src/coderio/cli/__init__.py                      0      0   100%
+src/coderio/cli/app.py                         114      9    92%
+src/coderio/cli/commands.py                    234     20    91%
+src/coderio/cli/credentials.py                  68     12    82%
+src/coderio/cli/custom_commands.py              62      3    95%
+src/coderio/cli/mcp_cmd.py                      92     11    88%
+src/coderio/cli/multimodal.py                   41      1    98%
+src/coderio/cli/onboarding.py                  177     23    87%
+src/coderio/cli/providers.py                    20      0   100%
+src/coderio/cli/render.py                        5      0   100%
+src/coderio/cli/repl.py                        140     22    84%
+src/coderio/cli/run_cmd.py                     105     11    90%
+src/coderio/cli/skills_cmd.py                   36      7    81%
+src/coderio/cli/stream.py                      123     19    85%
+src/coderio/cli/stream_controller.py           237     30    87%
+src/coderio/cli/tui.py                         476    172    64%
+src/coderio/cli/tui_onboarding.py              281    105    63%
+src/coderio/cli/tui_runtime.py                 170      5    97%
+src/coderio/cli/tui_screens.py                 155     55    65%
+src/coderio/cli/tui_widgets.py                 233     23    90%
+src/coderio/config/__init__.py                   3      0   100%
+src/coderio/config/bootstrap.py                 15      0   100%
+src/coderio/config/loader.py                   143     10    93%
+src/coderio/config/models.py                    74      0   100%
+src/coderio/config/trust.py                    173     29    83%
+src/coderio/llm/__init__.py                      2      0   100%
+src/coderio/llm/factory.py                      58      5    91%
+src/coderio/llm/probe.py                        62      6    90%
+src/coderio/mcp_loader.py                      125     38    70%
+src/coderio/session/__init__.py                  2      0   100%
+src/coderio/session/message.py                  55      0   100%
+src/coderio/session/store.py                   176     27    85%
+src/coderio/skills/__init__.py                   3      0   100%
+src/coderio/skills/models.py                    44      0   100%
+src/coderio/skills/parser.py                    42      2    95%
+src/coderio/skills/store.py                     51      1    98%
+src/coderio/tools/__init__.py                   17      0   100%
+src/coderio/tools/base.py                       13      0   100%
+src/coderio/tools/bash.py                       72     17    76%
+src/coderio/tools/checkpoint.py                 76      3    96%
+src/coderio/tools/command_policy.py            257     14    95%
+src/coderio/tools/confirm_diff.py               75      5    93%
+src/coderio/tools/edit_file.py                  37      1    97%
+src/coderio/tools/glob_tool.py                  14      0   100%
+src/coderio/tools/grep_tool.py                  85     10    88%
+src/coderio/tools/linux_sandbox.py              62     21    66%
+src/coderio/tools/list_dir.py                   34      5    85%
+src/coderio/tools/multi_edit.py                 48      0   100%
+src/coderio/tools/note.py                       55      5    91%
+src/coderio/tools/permission.py                 84      2    98%
+src/coderio/tools/read_file.py                  37      4    89%
+src/coderio/tools/sandbox_runner.py             58      7    88%
+src/coderio/tools/taxonomy.py                   37      1    97%
+src/coderio/tools/todo.py                       51      3    94%
+src/coderio/tools/web_fetch.py                 107     24    78%
+src/coderio/tools/web_search.py                 28      5    82%
+src/coderio/tools/win_job.py                    95     71    25%
+src/coderio/tools/win_sandbox.py               261    236    10%
+src/coderio/tools/write_file.py                 17      0   100%
+----------------------------------------------------------------
+TOTAL                                         6967   1210    83%
+Required test coverage of 75% reached. Total coverage: 82.63%
+1314 passed, 22 skipped in 91.08s (0:01:31)

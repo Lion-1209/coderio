@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- <AUDIT_ROOT>/coderio-macos-audit/.venv312/bin/python
+cachedir: .pytest_cache
+rootdir: <AUDIT_ROOT>/coderio-macos-audit
+configfile: pyproject.toml
+plugins: cov-7.1.0, asyncio-1.4.0, langsmith-0.10.18, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 14 items
+
+tests/cli/test_tui_startup.py::test_tui_starts_and_widgets_exist PASSED  [  7%]
+tests/cli/test_tui_startup.py::test_status_bar_renders_idle PASSED       [ 14%]
+tests/cli/test_tui_startup.py::test_input_has_placeholder PASSED         [ 21%]
+tests/cli/test_tui_startup.py::test_send_slot_visible_and_idle_on_start PASSED [ 28%]
+tests/cli/test_tui_startup.py::test_todos_render_as_dynamic_checklist PASSED [ 35%]
+tests/cli/test_tui_startup.py::test_dialog_flow_renders_output PASSED    [ 42%]
+tests/cli/test_tui_startup.py::test_tool_call_renders_in_history PASSED  [ 50%]
+tests/cli/test_tui_startup.py::test_token_count_displays_during_turn PASSED [ 57%]
+tests/cli/test_tui_startup.py::test_harness_continue_renders_notice PASSED [ 64%]
+tests/cli/test_tui_startup.py::test_confirm_menu_shows_diff_block PASSED [ 71%]
+tests/cli/test_tui_startup.py::test_tui_gate_passes_diff_detail_to_request_confirmation PASSED [ 78%]
+tests/cli/test_tui_startup.py::test_tui_gate_non_file_tool_gets_no_detail PASSED [ 85%]
+tests/cli/test_tui_startup.py::test_submit_recovers_from_cancel_before_start_wedge PASSED [ 92%]
+tests/cli/test_tui_startup.py::test_submit_still_refuses_when_turn_actually_running PASSED [100%]
+
+============================== 14 passed in 9.01s ==============================

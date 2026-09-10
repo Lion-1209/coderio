@@ -1,0 +1,53 @@
+['--help'] exit 0
+
+ Usage: coderio [OPTIONS] COMMAND [ARGS]...
+
+ coderio — a skill-driven coding agent.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --resume          <str>  Resume a session by id.                             │
+│ --continue               Resume most recent session.                         │
+│ --provider        <str>  Override provider_id.                               │
+│ --model           <str>  Override model name.                                │
+│ --version                Print the version and exit.                         │
+│ --help                   Show this message and exit.                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ run     One-shot headless agent run (CI / scripting / benchmarks).           │
+│ config  Print current configuration.                                         │
+│ skills  Manage skills (install/list/update).                                 │
+│ mcp     Manage MCP servers (add/list/remove).                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+['config'] exit 0
+╭─────────────────────────────── coderio config ───────────────────────────────╮
+│ provider_id: (none)                                                          │
+│ provider:    openai_compatible                                               │
+│ model:       glm-4.5                                                         │
+│ base_url:    https://open.bigmodel.cn/api/paas/v4                            │
+│ permission:  confirm                                                         │
+│ skills repo: https://github.com/Lion-1209/Lion-Skills                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+['mcp', 'list'] exit 0
+No MCP servers configured. Add one with coderio mcp add <name> --command ...
+
+
+['skills', 'list'] exit 0
+Installed skills:
+  - clarifying-questions
+  - code-review
+  - commit-message
+  - debugging
+  - error-handling
+  - executing-plans
+  - lion-writing-skills
+  - naming
+  - onboarding-unknown-codebase
+  - spec-writing
+  - task-breakdown
+  - testing
+  - verify-and-fix

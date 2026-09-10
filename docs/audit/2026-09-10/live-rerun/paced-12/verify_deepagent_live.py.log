@@ -1,0 +1,27 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmpa6seu1se
+
+============================================================
+TEST 1: deepagent writes to real disk (virtual_mode=True)
+============================================================
+Traceback (most recent call last):
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver_paced.py", line 34, in <module>
+    try: result=ns['main']();print('SCRIPT_EXIT',result)
+                ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/scripts/verify_deepagent_live.py", line 54, in main
+    ans = run_deep_agent(
+          ^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver_paced.py", line 31, in observed
+    try: return original(*args,**kwargs,stream=AuditStream())
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/src/coderio/agent/deep_loop.py", line 1047, in run_deep_agent
+    final_text = _run_stream(
+                 ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/src/coderio/agent/deep_loop.py", line 687, in _run_stream
+    mode, event = next(chunk_iter)
+                  ^^^^^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/langgraph/pregel/main.py", line 3011, in stream
+    raise GraphRecursionError(msg)
+langgraph.errors.GraphRecursionError: Recursion limit of 30 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.
+For troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT
+SCRIPT_EXIT 1

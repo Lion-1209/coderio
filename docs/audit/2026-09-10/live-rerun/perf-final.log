@@ -1,0 +1,60 @@
+Actual factory: Config ModelConfig(provider_id=stepfun_api, default=step-3.7-flash).
+Only test model configuration is injected; assertions, engine and tools unchanged. Pacing before tests excluded from timing.
+============================= test session starts ==============================
+platform darwin -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- <AUDIT_ROOT>/coderio-macos-audit/.venv312/bin/python
+cachedir: .pytest_cache
+rootdir: <AUDIT_ROOT>/coderio-macos-audit
+configfile: pyproject.toml
+plugins: cov-7.1.0, asyncio-1.4.0, langsmith-0.10.18, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/agent/test_perf_baseline.py::test_perf_qa_no_tools PASSED
+tests/agent/test_perf_baseline.py::test_perf_analysis_single_read FAILED
+
+=================================== FAILURES ===================================
+________________________ test_perf_analysis_single_read ________________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-45/test_perf_analysis_single_read0')
+
+    def test_perf_analysis_single_read(tmp_path):
+        """Analysis task: read one file + summarize should be fast."""
+        from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+
+        # Create a small file to analyze.
+        (tmp_path / "data.py").write_text("x = 42\n", encoding="utf-8")
+
+        model = _make_model()
+        session = _make_session(tmp_path)
+        stream = _PerfStream()
+
+        result = run_deep_agent(
+            "读取 /data.py 并简短说明它的功能。",
+            TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
+            session,
+            stream=stream,
+        )
+
+        assert stream.t_finish is not None
+        assert stream.total_time < _ANALYSIS_TIME_LIMIT, f"Analysis took {stream.total_time:.1f}s"
+>       assert stream.usage["input_tokens"] < _ANALYSIS_INPUT_TOKEN_LIMIT, (
+            f"Analysis used {stream.usage['input_tokens']} input tokens (limit {_ANALYSIS_INPUT_TOKEN_LIMIT})"
+        )
+E       AssertionError: Analysis used 574422 input tokens (limit 50000)
+E       assert 574422 < 50000
+
+tests/agent/test_perf_baseline.py:154: AssertionError
+=============================== warnings summary ===============================
+.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345
+  <AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345: PytestAssertRewriteWarning: Module already imported so cannot be rewritten; langsmith
+    self._mark_plugins_for_rewrite(hook, disable_autoload)
+
+.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345
+  <AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345: PytestAssertRewriteWarning: Module already imported so cannot be rewritten; anyio
+    self._mark_plugins_for_rewrite(hook, disable_autoload)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/agent/test_perf_baseline.py::test_perf_analysis_single_read - As...
+=================== 1 failed, 1 passed, 2 warnings in 29.33s ===================
+PYTEST_EXIT 1

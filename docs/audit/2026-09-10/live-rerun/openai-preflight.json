@@ -1,0 +1,22 @@
+{
+  "protocol": "openai",
+  "url": "https://api.stepfun.com/v1/chat/completions",
+  "model": "step-3.7-flash",
+  "status": 200,
+  "seconds": 1.04,
+  "response": {
+    "model": "step-3.7-flash",
+    "usage": {
+      "prompt_tokens": 16,
+      "completion_tokens": 42,
+      "total_tokens": 58,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "text": "OK"
+  }
+}

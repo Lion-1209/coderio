@@ -1,0 +1,23 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmp_e9c8n0p
+
+================================================================
+TEST 1: verify gate fires (natural write-then-summarize)
+================================================================
+    [ran execute] True
+    PASS: harness gate behavior exercised against real model
+
+================================================================
+TEST 2: verify gate passes (write then run)
+================================================================
+    PASS: clean completion with execute call
+
+================================================================
+TEST 3: harness disabled (regression guard — original behavior)
+================================================================
+    PASS: harness disabled = no intervention (original soft-rule behavior)
+
+================================================================
+ALL HARNESS LIVE TESTS PASSED
+================================================================
+SCRIPT_EXIT 0

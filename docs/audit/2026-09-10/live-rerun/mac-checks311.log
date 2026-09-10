@@ -1,0 +1,17 @@
+sandbox_mode=write but bubblewrap not installed — falling back to plain run
+boundary ('none', 'macOS 暂无 OS 级沙箱（bwrap 仅支持 Linux）') auto_allow False warning ⚠  macOS 暂无 OS 级沙箱（bwrap 仅支持 Linux）。auto_allow_if_sandboxed
+不生效：execute 将逐条确认（黑名单仍生效）。
+
+degraded output [sandbox unavailable: bubblewrap not installed — ran WITHOUT the configured write sandbox]
+audit-ok
+hook HookOutcome(blocked=True, reason='audit-denied', context='', error='')
+hook IO {"session_id": "audit", "cwd": "/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/coderio-mac-check-inlvbap_", "permission_mode": "confirm", "hook_event_name": "PreToolUse", "tool_name": "write_file", "tool_input": {"path": "a.py"}}
+write WriteResult(error=None, path='/MixedCase.py')
+case insensitive True
+edit EditResult(error=None, path='/mixedcase.py', occurrences=1)
+undo UndoResult(path=PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/coderio-mac-check-inlvbap_/mixedcase.py'), restored=True) content original
+undo creation UndoResult(path=PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/coderio-mac-check-inlvbap_/MixedCase.py'), restored=False) exists False
+policy rm -rf ${HOME} recursive delete of system/home directory
+policy diskutil eraseDisk APFS name disk9 macOS disk erase
+policy Stop-Computer -Force system power control (PowerShell)
+policy echo safe None
