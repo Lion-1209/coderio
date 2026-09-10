@@ -19,6 +19,12 @@ All notable changes to coderio are documented here. The format follows
 
 ### Fixed
 
+- **POSIX sandbox fallback timeout**: `job` and degraded `write` now kill the
+  process group before reaping the shell. Previously the timeout killed only
+  the shell, leaving child processes running; degraded timeout results now
+  retain the visible sandbox warning. Real-process regression tests cover the
+  production backend in `off`, `job`, and degraded `write` modes.
+
 - **PyPI 项目页外链为空**：仓库里一直写着项目 URLs，但用的是内联键
   `project-urls = {...}`——它不是 PEP 621 字段，hatchling 静默忽略，构建出的
   wheel 没有 Project-URL 头（线上 0.5.0 的 `info.project_urls` 为 null）。

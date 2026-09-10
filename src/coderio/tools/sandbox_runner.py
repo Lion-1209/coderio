@@ -3,7 +3,7 @@
 Selects the appropriate OS-level sandbox based on platform + mode:
   - Windows: win_sandbox.py (Restricted Token + Job Object)
   - Linux:   linux_sandbox.py (bubblewrap)
-  - macOS:   linux_sandbox.py fallback (bubblewrap if available, else off)
+  - macOS:   plain subprocess fallback (no OS-level write sandbox)
 
 Modes (match config ToolsConfig.sandbox_mode):
   - "off":   no sandbox — caller should use plain subprocess (we return -1
@@ -106,15 +106,27 @@ def run_with_sandbox(
     import subprocess
 
     try:
-        kwargs: dict = {"shell": True, "capture_output": True, "cwd": cwd, "timeout": timeout, "text": False}
+        kwargs: dict = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "cwd": cwd, "text": False}
         if sys.platform != "win32":
             kwargs["start_new_session"] = True  # own process group → killpg works
         if env is not None:
             kwargs["env"] = env
         kwargs["stdin"] = subprocess.DEVNULL
-        proc = subprocess.run(command, **kwargs)
-        stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
-        stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        from coderio.tools.win_job import kill_process_tree
+
+        with subprocess.Popen(command, **kwargs) as proc:
+            try:
+                stdout_b, stderr_b = proc.communicate(timeout=timeout)
+            except Exception:
+                # subprocess.run kills only its direct child on timeout.
+                # The fallback owns a process group, so reap the whole group
+                # before returning a tool error, including pipe-holding children.
+                kill_process_tree(proc)
+                proc.kill()
+                proc.wait()
+                raise
+        stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+        stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
         output = stdout
         if stderr:
             output += f"\n[stderr]\n{stderr}"
@@ -128,6 +140,9 @@ def run_with_sandbox(
             output = output[:max_output_bytes] + f"\n\n... Output truncated at {max_output_bytes} bytes."
         return (proc.returncode, output)
     except subprocess.TimeoutExpired:
-        return (124, f"Command timed out after {timeout}s")
+        output = f"Command timed out after {timeout}s"
+        if degraded:
+            output = f"[sandbox unavailable: {degraded} — ran WITHOUT the configured write sandbox]\n{output}"
+        return (124, output)
     except Exception as e:  # noqa: BLE001
         return (1, f"Execution error: {e}")
