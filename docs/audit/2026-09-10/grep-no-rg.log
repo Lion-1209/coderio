@@ -1,0 +1,12 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- <AUDIT_ROOT>/coderio-macos-audit/.venv312/bin/python
+cachedir: .pytest_cache
+rootdir: <AUDIT_ROOT>/coderio-macos-audit
+configfile: pyproject.toml
+plugins: cov-7.1.0, asyncio-1.4.0, langsmith-0.10.18, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/tools/test_grep_tool.py::test_python_fallback_used_when_no_rg PASSED [100%]
+
+============================== 1 passed in 0.04s ===============================
