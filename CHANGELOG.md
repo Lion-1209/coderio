@@ -24,6 +24,11 @@ All notable changes to coderio are documented here. The format follows
 
 ### Fixed
 
+- **Live verification scripts**: migrate both harness/deepagent scripts to
+  `TurnSpec`. They still passed removed keyword arguments after the engine
+  refactor and raised TypeError before reaching the provider. Regression
+  tests replace only the model and exercise the real graph and tools.
+
 - **POSIX sandbox fallback timeout**: `job` and degraded `write` now kill the
   process group before reaping the shell. Previously the timeout killed only
   the shell, leaving child processes running; degraded timeout results now

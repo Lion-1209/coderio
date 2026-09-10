@@ -20,7 +20,7 @@ from pathlib import Path
 
 from langchain_anthropic import ChatAnthropic
 
-from coderio.agent.deep_loop import run_deep_agent
+from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 from coderio.session.store import Session
 
 _PROVIDER = os.environ.get("CODERIO_PROVIDER", "glm").lower()
@@ -53,7 +53,7 @@ def main():
     session = Session.create(save_dir=workdir / "sessions", meta={"model": MODEL_NAME})
     ans = run_deep_agent(
         "Create /marker.py with content print('deepagent-ok'), then tell me done.",
-        MODEL, session, workdir=workdir, recursion_limit=30,
+        TurnSpec(model=MODEL, workdir=workdir, recursion_limit=30), session,
     )
     marker = workdir / "marker.py"
     print(f">>> final: {ans[:100]}")
@@ -66,7 +66,7 @@ def main():
     session2 = Session.create(save_dir=workdir / "sessions2", meta={"model": MODEL_NAME})
     run_deep_agent(
         "Create /calc.py with print(1+1), then tell me done.",
-        MODEL, session2, workdir=workdir, recursion_limit=40,
+        TurnSpec(model=MODEL, workdir=workdir, recursion_limit=40), session2,
     )
     execs = [m for m in session2.messages if m.role == "tool" and m.name == "execute"]
     print(f">>> execute (verification) calls: {len(execs)}")

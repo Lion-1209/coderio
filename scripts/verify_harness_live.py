@@ -34,7 +34,7 @@ from pathlib import Path
 
 from langchain_anthropic import ChatAnthropic
 
-from coderio.agent.deep_loop import run_deep_agent
+from coderio.agent.deep_loop import TurnSpec, run_deep_agent
 from coderio.session.store import Session
 
 _PROVIDER = os.environ.get("CODERIO_PROVIDER", "glm").lower()
@@ -76,7 +76,7 @@ def test_verify_gate_fires(tmp):
     session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
     run_deep_agent(
         "在当前目录创建 hello.py，内容是 print('hello-harness')，写好就告诉我完成了。",
-        MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
+        TurnSpec(model=MODEL, workdir=tmp, recursion_limit=40), session,
     )
     ran = _ran_execute(session)
     print(f"    [ran execute] {ran}")
@@ -98,7 +98,7 @@ def test_verify_gate_passes(tmp):
     session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
     run_deep_agent(
         "在当前目录创建 greet.py，内容是 print('greetings')，然后用 execute 运行它确认输出。",
-        MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
+        TurnSpec(model=MODEL, workdir=tmp, recursion_limit=40), session,
     )
     assert (tmp / "greet.py").is_file()
     assert _ran_execute(session), "model should have run the file"
@@ -111,8 +111,7 @@ def test_harness_disabled(tmp):
     session = Session.create(save_dir=tmp / "sessions", meta={"model": MODEL_NAME})
     run_deep_agent(
         "在当前目录创建 skip.py，内容是 print('x')，写好就告诉我完成了。",
-        MODEL, session, workdir=tmp, gate=None, recursion_limit=40,
-        harness_enabled=False,
+        TurnSpec(model=MODEL, workdir=tmp, recursion_limit=40, harness_enabled=False), session,
     )
     assert (tmp / "skip.py").is_file()
     print("    PASS: harness disabled = no intervention (original soft-rule behavior)")
