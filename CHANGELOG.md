@@ -10,6 +10,11 @@ All notable changes to coderio are documented here. The format follows
 
 ### Security
 
+- **Corrupt credentials backup permissions**: restrict a newly created
+  `.corrupt` backup before copying potentially recoverable API keys into it.
+  POSIX backups now retain 0600 under a normal 022 umask; exclusive creation
+  preserves the first backup. A real-filesystem regression covers this path.
+
 - **httpx2 2.10.0 → 2.12.0**（连带 httpcore2 → 2.12.0）：PyPI 漏洞库 2026-09-09
   收录 httpx2 2.10.0 的三条 CVE（CVE-2026-84379 / CVE-2026-84380，修复于 2.11.0；
   CVE-2026-84382，修复于 2.12.0）。httpx2 经 langchain-openai → openai SDK 进入

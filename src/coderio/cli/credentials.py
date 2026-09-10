@@ -78,7 +78,12 @@ def read_credentials(path: Path | str | None = None) -> dict[str, str]:
         backup = p.with_name(p.name + ".corrupt")
         try:
             if not backup.exists():
-                backup.write_bytes(p.read_bytes())
+                # Corruption can leave recoverable keys in these bytes. Apply
+                # the same restrict-before-content contract as the live file;
+                # exclusive creation also preserves an existing first backup.
+                with backup.open("xb") as f:
+                    _restrict_permissions(backup)
+                    f.write(p.read_bytes())
                 _log.warning(
                     "credentials file %s is corrupt (%s) — backed up to %s and treating as "
                     "empty; re-run onboarding or /setup to rebuild it",
