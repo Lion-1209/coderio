@@ -1,0 +1,16 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmp14g_kbpb
+
+================================================================
+TEST 1: verify gate fires (natural write-then-summarize)
+================================================================
+Traceback (most recent call last):
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver.py", line 29, in <module>
+    try: result=ns['main']();print('SCRIPT_EXIT',result)
+                ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/scripts/verify_harness_live.py", line 125, in main
+    test_verify_gate_fires(tmp)
+  File "<AUDIT_ROOT>/coderio-macos-audit/scripts/verify_harness_live.py", line 77, in test_verify_gate_fires
+    run_deep_agent(
+TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+SCRIPT_EXIT 1

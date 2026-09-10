@@ -1,0 +1,529 @@
+Actual factory: Config ModelConfig(provider_id=stepfun_api, default=step-3.7-flash).
+Only test model configuration is injected; assertions, engine and tools unchanged. Pacing before tests excluded from timing.
+============================= test session starts ==============================
+platform darwin -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- <AUDIT_ROOT>/coderio-macos-audit/.venv312/bin/python
+cachedir: .pytest_cache
+rootdir: <AUDIT_ROOT>/coderio-macos-audit
+configfile: pyproject.toml
+plugins: cov-7.1.0, asyncio-1.4.0, langsmith-0.10.18, anyio-4.14.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/agent/test_perf_baseline.py::test_perf_qa_no_tools FAILED
+tests/agent/test_perf_baseline.py::test_perf_analysis_single_read FAILED
+
+=================================== FAILURES ===================================
+____________________________ test_perf_qa_no_tools _____________________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-44/test_perf_qa_no_tools0')
+
+    def test_perf_qa_no_tools(tmp_path):
+        """Pure Q&A: greeting should be fast, use zero tools."""
+        from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+
+        model = _make_model()
+        session = _make_session(tmp_path)
+        stream = _PerfStream()
+
+>       result = run_deep_agent(
+            "你好",
+            TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
+            session,
+            stream=stream,
+        )
+
+tests/agent/test_perf_baseline.py:121:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/coderio/agent/deep_loop.py:1047: in run_deep_agent
+    final_text = _run_stream(
+src/coderio/agent/deep_loop.py:687: in _run_stream
+    mode, event = next(chunk_iter)
+                  ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/pregel/main.py:2967: in stream
+    for _ in runner.tick(
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py:344: in tick
+    _panic_or_proceed(
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py:687: in _panic_or_proceed
+    raise exc
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_executor.py:80: in done
+    task.result()
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py:59: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_retry.py:617: in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py:707: in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py:447: in invoke
+    ret = self.func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:1482: in model_node
+    result = wrap_model_call_handler(request, _execute_model_sync)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/filesystem.py:3084: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/subagents.py:731: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/summarization.py:1392: in wrap_model_call
+    return handler(request.override(messages=truncated_messages))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/middleware/todo.py:256: in wrap_model_call
+    return handler(request.override(system_message=new_system_message))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_anthropic/middleware/prompt_caching.py:168: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:1450: in _execute_model_sync
+    output = model_.invoke(messages)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_core/runnables/base.py:6002: in invoke
+    return self.bound.invoke(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:476: in invoke
+    self.generate_prompt(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1865: in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1672: in generate
+    self._generate_with_cache(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1969: in _generate_with_cache
+    for chunk in self._stream(messages, stop=stop, **kwargs):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_openai/chat_models/base.py:1697: in _stream
+    _handle_openai_api_error(e)
+.venv312/lib/python3.12/site-packages/langchain_openai/chat_models/base.py:1670: in _stream
+    response = self.client.create(**payload)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/openai/_utils/_utils.py:298: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py:1296: in create
+    return self._post(
+.venv312/lib/python3.12/site-packages/openai/_base_client.py:1382: in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <openai.OpenAI object at 0x10c3533e0>
+cast_to = <class 'openai.types.chat.chat_completion.ChatCompletion'>
+options = FinalRequestOptions(method='post', url='/chat/completions', params={}, headers=NOT_GIVEN, max_retries=NOT_GIVEN, timeo...ntent', 'status'], 'type': 'object'}, 'type': 'array'}}, 'required': ['todos'], 'type': 'object'}}}]}, extra_json=None)
+stream = True
+stream_cls = openai.Stream[openai.types.chat.chat_completion_chunk.ChatCompletionChunk]
+
+    def request(
+        self,
+        cast_to: Type[ResponseT],
+        options: FinalRequestOptions,
+        *,
+        stream: bool = False,
+        stream_cls: type[_StreamT] | None = None,
+    ) -> ResponseT | _StreamT:
+        cast_to = self._maybe_override_cast_to(cast_to, options)
+
+        # create a copy of the options we were given so that if the
+        # options are mutated later & we then retry, the retries are
+        # given the original options
+        input_options = model_copy(options)
+        if input_options.idempotency_key is None and input_options.method.lower() != "get":
+            # ensure the idempotency key is reused between requests
+            input_options.idempotency_key = self._idempotency_key()
+
+        response: httpx2.Response | None = None
+        max_retries = input_options.get_max_retries(self.max_retries)
+
+        retries_taken = 0
+        for retries_taken in range(max_retries + 1):
+            options = model_copy(input_options)
+            options = self._prepare_options(options)
+
+            remaining_retries = max_retries - retries_taken
+            request = self._build_request(options, retries_taken=retries_taken)
+            self._prepare_request(request)
+
+            kwargs: HttpxSendArgs = {}
+            custom_auth = self._custom_auth(options.security)
+            if custom_auth is not None:
+                kwargs["auth"] = (
+                    normalize_httpx2_auth(custom_auth)
+                    if is_httpx2_sync_client(self._client)
+                    else normalize_legacy_httpx_auth(custom_auth)
+                )
+
+            if options.follow_redirects is not None:
+                kwargs["follow_redirects"] = options.follow_redirects
+
+            log.debug("Sending HTTP Request: %s %s", request.method, request.url)
+
+            response = None
+            try:
+                response = self._send_request(
+                    request,
+                    stream=stream or self._should_stream_response_body(request=request),
+                    **kwargs,
+                )
+            except timeout_exceptions() as err:
+                log.debug("Encountered a timeout exception", exc_info=True)
+
+                if remaining_retries > 0:
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising timeout error")
+                raise APITimeoutError(request=request) from err
+            except OpenAIError as err:
+                # Propagate OpenAIErrors as-is, without retrying or wrapping in APIConnectionError
+                raise err
+            except Exception as err:
+                log.debug("Encountered Exception", exc_info=True)
+
+                if remaining_retries > 0:
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising connection error")
+                raise APIConnectionError(request=request) from err
+
+            log.debug(
+                'HTTP Response: %s %s "%i %s" %s',
+                request.method,
+                request.url,
+                response.status_code,
+                response.reason_phrase,
+                response.headers,
+            )
+            log.debug("request_id: %s", response.headers.get("x-request-id"))
+
+            try:
+                response.raise_for_status()
+            except status_exceptions() as err:  # thrown on 4xx and 5xx status code
+                log.debug("Encountered an HTTP status error", exc_info=True)
+
+                if remaining_retries > 0 and self._should_retry(err.response):
+                    err.response.close()
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=response,
+                    )
+                    continue
+
+                # If the response is streamed then we need to explicitly read the response
+                # to completion before attempting to access the response text.
+                if not err.response.is_closed:
+                    err.response.read()
+
+                log.debug("Re-raising status error")
+>               raise self._make_status_error_from_response(err.response) from None
+E               openai.AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided', 'type': 'invalid_api_key'}}
+E               During task with name 'model' and id '64d8efe3-12ae-a387-e74b-01d04aaedbd1'
+
+.venv312/lib/python3.12/site-packages/openai/_base_client.py:1155: AuthenticationError
+________________________ test_perf_analysis_single_read ________________________
+
+tmp_path = PosixPath('/private/var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/pytest-of-kirito/pytest-44/test_perf_analysis_single_read0')
+
+    def test_perf_analysis_single_read(tmp_path):
+        """Analysis task: read one file + summarize should be fast."""
+        from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+
+        # Create a small file to analyze.
+        (tmp_path / "data.py").write_text("x = 42\n", encoding="utf-8")
+
+        model = _make_model()
+        session = _make_session(tmp_path)
+        stream = _PerfStream()
+
+>       result = run_deep_agent(
+            "读取 /data.py 并简短说明它的功能。",
+            TurnSpec(model=model, harness_enabled=False, workdir=str(tmp_path)),
+            session,
+            stream=stream,
+        )
+
+tests/agent/test_perf_baseline.py:145:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/coderio/agent/deep_loop.py:1047: in run_deep_agent
+    final_text = _run_stream(
+src/coderio/agent/deep_loop.py:687: in _run_stream
+    mode, event = next(chunk_iter)
+                  ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/pregel/main.py:2967: in stream
+    for _ in runner.tick(
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py:344: in tick
+    _panic_or_proceed(
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_runner.py:687: in _panic_or_proceed
+    raise exc
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_executor.py:80: in done
+    task.result()
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../.audit-python/cpython-3.12.14-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py:59: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/pregel/_retry.py:617: in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py:707: in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langgraph/_internal/_runnable.py:447: in invoke
+    ret = self.func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:1482: in model_node
+    result = wrap_model_call_handler(request, _execute_model_sync)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/filesystem.py:3084: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/subagents.py:731: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/deepagents/middleware/summarization.py:1392: in wrap_model_call
+    return handler(request.override(messages=truncated_messages))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:339: in composed
+    outer_result = outer(request, inner_handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/middleware/todo.py:256: in wrap_model_call
+    return handler(request.override(system_message=new_system_message))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:329: in inner_handler
+    inner_result = inner(req, handler)
+                   ^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_anthropic/middleware/prompt_caching.py:168: in wrap_model_call
+    return handler(request)
+           ^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain/agents/factory.py:1450: in _execute_model_sync
+    output = model_.invoke(messages)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_core/runnables/base.py:6002: in invoke
+    return self.bound.invoke(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:476: in invoke
+    self.generate_prompt(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1865: in generate_prompt
+    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1672: in generate
+    self._generate_with_cache(
+.venv312/lib/python3.12/site-packages/langchain_core/language_models/chat_models.py:1969: in _generate_with_cache
+    for chunk in self._stream(messages, stop=stop, **kwargs):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/langchain_openai/chat_models/base.py:1697: in _stream
+    _handle_openai_api_error(e)
+.venv312/lib/python3.12/site-packages/langchain_openai/chat_models/base.py:1670: in _stream
+    response = self.client.create(**payload)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/openai/_utils/_utils.py:298: in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+.venv312/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py:1296: in create
+    return self._post(
+.venv312/lib/python3.12/site-packages/openai/_base_client.py:1382: in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <openai.OpenAI object at 0x11221e690>
+cast_to = <class 'openai.types.chat.chat_completion.ChatCompletion'>
+options = FinalRequestOptions(method='post', url='/chat/completions', params={}, headers=NOT_GIVEN, max_retries=NOT_GIVEN, timeo...ntent', 'status'], 'type': 'object'}, 'type': 'array'}}, 'required': ['todos'], 'type': 'object'}}}]}, extra_json=None)
+stream = True
+stream_cls = openai.Stream[openai.types.chat.chat_completion_chunk.ChatCompletionChunk]
+
+    def request(
+        self,
+        cast_to: Type[ResponseT],
+        options: FinalRequestOptions,
+        *,
+        stream: bool = False,
+        stream_cls: type[_StreamT] | None = None,
+    ) -> ResponseT | _StreamT:
+        cast_to = self._maybe_override_cast_to(cast_to, options)
+
+        # create a copy of the options we were given so that if the
+        # options are mutated later & we then retry, the retries are
+        # given the original options
+        input_options = model_copy(options)
+        if input_options.idempotency_key is None and input_options.method.lower() != "get":
+            # ensure the idempotency key is reused between requests
+            input_options.idempotency_key = self._idempotency_key()
+
+        response: httpx2.Response | None = None
+        max_retries = input_options.get_max_retries(self.max_retries)
+
+        retries_taken = 0
+        for retries_taken in range(max_retries + 1):
+            options = model_copy(input_options)
+            options = self._prepare_options(options)
+
+            remaining_retries = max_retries - retries_taken
+            request = self._build_request(options, retries_taken=retries_taken)
+            self._prepare_request(request)
+
+            kwargs: HttpxSendArgs = {}
+            custom_auth = self._custom_auth(options.security)
+            if custom_auth is not None:
+                kwargs["auth"] = (
+                    normalize_httpx2_auth(custom_auth)
+                    if is_httpx2_sync_client(self._client)
+                    else normalize_legacy_httpx_auth(custom_auth)
+                )
+
+            if options.follow_redirects is not None:
+                kwargs["follow_redirects"] = options.follow_redirects
+
+            log.debug("Sending HTTP Request: %s %s", request.method, request.url)
+
+            response = None
+            try:
+                response = self._send_request(
+                    request,
+                    stream=stream or self._should_stream_response_body(request=request),
+                    **kwargs,
+                )
+            except timeout_exceptions() as err:
+                log.debug("Encountered a timeout exception", exc_info=True)
+
+                if remaining_retries > 0:
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising timeout error")
+                raise APITimeoutError(request=request) from err
+            except OpenAIError as err:
+                # Propagate OpenAIErrors as-is, without retrying or wrapping in APIConnectionError
+                raise err
+            except Exception as err:
+                log.debug("Encountered Exception", exc_info=True)
+
+                if remaining_retries > 0:
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising connection error")
+                raise APIConnectionError(request=request) from err
+
+            log.debug(
+                'HTTP Response: %s %s "%i %s" %s',
+                request.method,
+                request.url,
+                response.status_code,
+                response.reason_phrase,
+                response.headers,
+            )
+            log.debug("request_id: %s", response.headers.get("x-request-id"))
+
+            try:
+                response.raise_for_status()
+            except status_exceptions() as err:  # thrown on 4xx and 5xx status code
+                log.debug("Encountered an HTTP status error", exc_info=True)
+
+                if remaining_retries > 0 and self._should_retry(err.response):
+                    err.response.close()
+                    self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=response,
+                    )
+                    continue
+
+                # If the response is streamed then we need to explicitly read the response
+                # to completion before attempting to access the response text.
+                if not err.response.is_closed:
+                    err.response.read()
+
+                log.debug("Re-raising status error")
+>               raise self._make_status_error_from_response(err.response) from None
+E               openai.AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided', 'type': 'invalid_api_key'}}
+E               During task with name 'model' and id 'd6f13c13-2daf-6db9-0dbf-ff0ed02b3c73'
+
+.venv312/lib/python3.12/site-packages/openai/_base_client.py:1155: AuthenticationError
+=============================== warnings summary ===============================
+.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345
+  <AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345: PytestAssertRewriteWarning: Module already imported so cannot be rewritten; langsmith
+    self._mark_plugins_for_rewrite(hook, disable_autoload)
+
+.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345
+  <AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py:1345: PytestAssertRewriteWarning: Module already imported so cannot be rewritten; anyio
+    self._mark_plugins_for_rewrite(hook, disable_autoload)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/agent/test_perf_baseline.py::test_perf_qa_no_tools - openai.Auth...
+FAILED tests/agent/test_perf_baseline.py::test_perf_analysis_single_read - op...
+======================== 2 failed, 2 warnings in 25.31s ========================
+PYTEST_EXIT 1

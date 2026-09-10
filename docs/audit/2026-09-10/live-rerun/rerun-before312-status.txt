@@ -1,0 +1,5 @@
+lint exit=0
+format exit=0
+tests exit=0
+mypy exit=0
+wheel exit=0

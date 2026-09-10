@@ -1,0 +1,26 @@
+Actual factory: Config ModelConfig(provider_id=stepfun_api, default=step-3.7-flash).
+Only test model configuration is injected; assertions, engine and tools unchanged. Pacing before tests excluded from timing.
+INTERNALERROR> Traceback (most recent call last):
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/main.py", line 326, in wrap_session
+INTERNALERROR>     config._do_configure()
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/config/__init__.py", line 1205, in _do_configure
+INTERNALERROR>     self.hook.pytest_configure.call_historic(kwargs=dict(config=self))
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/pluggy/_hooks.py", line 534, in call_historic
+INTERNALERROR>     res = self._hookexec(self.name, self._hookimpls.copy(), kwargs, False)
+INTERNALERROR>           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/pluggy/_manager.py", line 120, in _hookexec
+INTERNALERROR>     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+INTERNALERROR>            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/pluggy/_callers.py", line 167, in _multicall
+INTERNALERROR>     raise exception
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/pluggy/_callers.py", line 121, in _multicall
+INTERNALERROR>     res = hook_impl.function(*args)
+INTERNALERROR>           ^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/terminal.py", line 292, in pytest_configure
+INTERNALERROR>     reporter = TerminalReporter(config, sys.stdout)
+INTERNALERROR>                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+INTERNALERROR>   File "<AUDIT_ROOT>/coderio-macos-audit/.venv312/lib/python3.12/site-packages/_pytest/terminal.py", line 402, in __init__
+INTERNALERROR>     self.isatty = compat.CallableBool(file.isatty())
+INTERNALERROR>                                       ^^^^^^^^^^^
+INTERNALERROR> AttributeError: 'SafeLog' object has no attribute 'isatty'
+PYTEST_EXIT 3

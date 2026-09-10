@@ -1,0 +1,15 @@
+[provider] stepfun | model=step-3.7-flash | base=https://api.stepfun.com
+[workdir] /var/folders/m2/b2h27qys5nq1rj30lphwxsnc0000gn/T/tmp7vmrfo6r
+
+============================================================
+TEST 1: deepagent writes to real disk (virtual_mode=True)
+============================================================
+Traceback (most recent call last):
+  File "<AUDIT_ROOT>/audit-evidence/live-rerun/driver.py", line 29, in <module>
+    try: result=ns['main']();print('SCRIPT_EXIT',result)
+                ^^^^^^^^^^^^
+  File "<AUDIT_ROOT>/coderio-macos-audit/scripts/verify_deepagent_live.py", line 54, in main
+    ans = run_deep_agent(
+          ^^^^^^^^^^^^^^^
+TypeError: run_deep_agent() got an unexpected keyword argument 'workdir'
+SCRIPT_EXIT 1
