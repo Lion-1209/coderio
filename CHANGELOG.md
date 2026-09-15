@@ -24,6 +24,24 @@ All notable changes to coderio are documented here. The format follows
 
 ### Fixed
 
+- **web_fetch 大小上限在完整下载后才生效（#18）**：`client.get()` 把响应体
+  全量读入内存后，1MB 上限才在结果上执行——它只约束模型看到的文本，不约束
+  传输；发 1.1MB 后暂停的服务会把整个 turn 拖到读超时。改为 `client.stream`
+  有界读取：达到上限立即中止连接，重定向响应体也不再全量读取。真实 socket
+  回归测试覆盖 stall 与完整大响应两种形态。
+- **TUI 权限门装配异常时默认放行（#19）**：`TuiPermissionGate._ask` 在挂载的
+  tui 对象缺少确认接口时返回 True，与 bare gate 的 "can't ask = deny" 契约
+  相反——装配缺陷会静默放行所有破坏性工具。改为 fail-closed 拒绝。
+- **流式 usage 被逐块重复累加（#21）**：流式 provider 把累计 usage 挂在每个
+  chunk 上，langchain 合并 AIMessageChunk 时将其求和——updates 模式的完整
+  消息携带虚高总量（实测 stepfun_api：服务端 16/28，聚合 208/180）。现在
+  `_run_stream` 跟踪每个模型调用最后一次 chunk 级累计值（即厂商总量），
+  `_emit_message` 优先消费它；非流式 provider 回退到完整消息的
+  usage_metadata。`/cost` 与性能门数值恢复可信。
+- **文档残留同步（#20）**：架构文档移除已删除的 `on_truncated`、修正 skills
+  计数（13 = 12 Lion-Skills + 1 bundled）、exit_code 描述改为"结构化已接入、
+  文本回退仍存在"；ROADMAP 移除已完成的 ToolResult 结构化条目。
+
 - **Live verification scripts**: migrate both harness/deepagent scripts to
   `TurnSpec`. They still passed removed keyword arguments after the engine
   refactor and raised TypeError before reaching the provider. Regression

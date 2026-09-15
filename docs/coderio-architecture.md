@@ -1,6 +1,6 @@
 # coderio 架构设计文档
 
-- **文档版本**：2026-09-04（基于实际代码库，随代码演进更新；测试与规模数据以 §10 / CI 实测为准）
+- **文档版本**：2026-09-14（基于实际代码库，随代码演进更新；测试与规模数据以 §10 / CI 实测为准）
 - **代码规模**：15,000+ 行 Python（src/coderio），测试与规模数据以 §10 / CI 实测为准
 - **技术栈**：Python 3.11 + langchain + langgraph + Textual + Rich + Typer，Windows 优先
 - **Skill 底座**：Lion-Skills 0.3.0（12 skill，bundled 随包）
@@ -250,7 +250,6 @@ _BASE_INSTRUCTIONS（意图分类 + 工作流 + 通用保障）
 
 ```
 on_step_start → on_token / on_thinking → on_tool_start → on_tool_end → ... → on_finish
-                                                                   on_truncated（截断）
                                                                    on_harness_warn（harness 放行警告）
                                                                    on_harness_continue（harness 强制续跑提示）
                                                                    on_phase_change（任务阶段变化）
@@ -314,7 +313,7 @@ Textual 8.x App，核心设计：
 
 - `SkillStore._load_layer` 递归 glob `**/SKILL.md`，兼容 Lion-Skills 嵌套布局
 - body 懒加载（只在用到时读文件），元数据缓存
-- 12 个 Lion-Skills skill（clarifying-questions / spec-writing / task-breakdown / commit-message / code-review / debugging / error-handling / naming / testing / verify-and-fix / onboarding-unknown-codebase / lion-writing-skills）
+- 13 个 skill = 12 个 Lion-Skills skill（clarifying-questions / spec-writing / task-breakdown / commit-message / code-review / debugging / error-handling / naming / testing / verify-and-fix / onboarding-unknown-codebase / lion-writing-skills）+ 1 个 bundled skill（executing-plans）
 
 **skill 激活**：模型通过 `activate_skill(name)` 工具按需加载 skill body——body **直接随工具结果返回**，当轮即可用；`ActiveSkills` 同时记录它，下一轮系统提示词重建时 body 固定注入。旧的 `triggers.py` 关键词阶段触发已删除——召回低（"帮我改 bug"不触发）、易误触发（`\bcommit\b` 匹配 "I commit to..."），且引用了不存在的 skill（`executing-plans`）。改为完全依赖模型自主判断 + `activate_skill`。
 
@@ -405,7 +404,7 @@ harness 强制续跑注入的 `HumanMessage` 只进 graph 状态与模型上下�
 
 4. **shell 内容审查是正则级，不是安全边界**：deepagents 后端 `virtual_mode=True` 限制文件工具路径；shell（execute）命令内容走三层——`command_policy` 黑/白名单（防手滑，正则可被混淆绕过）、权限门、以及 **OS 级沙箱**（Linux bubblewrap 真文件写隔离；Windows job 对象仅资源限制，write 档无文件隔离——见 win_sandbox.py 头注释）。macOS 无 OS 级沙箱。对抗性场景仍应使用 VM；hooks 子进程环境走白名单（不透传完整 os.environ）。
 
-5. **ToolResult 非结构化**：bash exit_code 靠正则从 result 字符串提取 `[exit_code: N]`。如果 provider 或工具版本变化导致 marker 格式漂移，解析会断。长期应改为结构化 ToolResult（含 exit_code 字段）。
+5. **exit_code 文本回退仍存在**：VerifyGate 的退出码来源已结构化（2026-09 起：优先结果对象的 `.exit_code` 属性，其次 `ToolMessage.artifact["exit_code"]`，最后才回退到正则解析结果文本中的 `[exit_code: N]` marker）。主生产路径不再依赖正则，但兼容回退仍在——上游若改掉 marker 格式，仅影响无法提供结构化字段的 provider/工具路径。
 
 6. ~~**无依赖锁文件**~~ 已解决（2026-08-14）：`uv.lock` 已入库，CI 用 `uv sync --frozen` 安装，依赖一致性与 pip-audit 阻断均已上 CI。
 
