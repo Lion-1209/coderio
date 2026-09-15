@@ -54,7 +54,13 @@ class TuiPermissionGate(PermissionGate):
             except Exception:  # noqa: BLE001
                 detail = None
             return self._tui.request_confirmation(tool_name, args, detail=detail)
-        return True
+        # Fail-closed (P2-N4, 2026-09-14 audit): a tui object without the
+        # confirmation interface is an assembly defect, and "can't ask =
+        # deny" is the safe answer — the same contract as the bare
+        # PermissionGate._ask. The previous `return True` silently granted
+        # every destructive tool whenever the gate was wired to an object
+        # that couldn't ask.
+        return False
 
 
 def build_turn_spec(
