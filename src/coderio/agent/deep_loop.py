@@ -680,6 +680,11 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
     # pause would still let the upstream generator run its next body slice —
     # not real backpressure.
     chunk_iter = iter(agent.stream(inputs, config=config, stream_mode=["messages", "updates", "custom"]))
+    # P2-N7: latest CUMULATIVE usage seen on streamed chunks of the current
+    # model call. Mutated by _handle_messages_mode, consumed (and cleared) by
+    # _emit_message once the matching complete message arrives — chunk events
+    # for a call always precede its updates event, so the pairing is safe.
+    chunk_usage: dict = {}
     while True:
         if should_abort is not None and should_abort():
             raise InterruptedError("interrupted by user")
@@ -688,9 +693,11 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
         except StopIteration:
             break
         if mode == "messages":
-            _handle_messages_mode(event, stream, session)
+            _handle_messages_mode(event, stream, session, chunk_usage)
         elif mode == "updates":
-            final_text = _handle_updates_mode(event, stream, session, seen_ids, turn_writes, tc_args) or final_text
+            final_text = (
+                _handle_updates_mode(event, stream, session, seen_ids, turn_writes, tc_args, chunk_usage) or final_text
+            )
         elif mode == "custom":
             _handle_custom_mode(event, stream)
     return final_text
@@ -1140,12 +1147,17 @@ def _build_history_messages(session_messages: list) -> list:
     return msgs
 
 
-def _handle_messages_mode(event, stream, session) -> None:
+def _handle_messages_mode(event, stream, session, chunk_usage: dict | None = None) -> None:
     """Process 'messages' mode: token-by-token streaming.
 
     event is (AIMessageChunk, metadata). We extract text → on_token and
     thinking blocks → on_thinking. We do NOT persist here — complete messages
     are persisted in the 'updates' mode handler.
+
+    ``chunk_usage``: optional mutable dict, updated in place whenever a chunk
+    carries usage_metadata (P2-N7). Streaming providers attach CUMULATIVE
+    per-call usage to chunks, so the LAST value seen equals the vendor total
+    for that model call.
     """
     if not isinstance(event, tuple) or len(event) != 2:
         return
@@ -1156,6 +1168,12 @@ def _handle_messages_mode(event, stream, session) -> None:
     node = metadata.get("langgraph_node", "") if isinstance(metadata, dict) else ""
     if node and node not in ("model", ""):
         return
+
+    if chunk_usage is not None:
+        usage = getattr(chunk, "usage_metadata", None)
+        if usage:
+            chunk_usage.clear()
+            chunk_usage.update(usage)
 
     raw = getattr(chunk, "content", "")
     # Thinking blocks (Anthropic).
@@ -1168,7 +1186,9 @@ def _handle_messages_mode(event, stream, session) -> None:
         stream.on_token(text)
 
 
-def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: list, tc_args: dict) -> str:
+def _handle_updates_mode(
+    event, stream, session, seen_ids: set, turn_writes: list, tc_args: dict, chunk_usage: dict | None = None
+) -> str:
     """Process 'updates' mode: complete messages (tool calls, tool results, final text).
 
     Returns the final assistant text if this event carries it (for the caller to
@@ -1182,7 +1202,7 @@ def _handle_updates_mode(event, stream, session, seen_ids: set, turn_writes: lis
             continue
         msgs = payload.get("messages", [])
         for m in msgs:
-            final_text = _emit_message(m, stream, session, seen_ids, turn_writes, tc_args) or final_text
+            final_text = _emit_message(m, stream, session, seen_ids, turn_writes, tc_args, chunk_usage) or final_text
     return final_text
 
 
@@ -1200,7 +1220,9 @@ def _handle_custom_mode(event, stream) -> None:
         stream.on_harness_warn(event.get("message", ""))
 
 
-def _emit_message(m, stream, session, seen_ids: set, turn_writes: list, tc_args: dict | None = None) -> str:
+def _emit_message(
+    m, stream, session, seen_ids: set, turn_writes: list, tc_args: dict | None = None, chunk_usage: dict | None = None
+) -> str:
     """Map a complete langchain message to stream callbacks + session persistence.
 
     Returns the assistant text if this is a final (no tool_calls) AIMessage.
@@ -1212,7 +1234,22 @@ def _emit_message(m, stream, session, seen_ids: set, turn_writes: list, tc_args:
         # payload dict). Extract it here so the status bar can show live token
         # consumption. Without this, add_usage is never called (the old code
         # looked for it in payload.get("usage_metadata") which is always empty).
-        usage = getattr(m, "usage_metadata", None)
+        #
+        # P2-N7 (2026-09-14 audit): for STREAMED model calls, prefer the last
+        # cumulative chunk-level usage tracked by _run_stream over the message's
+        # own usage_metadata. Streaming providers attach cumulative usage to
+        # every chunk, and langchain's AIMessageChunk merge SUMS those — a
+        # complete message built from a stream carries an inflated total
+        # (13 chunks × prompt=16 → 208 instead of 16). The last chunk's
+        # cumulative value IS the vendor total. Non-streaming providers never
+        # populate chunk_usage — the complete-message metadata is authoritative
+        # and remains the fallback.
+        usage: dict | None
+        if chunk_usage:
+            usage = dict(chunk_usage)
+            chunk_usage.clear()  # consumed — the next model call starts fresh
+        else:
+            usage = getattr(m, "usage_metadata", None)
         if usage and hasattr(stream, "add_usage"):
             stream.add_usage(usage)
         if tool_calls:
