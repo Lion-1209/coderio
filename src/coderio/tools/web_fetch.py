@@ -22,7 +22,9 @@ Protections applied here (defense in depth):
 3. Redirect policy: redirects are followed MANUALLY (max 3 hops), and each hop's
    URL goes through the same validation. ``follow_redirects=False`` on the
    client — an allowlisted URL redirecting to 169.254.169.254 is still blocked.
-4. Response size cap: stream up to 1 MB, not ``resp.text`` unbounded into memory.
+4. Response size cap: the body is read as a stream and the FETCH IS ABORTED
+   once 1 MB is read — the cap bounds the transfer/memory, not just what the
+   model sees (P1-N3: it used to cap the result only, after a full read).
 5. Content-Type sniff: binary payloads are rejected early.
 
 This is prompt-injection defense, not a hard boundary — a determined attacker
@@ -175,40 +177,51 @@ class WebFetchTool:
             ) as client:
                 current_url = url
                 for _hop in range(_MAX_REDIRECTS + 1):
-                    resp = client.get(current_url)
-                    if resp.is_redirect:
-                        # Validate the redirect target with the same rules.
-                        next_url = str(resp.headers.get("location", ""))
-                        if not next_url:
-                            return f"Error fetching {url}: redirect without Location header"
-                        # Relative redirect — resolve against the current URL.
-                        next_url = str(httpx.URL(current_url).join(next_url))
-                        reason = _validate_url_host(next_url)
-                        if reason:
-                            return _SSRF_ERROR_TEMPLATE.format(url=next_url, reason=reason)
-                        current_url = next_url
-                        continue
-                    resp.raise_for_status()
+                    # client.stream (P1-N3, 2026-09-14 audit): the previous
+                    # client.get() read the ENTIRE body before the size cap
+                    # below ever ran — the cap bounded what the model sees,
+                    # not what the network transfers into memory. A server
+                    # that sends 1.1MB then stalls held the turn until
+                    # timeout. Streaming with a bounded read makes the cap a
+                    # real transfer cap: once exceeded we stop reading and
+                    # the context close aborts the connection. Redirects
+                    # also skip their unread bodies now.
+                    with client.stream("GET", current_url) as resp:
+                        if resp.is_redirect:
+                            # Validate the redirect target with the same rules.
+                            next_url = str(resp.headers.get("location", ""))
+                            if not next_url:
+                                return f"Error fetching {url}: redirect without Location header"
+                            # Relative redirect — resolve against the current URL.
+                            next_url = str(httpx.URL(current_url).join(next_url))
+                            reason = _validate_url_host(next_url)
+                            if reason:
+                                return _SSRF_ERROR_TEMPLATE.format(url=next_url, reason=reason)
+                            current_url = next_url
+                            continue
+                        resp.raise_for_status()
 
-                    # Binary sniff: reading a 1MB of gzip'd binary as text is
-                    # useless to the model and wastes the context budget.
-                    ctype = resp.headers.get("content-type", "").lower()
-                    if any(
-                        t in ctype
-                        for t in ("image/", "audio/", "video/", "application/octet-stream", "application/pdf")
-                    ):
-                        return f"Error fetching {url}: unsupported content type {ctype!r} (text/HTML only)"
+                        # Binary sniff: reading a 1MB of gzip'd binary as text is
+                        # useless to the model and wastes the context budget.
+                        ctype = resp.headers.get("content-type", "").lower()
+                        if any(
+                            t in ctype
+                            for t in ("image/", "audio/", "video/", "application/octet-stream", "application/pdf")
+                        ):
+                            return f"Error fetching {url}: unsupported content type {ctype!r} (text/HTML only)"
 
-                    # Size cap via streamed read (Content-Length may lie/absent).
-                    chunks: list[bytes] = []
-                    total = 0
-                    for chunk in resp.iter_bytes():
-                        chunks.append(chunk)
-                        total += len(chunk)
-                        if total > _MAX_RESPONSE_BYTES:
-                            break
-                    body = b"".join(chunks)[:_MAX_RESPONSE_BYTES]
-                    return _extract_text(body.decode("utf-8", errors="replace"))[:8000]
+                        # Bounded streamed read (Content-Length may lie/absent):
+                        # break at the cap — the context close then aborts the
+                        # transfer instead of draining the rest of the body.
+                        chunks: list[bytes] = []
+                        total = 0
+                        for chunk in resp.iter_bytes():
+                            chunks.append(chunk)
+                            total += len(chunk)
+                            if total > _MAX_RESPONSE_BYTES:
+                                break
+                        body = b"".join(chunks)[:_MAX_RESPONSE_BYTES]
+                        return _extract_text(body.decode("utf-8", errors="replace"))[:8000]
                 return f"Error fetching {url}: too many redirects (max {_MAX_REDIRECTS})"
         except Exception as e:  # noqa: BLE001 — surface fetch errors to the model
             return f"Error fetching {url}: {e}"
