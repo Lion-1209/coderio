@@ -10,7 +10,7 @@ from coderio.agent.prompts import ActiveSkills
 from coderio.cli.stream import RichStream
 from coderio.config import load_config
 from coderio.config.loader import _find_project_dir
-from coderio.llm import build_chat_model
+from coderio.llm.factory import build_chat_model, resolved_model_name
 from coderio.session.store import Session
 from coderio.skills.store import SkillStore, load_skill_store
 from coderio.tools import build_default_tools
@@ -257,7 +257,15 @@ def build_runtime(
         save = save_dir or Path(cfg.session.save_dir).expanduser()
         if cfg.session.retention_days > 0:
             Session.prune_old_sessions(save, cfg.session.retention_days)
-        session = Session.create(save, {"model": cfg.model.default, "provider": cfg.model.provider})
+        # Session meta records the RESOLVED model name (#24): cfg.model.default
+        # is the raw [model] field and lies when a named profile is active.
+        session = Session.create(
+            save,
+            {
+                "model": getattr(model, "model_name", None) or resolved_model_name(cfg),
+                "provider": cfg.model.provider,
+            },
+        )
 
     active = ActiveSkills()
     stream = RichStream(console or Console())

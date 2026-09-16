@@ -53,6 +53,29 @@ def _pick_api_key(provider: str) -> str | None:
     return os.environ.get("Z_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
 
+def resolved_model_name(cfg: Config) -> str:
+    """The model NAME build_chat_model would actually use for this config.
+
+    Mirrors build_chat_model's layer resolution (named profile → registry →
+    ``[model].default``). Display and persistence paths must use this (or the
+    live model object's ``model_name``) instead of reading ``cfg.model.default``
+    directly — with a named profile active, that raw field shows a different
+    model than the one serving requests (#24, found in live testing
+    2026-09-16: banner said step-3.7-flash while the active profile ran
+    water18-0910).
+    """
+    profile = _resolve_profile(cfg)
+    if profile is not None:
+        return profile.model or cfg.model.default
+    if cfg.model.provider_id:
+        from coderio.cli.providers import get_provider
+
+        info = get_provider(cfg.model.provider_id)
+        if info is not None and info.default_model:
+            return cfg.model.default or info.default_model
+    return cfg.model.default
+
+
 def _resolve_profile(cfg: Config):
     """Pick the Profile to build from, or None to fall through to the legacy path.
 

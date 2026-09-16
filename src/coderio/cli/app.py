@@ -234,6 +234,8 @@ def run_cmd(
 def config_cmd():
     """Print current configuration."""
     cfg = load_config()
+    from coderio.llm.factory import resolved_model_name
+
     effective_base_url = cfg.model.base_url
     if cfg.model.provider_id:
         from coderio.cli.providers import get_provider
@@ -246,7 +248,9 @@ def config_cmd():
         Panel(
             f"provider_id: {cfg.model.provider_id or '(none)'}"
             f"\nprovider:    {cfg.model.provider}"
-            f"\nmodel:       {cfg.model.default}"
+            # #24: resolved name — with a named profile active, cfg.model.default
+            # shows a different model than the one actually serving requests.
+            f"\nmodel:       {resolved_model_name(cfg)}"
             f"\nbase_url:    {effective_base_url}"
             f"\npermission:  {cfg.tools.permission_mode}"
             f"\nskills repo: {cfg.skills.repo_url}",

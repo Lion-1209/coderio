@@ -24,6 +24,7 @@ from coderio.cli.tui_screens import (
     SessionPickerScreen,
 )
 from coderio.config import load_config
+from coderio.llm.factory import resolved_model_name
 
 
 def _switch_active_profile(profile_name: str) -> str:
@@ -129,7 +130,9 @@ class TuiRuntime:
             available_skills=self.store.names(),
             active_skills_names={s.name for s in self.active.all()},
             permission_mode=rt["gate"].mode,
-            model_name=rt["cfg"].model.default,
+            # #24: resolved model name — the raw [model].default lies when a
+            # named profile is active.
+            model_name=getattr(rt["model"], "model_name", None) or resolved_model_name(rt["cfg"]),
             provider_id=rt["cfg"].model.provider_id,
             api_key="",
             base_url=rt["cfg"].model.base_url,
@@ -181,8 +184,10 @@ class TuiRuntime:
                 new_cfg = load_config(search_from=".")
                 rt["cfg"] = new_cfg
                 rt["model"] = _build(new_cfg, creds_path=creds)
+                # #24: show the resolved name (profile-aware), not [model].default.
+                resolved = getattr(rt["model"], "model_name", None) or resolved_model_name(new_cfg)
                 tui._add_text(
-                    f"✅ 已重新配置 → {new_cfg.model.default}（{new_cfg.model.provider_id}）",
+                    f"✅ 已重新配置 → {resolved}（{new_cfg.model.provider_id}）",
                     style="bold green",
                 )
 

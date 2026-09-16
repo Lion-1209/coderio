@@ -921,6 +921,7 @@ def run_tui(
     from coderio.cli.repl import _needs_onboarding, _resolve_resume, build_runtime
     from coderio.config import load_config
     from coderio.config.bootstrap import ensure_user_dirs
+    from coderio.llm.factory import resolved_model_name
 
     ensure_user_dirs()
     search_from = "."
@@ -1006,7 +1007,10 @@ def run_tui(
     banner = (
         f"[bold magenta]coderio[/bold magenta] v{__version__}  "
         f"[dim]profile=[/dim]{cfg.active_profile or 'default'}  "
-        f"[dim]model=[/dim]{cfg.model.default}  "
+        # The live model object's name is ground truth; resolved_model_name is
+        # the same resolution for paths without an object. cfg.model.default is
+        # the raw [model] field and LIES when a named profile is active (#24).
+        f"[dim]model=[/dim]{getattr(model, 'model_name', None) or resolved_model_name(cfg)}  "
         f"[dim]perm=[/dim]{gate.mode}"
         "\n[dim]引擎:[/dim] [cyan]deepagents[/cyan]  "
         "[dim]输入 /help 看命令, /exit 退出, Ctrl+O 展开/收起思考[/dim]"
