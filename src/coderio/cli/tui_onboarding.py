@@ -371,16 +371,22 @@ class OnboardingScreen(ModalScreen[dict | None]):
         name = self._profile_name or self._chosen_provider.label
         _save_profile_to_config(result, name, config_path)
         self.query_one("#onboard-status").update("[green]Setup complete![/green]")
-        self.set_timer(
-            0.8,
-            lambda: self.dismiss(
+
+        # The callback MUST NOT return dismiss()'s AwaitComplete (#25): Textual's
+        # callback invoker awaits any awaitable a callback returns, and awaiting
+        # dismiss from the screen's own pump (timers fire there) raises
+        # ScreenError — crashing the app 0.8s after every successful /setup. A
+        # statement-function (not a lambda) returns None and is safe.
+        def _close_with_result() -> None:
+            self.dismiss(
                 {
                     "provider_id": result.provider_id,
                     "model": result.model,
                     "profile_name": name,
                 }
-            ),
-        )
+            )
+
+        self.set_timer(0.8, _close_with_result)
 
     # --- event handlers ---
 
