@@ -74,14 +74,19 @@ class CoderioTUI(App):
     /* ONE morphing button (zcode style — one concept, one control):
        idle ➤ submits; running it IS the stop button (⏹, error tint).
        No separate pause concept: interrupt kills the turn, resubmitting
-       continues the work. */
+       continues the work.
+       OPAQUE muted tints (#23): the old `$accent 20%` / `$error 20%` alpha
+       tints composited over the button's own near-black base (toolbar and
+       panel are transparent), rendering a dark patch that broke the seamless
+       panel design. $*-muted variants are OPAQUE theme blends with the
+       surface — same identity, no alpha-compositing ambiguity. */
     #send-btn {
         width: auto; min-width: 4; height: 1; padding: 0 1;
         border: none;
         text-style: bold;
-        background: $accent 20%; color: $accent;
+        background: $accent-muted; color: $accent;
     }
-    #send-btn.running { background: $error 20%; color: $error; }
+    #send-btn.running { background: $error-muted; color: $error; }
     /* Collapsible thinking blocks */
     Collapsible { border: round $boost 50%; margin: 0 0 0 0; }
     Collapsible > .collapsible__title { color: $text-muted; }

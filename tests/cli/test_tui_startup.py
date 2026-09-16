@@ -372,3 +372,51 @@ async def test_submit_still_refuses_when_turn_actually_running():
         ok = app._spawn_turn("second submit")
         assert ok is False, "a live turn must still refuse a second submit"
         assert app._is_running is True
+
+
+@pytest.mark.asyncio
+async def test_send_btn_running_background_is_opaque():
+    """#23: the running ⏹ used `$error 20%` — an alpha tint that composited
+    over the button's own near-black base (toolbar and panel are transparent),
+    rendering a dark patch that broke the seamless input-panel design. The
+    background must now be an OPAQUE muted blend."""
+    from coderio.cli.tui import CoderioTUI
+
+    app = CoderioTUI()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        btn = app.query_one("#send-btn", Button)
+        btn.add_class("running")
+        await pilot.pause(0.2)
+        assert btn.styles.background.a == 1.0, (
+            f"running button background must be opaque (no alpha tint), got {btn.styles.background!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_status_bar_names_running_subagent_and_goal():
+    """#22: during a `task` tool call the status bar must show WHICH subagent
+    runs and WHAT it is doing (plus the ticking elapsed), not a bare
+    '执行 task' that reads as frozen over minutes-long runs. Render-level
+    check through the REAL StatusBar widget."""
+    from coderio.cli.stream_controller import ChatStreamController
+    from coderio.cli.tui import CoderioTUI
+    from coderio.cli.tui_widgets import StatusBar
+
+    app = CoderioTUI()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        controller = ChatStreamController(app)
+        controller.on_step_start()
+        controller.on_tool_start(
+            "task",
+            {
+                "subagent_type": "research",
+                "description": "分析UI刷新线程与数据导出",
+            },
+        )
+        await pilot.pause(0.2)
+        rendered = app.query_one(StatusBar).render().plain
+        assert "子代理[research]" in rendered, f"missing subagent tag in: {rendered!r}"
+        assert "分析UI刷新线程" in rendered, f"missing goal in: {rendered!r}"
+        assert "task" != rendered.strip(), "bare '执行 task' label resurfaced"
