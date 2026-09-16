@@ -41,6 +41,20 @@ All notable changes to coderio are documented here. The format follows
 - **文档残留同步（#20）**：架构文档移除已删除的 `on_truncated`、修正 skills
   计数（13 = 12 Lion-Skills + 1 bundled）、exit_code 描述改为"结构化已接入、
   文本回退仍存在"；ROADMAP 移除已完成的 ToolResult 结构化条目。
+- **/setup 完成向导后 0.8 秒崩溃（#25）**：`set_timer` 的回调是返回
+  `dismiss()` AwaitComplete 的 lambda——Textual 的回调调用器会 await 可等待
+  的返回值，而在 screen 自身消息泵里 await dismiss 会抛
+  `ScreenError` 直接崩溃。回调改为不返回值的函数，附回归测试。
+- **命名 profile 激活时模型名显示/落盘错误（#24）**：启动 banner、
+  `coderio config`、会话元数据、/model 提示读的都是 `[model].default` 原始
+  字段而非 profile 解析结果（实测：banner 显示 step-3.7-flash，实际运行
+  water18-0910）。新增 `resolved_model_name()`，5 处展示/落盘统一改用
+  实际模型名（或模型对象的 `model_name`）。实际请求不受影响，纯显示与
+  元数据修复。
+- **⏹ 中断按钮周边暗色色块（#23）**：`$error 20%` / `$accent 20%` 的 alpha
+  色在按钮自身近黑底上合成（toolbar 与 panel 均透明），形成与面板不融合的
+  暗块。改用不透明的 `$accent-muted` / `$error-muted` 主题混合色，附样式
+  断言测试。
 
 - **Live verification scripts**: migrate both harness/deepagent scripts to
   `TurnSpec`. They still passed removed keyword arguments after the engine

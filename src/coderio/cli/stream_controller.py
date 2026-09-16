@@ -245,6 +245,27 @@ class ChatStreamController:
     ) -> None:
         self._flush_round_thinking()
         self._flush_buffer()
+        # Special-case the `task` tool (subagent delegation, #22): the subagent
+        # runs synchronously inside the tools node — the main agent blocks for
+        # MINUTES. Two visibility surfaces:
+        #   1. a one-shot notice line at dispatch (below), and
+        #   2. the STATUS BAR keeps ticking for the whole run — so instead of a
+        #      bare "执行 task" it names the subagent and its goal, and the
+        #      elapsed timer shows the run is alive (the #22 complaint was
+        #      exactly this: minutes of unlabelled "执行 task" reads as frozen).
+        if name == TASK_TOOL:
+            subagent = args.get("subagent_type", "general-purpose")
+            desc = args.get("description", "") or args.get("instructions", "")
+            desc_short = desc.split("\n")[0][:80] if desc else ""
+            self._ui._set_phase(
+                "tool",
+                tool_name=f"子代理[{subagent}] {desc_short}",
+                step=step,
+                tool_index=tool_index,
+                tool_total=tool_total,
+            )
+            self.render_q.append(("static", f"🔄 委派子 agent [{subagent}]：{desc_short}…（执行中，请稍候）", "cyan"))
+            return
         self._ui._set_phase(
             "tool",
             tool_name=name,
@@ -252,17 +273,6 @@ class ChatStreamController:
             tool_index=tool_index,
             tool_total=tool_total,
         )
-        # Special-case the `task` tool (subagent delegation): show a friendly
-        # notice instead of the raw (very long) args. The subagent runs
-        # synchronously inside the tools node — the main agent blocks until it
-        # finishes, which can take minutes. Without this notice the user sees
-        # a frozen "执行 task(…)" with no indication that a subagent is working.
-        if name == TASK_TOOL:
-            subagent = args.get("subagent_type", "general-purpose")
-            desc = args.get("description", "") or args.get("instructions", "")
-            desc_short = desc.split("\n")[0][:80] if desc else ""
-            self.render_q.append(("static", f"🔄 委派子 agent [{subagent}]：{desc_short}…（执行中，请稍候）", "cyan"))
-            return
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         if len(args_str) > 100:
             args_str = args_str[:100] + "…"
