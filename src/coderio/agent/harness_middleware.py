@@ -39,6 +39,13 @@ from coderio.tools.taxonomy import to_harness_name as _to_harness_name
 from coderio.tools.taxonomy import translate_bash_prose as _translate_bash_prose
 from coderio.tools.todo import TodoStore
 
+# Runaway-guard thresholds (2026-09-23 WhaleDock incident). The observed
+# spiral ran ~30 near-identical compare commands in one turn; the replayed
+# turn hit 60+ shell commands. Three exact repeats or 40 shell commands per
+# turn are levels at which a HEALTHY task is essentially never operating.
+_REPEAT_LIMIT: int = 3
+_EXECUTE_BUDGET: int = 40
+
 
 def _stream_supports_phase(stream: Any) -> bool:
     """Does this stream consumer actually display phase changes?
@@ -99,6 +106,23 @@ class HarnessMiddleware(SyncOnlyMiddleware):
         # plan.md disk mirror (audit 2026-09-04 P1-10).
         self._permission_gate = permission_gate
         self._runtime = None  # captured in wrap_tool_call / after_model
+        # Runaway guards (2026-09-23 WhaleDock incident): per-turn counters.
+        # The middleware object is rebuilt every turn (build_middleware runs
+        # per run_deep_agent call), so instance state IS turn state.
+        self._call_counts: dict[tuple[str, str], int] = {}  # (name, key) -> times seen
+        self._repeat_warned: set[tuple[str, str]] = set()
+        self._execute_count = 0
+        self._budget_warned = False
+        # Complaint restate flag (2026-09-23 WhaleDock incident): set at turn
+        # start when the user's message reports the agent's own failure; the
+        # FIRST tool result then carries a demand for written understanding.
+        self._restate_pending = False
+
+    def request_restate_first(self) -> None:
+        """Mark this turn as complaint-driven: before any tool result returns,
+        the model must state its understanding of what went wrong and its
+        repair plan in text."""
+        self._restate_pending = True
 
     def _plan_mode_blocks_writes(self) -> bool:
         """PLAN mode is documented as read-only ("blocks ALL writes"). The
@@ -121,6 +145,71 @@ class HarnessMiddleware(SyncOnlyMiddleware):
         normalized set.
         """
         return seed_read_state(self.harness.state, messages)
+
+    # ------------------------------------------------------- runaway guards
+    # Both guards are RESULT AUGMENTATIONS (PlanGate-style nudges), never
+    # blocks: they add a loud instruction to the tool result and, for the
+    # budget guard, a harness_warn signal. Philosophy shared with the four
+    # gates — never silently continue a failing pattern, never hard-block
+    # legitimate work.
+
+    def _runaway_nudge(self, name: str, args: dict) -> str:
+        """Detect and annotate runaway tool patterns within this turn.
+
+        Motivated by the 2026-09-23 WhaleDock incident's 30-command
+        self-comparison spiral (diff/md5sum/cmp/check-attr/hash-object on the
+        same file, no narration, no conclusion): a model in that loop needs a
+        STRUCTURAL interrupt, not more of the same output to misread.
+        """
+        from coderio.tools.taxonomy import SHELL
+
+        key = self._call_key(name, args)
+        self._call_counts[key] = self._call_counts.get(key, 0) + 1
+        nudge = ""
+        if key not in self._repeat_warned and self._call_counts[key] >= _REPEAT_LIMIT:
+            self._repeat_warned.add(key)
+            detail = args.get("command") or args.get("path") or args.get("file_path") or name
+            nudge += (
+                f"\n[harness] You have run this exact call {self._call_counts[key]} times "
+                f"({name}: {str(detail)[:80]}) with no progress. STOP repeating it. "
+                "Explain IN TEXT what you are trying to achieve and what is unclear; "
+                "if you cannot resolve it yourself, report the blocker to the user "
+                "instead of running more commands."
+            )
+            self._emit(
+                self._runtime,
+                {"type": "harness_warn", "message": f"repeated identical tool call x{self._call_counts[key]}: {name}"},
+            )
+        if name == SHELL:
+            self._execute_count += 1
+            if not self._budget_warned and self._execute_count > _EXECUTE_BUDGET:
+                self._budget_warned = True
+                nudge += (
+                    f"\n[harness] This turn has run {self._execute_count} shell commands — "
+                    "far beyond a healthy task. Stop, summarize in text what you have "
+                    "done and what remains broken, and hand the situation to the user."
+                )
+                self._emit(
+                    self._runtime,
+                    {"type": "harness_warn", "message": f"turn exceeded {_EXECUTE_BUDGET} shell commands"},
+                )
+        return nudge
+
+    @staticmethod
+    def _call_key(name: str, args: dict) -> tuple[str, str]:
+        """Identity of a call for repetition counting: tool + its main target.
+
+        For execute, the command string (whitespace-normalized — trivial flag
+        reordering should still count as the same command). For file tools,
+        the path. Exact-duplicate counting is deliberate: near-miss commands
+        (the incident's diff→md5sum→cmp chain) are caught by the BUDGET
+        guard, not this one.
+        """
+        from coderio.tools.taxonomy import SHELL
+
+        if name == SHELL:
+            return (name, " ".join(str(args.get("command", "")).split()))
+        return (name, str(args.get("path") or args.get("file_path") or ""))
 
     def _emit(self, runtime: Any, payload: dict) -> None:
         """Send a custom stream event (harness_continue / harness_warn).
@@ -227,6 +316,21 @@ class HarnessMiddleware(SyncOnlyMiddleware):
             aug = self.harness.after_tool_call(coderio_name, args, result_text)
         else:
             aug = None
+        # Runaway guards (repetition + per-turn shell budget) ride the same
+        # result-augmentation path — a loud instruction appended to exactly
+        # the result the model is about to misread.
+        aug = (aug or "") + self._runaway_nudge(name, args)
+        # Complaint restate (one-shot per turn): the user reported a failure;
+        # demand written understanding before the model keeps executing.
+        if self._restate_pending:
+            self._restate_pending = False
+            aug += (
+                "\n[harness] The user's message reports a problem with your previous "
+                "work. STOP. Before any further tool call, state IN TEXT: (1) what "
+                "you did wrong, (2) your repair plan step by step. The user must be "
+                "able to read and correct your understanding BEFORE you act on it. "
+                "Do not silently start executing a fix."
+            )
         if aug and isinstance(result, str):
             result = result + aug
         elif aug:

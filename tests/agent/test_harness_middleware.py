@@ -514,3 +514,63 @@ def test_seed_from_history_idempotent():
     assert mw.seed_from_history(history) == 2
     assert mw.seed_from_history(history) == 0
     assert mw.harness.state.content_read_files == {"a.py", "b.py"}
+
+
+# --- runaway guards + complaint restate (2026-09-23 WhaleDock incident) ---
+
+
+def _run_tool(mw, name, args, result="ok"):
+    req = _tool_call_request(name, args)
+    handler = lambda r: result
+    return mw.wrap_tool_call(req, handler)
+
+
+def test_runaway_repetition_nudge_after_three_identical_calls():
+    """The incident's 30-command self-comparison spiral: the 3rd identical
+    call must carry a STOP-and-explain instruction, plus a harness_warn."""
+    mw = HarnessMiddleware(stream=None)
+    cmd = {"command": "git diff audit-repo/main:AUDIT.md AUDIT.md | wc -c"}
+    r1 = _run_tool(mw, "execute", cmd)
+    r2 = _run_tool(mw, "execute", cmd)
+    r3 = _run_tool(mw, "execute", cmd)
+    assert "STOP repeating" not in r1 and "STOP repeating" not in r2
+    assert "STOP repeating" in r3, "3rd identical call must be annotated"
+    # Whitespace normalization: same command with extra spaces still counts.
+    assert mw._call_counts[("execute", "git diff audit-repo/main:AUDIT.md AUDIT.md | wc -c")] == 3
+
+
+def test_runaway_repetition_nudge_fires_once_per_call():
+    mw = HarnessMiddleware(stream=None)
+    cmd = {"command": "pytest -q"}
+    total = sum(_run_tool(mw, "execute", cmd).count("STOP repeating") for _ in range(6))
+    assert total == 1, "warn exactly once across the whole repetition run"
+
+
+def test_runaway_execute_budget_nudge():
+    """Beyond the per-turn shell budget the result carries a stop-and-report
+    instruction (the incident's replayed turn ran 60+ shell commands)."""
+    mw = HarnessMiddleware(stream=None)
+    total = 0
+    for i in range(41):
+        total += _run_tool(mw, "execute", {"command": f"distinct-command-{i}"}).count("shell commands")
+    assert total == 1, "budget warning fires exactly once (on the 41st call)"
+    # And not again afterwards.
+    total += _run_tool(mw, "execute", {"command": "one-more"}).count("shell commands")
+    assert total == 1
+
+
+def test_runaway_guards_off_for_read_tools_under_budget():
+    mw = HarnessMiddleware(stream=None)
+    r = _run_tool(mw, "read_file", {"file_path": "/a.py"}, result="contents")
+    assert "[harness]" not in r
+
+
+def test_complaint_restate_fires_on_first_tool_result_once():
+    """A complaint-flagged turn demands written understanding before the
+    model keeps executing — on the FIRST tool result, exactly once."""
+    mw = HarnessMiddleware(stream=None)
+    mw.request_restate_first()
+    r1 = _run_tool(mw, "execute", {"command": "git status"})
+    assert "reports a problem" in r1 and "state IN TEXT" in r1
+    r2 = _run_tool(mw, "execute", {"command": "git status"})
+    assert "reports a problem" not in r2, "one-shot: the demand must not nag every call"

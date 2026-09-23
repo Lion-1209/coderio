@@ -55,12 +55,21 @@ def test_auto_mode_allows_all():
     assert gate.check("write_file", {}) is True
 
 
-def test_auto_legacy_maps_to_full():
-    """Old configs with permission_mode='auto' should silently upgrade to FULL."""
-    gate = _AlwaysAllow("auto")  # normalize() maps "auto" -> FULL
-    assert gate.check("execute", {}) is True
-    assert gate.check("write_file", {}) is True
-    assert gate.mode == PermissionMode.FULL
+def test_auto_rejected_with_migration_message():
+    """2026-09-23 WhaleDock incident: 'auto' silently meaning FULL let a
+    zero-prompt tier hide behind an intuitive-sounding name. It is now
+    REJECTED loudly — silent FULL is the one outcome that must never
+    happen by accident."""
+    import pytest
+
+    with pytest.raises(ValueError, match="auto_edit"):
+        PermissionMode.normalize("auto")
+    # Case-insensitive too.
+    with pytest.raises(ValueError):
+        PermissionMode.normalize("AUTO")
+    # The four real tiers still normalize.
+    assert PermissionMode.normalize("full") == PermissionMode.FULL
+    assert PermissionMode.normalize("auto_edit") == PermissionMode.AUTO_EDIT
 
 
 def test_auto_edit_mode_allows_file_edits():

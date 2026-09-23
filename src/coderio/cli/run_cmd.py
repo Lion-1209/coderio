@@ -109,9 +109,21 @@ def run_headless(
     # FULL) sailed through. Any mode that RESOLVES to full requires
     # --dangerously-skip-permissions; confirm/auto_edit (and anything else
     # that prompts) are not valid headless values at all.
+    from coderio.tools.permission import PermissionMode
+
+    # Validate the RAW value BEFORE the skip override rewrites it (WhaleDock
+    # incident follow-up, 2026-09-23): the override used to run first, so
+    # `--permission auto --dangerously-skip-permissions` never reached
+    # normalize() — the retired zero-prompt alias sailed through the CLI even
+    # after config-side retirement. A retired value is rejected regardless
+    # of flags.
+    try:
+        PermissionMode.normalize(permission)
+    except ValueError as e:
+        typer.secho(f"Invalid --permission {permission!r}: {e}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(1)
     if skip_permissions:
         permission = "full"
-    from coderio.tools.permission import PermissionMode
 
     try:
         normalized = PermissionMode.normalize(permission)

@@ -88,14 +88,21 @@ class PermissionMode(StrEnum):
 
     @classmethod
     def normalize(cls, raw: str) -> "PermissionMode":
-        """Map a raw config string to a PermissionMode, with backward compat.
+        """Map a raw config string to a PermissionMode.
 
-        Old configs may have permission_mode = "auto" (the pre-v0.2 name for
-        FULL). This silently upgrades it so users don't get a ValueError on
-        existing configs.
+        ``"auto"`` is REJECTED with a migration message (2026-09-23, WhaleDock
+        incident): it was the pre-v0.2 name for FULL, and silently upgrading
+        it meant a user writing the intuitive-sounding "auto" got the ZERO-
+        prompt tier — every git push --force / rm -rf ran with no
+        confirmation. A loud error at startup beats silent FULL.
         """
-        if raw == "auto":
-            return cls.FULL
+        if raw.lower() == "auto":
+            raise ValueError(
+                "permission_mode='auto' 已停用：它旧语义等价于 'full'（零确认），"
+                "极易被误当作 'auto_edit'。请改用四个明确档位之一："
+                "plan（只读）/ confirm（逐项确认，推荐默认）/ auto_edit（自动放行文件编辑）"
+                "/ full（全自动，无任何确认）。"
+            )
         return cls(raw)
 
 

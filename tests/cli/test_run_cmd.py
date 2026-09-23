@@ -51,7 +51,10 @@ def test_run_bad_session_id_exits(tmp_path, monkeypatch):
     """--session-id pointing at a nonexistent session → clean exit 1."""
     monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
     monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
-    # load_config must still work (reads user config only).
+    # Isolate from the developer's real config (Windows HOME ≠ USERPROFILE).
+    import coderio.config as _cc
+
+    monkeypatch.setattr(_cc, "load_config", lambda *a, **kw: _cc.Config())
     result = runner.invoke(app, ["run", "task", "--session-id", "nope-1234"])
     assert result.exit_code == 1
     assert "session" in result.output.lower()
@@ -92,6 +95,14 @@ def _mock_runtime(monkeypatch, tmp_path, final_text="headless result"):
 
     monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
     monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
+    # Isolate from the DEVELOPER'S real ~/.coderio/config.toml: run_cmd's
+    # early load_config (run_cmd.py:177, function-local import) reads it
+    # before build_runtime is patched, so a local config with retired
+    # values (e.g. the old "auto") must not break these tests
+    # machine-dependently. Patch the SOURCE module attribute.
+    import coderio.config as _coderio_config
+
+    monkeypatch.setattr(_coderio_config, "load_config", lambda *a, **kw: _coderio_config.Config())
     monkeypatch.setattr("coderio.cli.repl.build_runtime", _fake_build_runtime)
     monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _fake_run_deep_agent)
     return captured
@@ -150,20 +161,18 @@ def test_run_full_requires_skip_flag(tmp_path, monkeypatch):
     --permission full alone ran with full access. The gate is real now, and
     (third-party audit) it checks the NORMALIZED mode, so the legacy "auto"
     alias — which normalize() maps to FULL — is gated identically."""
-    for value in ("full", "auto"):
-        result = runner.invoke(app, ["run", "task", "--permission", value])
-        assert result.exit_code == 1, f"{value} without flag must be rejected: {result.output}"
-        assert "requires" in result.output and "--dangerously-skip-permissions" in result.output
+    result = runner.invoke(app, ["run", "task", "--permission", "full"])
+    assert result.exit_code == 1, f"full without flag must be rejected: {result.output}"
+    assert "requires" in result.output and "--dangerously-skip-permissions" in result.output
 
 
-def test_run_auto_with_skip_flag_passes(tmp_path, monkeypatch):
-    """The legacy alias with the flag resolves to full legitimately."""
-    monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
-    monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
-    captured = _mock_runtime(monkeypatch, tmp_path)
+def test_run_auto_is_retired(tmp_path, monkeypatch):
+    """'auto' is REJECTED outright now (WhaleDock incident 2026-09-23): it
+    silently meant FULL. Even WITH the skip flag it must not resolve — the
+    user must name the tier they actually want."""
     result = runner.invoke(app, ["run", "task", "--permission", "auto", "--dangerously-skip-permissions"])
-    assert result.exit_code == 0, result.output
-    assert captured["build_kwargs"]["mode_override"] == "full"
+    assert result.exit_code == 1, result.output
+    assert "auto" in result.output
 
 
 def test_run_permission_override_passed_through(tmp_path, monkeypatch):
@@ -240,6 +249,14 @@ def test_run_agent_failure_exits_2(tmp_path, monkeypatch):
     def _boom(**kwargs):
         raise RuntimeError("model exploded")
 
+    monkeypatch.setattr("coderio.cli.repl._needs_onboarding", lambda p: False)
+    monkeypatch.setattr("coderio.config.trust.existing_repo_configs", lambda d: [])
+    import coderio.config as _cc
+
+    # repl.py binds load_config at module import — patch its binding too,
+    # not just the source package attribute.
+    monkeypatch.setattr(_cc, "load_config", lambda *a, **kw: _cc.Config())
+    monkeypatch.setattr("coderio.cli.repl.load_config", lambda *a, **kw: _cc.Config())
     monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _boom)
     result = runner.invoke(app, ["run", "task"])
     assert result.exit_code == 2, result.output

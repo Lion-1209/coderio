@@ -76,9 +76,9 @@ def test_clear_signals_reset():
 
 
 def test_mode_change_signals_reset():
-    res = handle_slash("/mode auto", _FakeCtx())
+    res = handle_slash("/mode auto_edit", _FakeCtx())
     assert res.reset_runtime is True
-    assert res.new_permission_mode == "auto"
+    assert res.new_permission_mode == "auto_edit"
 
 
 def test_sessions_lists(tmp_path):

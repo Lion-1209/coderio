@@ -647,13 +647,38 @@ def _build_general_purpose_subagent(gate, command_policy, stream=None, hook_runn
     }
 
 
-def _build_inputs(checkpointer, user_input: str | list[dict[str, Any]], session: Session) -> dict:
+def _thread_has_checkpoint(checkpointer, thread_id: str) -> bool:
+    """Does the checkpointer actually hold state for this thread?
+
+    The checkpointer OBJECT existing is not enough: an Esc-interrupt deletes
+    the thread's checkpoints (dangling-tool_calls guard, audit #9), and a
+    brand-new session has none yet. In both cases the graph starts EMPTY —
+    feeding it only the new user message would be context amnesia.
+    """
+    try:
+        return checkpointer.get_tuple({"configurable": {"thread_id": thread_id}}) is not None
+    except Exception:  # noqa: BLE001 — any probe failure = treat as no state (safe side: full history)
+        return False
+
+
+def _build_inputs(checkpointer, user_input: str | list[dict[str, Any]], session: Session, thread_id: str = "") -> dict:
     """Build the messages input for the agent stream.
 
-    With a checkpointer: only pass the new user message (deepagents restores
-    prior state from sqlite). Without: pass full conversation history.
+    With a checkpointer that ACTUALLY HOLDS state for this thread: only the
+    new user message (deepagents restores prior state from sqlite). Without
+    a checkpointer, or when the thread has no state yet (first turn, or the
+    turn after an Esc-interrupt deleted the thread): full conversation
+    history.
+
+    The interrupt case is not theoretical — it is the 2026-09-23 WhaleDock
+    incident: the user interrupted a flailing turn and re-sent a message
+    that (like any complaint) restated the original task. The old code sent
+    ONLY that message into an empty graph; the model cold-started, read the
+    complaint as a brand-new task spec, and replayed the entire destructive
+    sequence — greeting and all — with zero memory of the failure it was
+    being scolded for.
     """
-    if checkpointer is not None:
+    if checkpointer is not None and _thread_has_checkpoint(checkpointer, thread_id):
         # langchain declares list[str | dict] while we carry list[dict[str, Any]];
         # list invariance flags the narrower list even though every element
         # satisfies the wider union at runtime.
@@ -950,6 +975,75 @@ def _close_checkpointer_conn(conn) -> None:
             pass
 
 
+# Agent-directed complaint markers (2026-09-23 WhaleDock incident). These
+# signal "the user is reporting YOUR failure", not "here is a coding task" —
+# deliberately recall-leaning: a false positive only asks the model to state
+# its understanding before acting (good practice anyway), while a miss lets
+# a weak model charge into a fix with the same misunderstanding that caused
+# the failure.
+_COMPLAINT_MARKERS: tuple[str, ...] = (
+    # Chinese, agent-directed
+    "你犯了",
+    "你干了",
+    "你搞错",
+    "你错了",
+    "不对啊",
+    "不对吧",
+    "不是让你",
+    "我让你",
+    "我本意",
+    "你怎么",
+    "你刚才",
+    "刚才你",
+    "怎么回事",
+    "什么情况",
+    "重大错误",
+    # English
+    "you made a mistake",
+    "you did the wrong",
+    "what did you do",
+    "you were supposed to",
+    "that's wrong",
+    "you broke",
+    "major error",
+)
+
+_RESENT_NOTE = (
+    "\n\n[harness] NOTE: the user RE-SENT an earlier message. This almost always "
+    "means strong dissatisfaction with the previous turn (or a retry after an "
+    "interrupt) — it is NOT a new task. Re-read the conversation above, identify "
+    "exactly what the user says went wrong, and state your understanding and "
+    "repair plan IN TEXT before touching any tool."
+)
+
+
+def _user_text(user_input) -> str:
+    return text_of_content(user_input) if not isinstance(user_input, str) else user_input
+
+
+def _is_resent(text: str, session_messages: list) -> bool:
+    """Exact-duplicate detection against earlier user messages (all
+    whitespace stripped — CJK text carries no word-boundary spaces, so a
+    collapse-to-single-space normalization would miss "，  首先" vs "，首先").
+    Exact match is deliberate — the incident's replay was an exact re-send;
+    fuzzy matching risks false notes on ordinary tasks."""
+    norm = "".join(text.split())
+    if not norm:
+        return False
+    for m in session_messages:
+        if getattr(m, "role", "") != "user":
+            continue
+        c = m.content if isinstance(m.content, str) else text_of_content(m.content)
+        if "".join(str(c).split()) == norm:
+            return True
+    return False
+
+
+def _is_complaint(text: str) -> bool:
+    low = text.lower()
+    return any(marker in low for marker in _COMPLAINT_MARKERS)
+
+
 def _finish_turn(hook_runner, stream, session, final_text: str, turn_writes: list[str]) -> str:
     """Stop hook + stream teardown + assistant-message persistence."""
     # Stop event (notification-only v1): the harness owns force-continue, so a
@@ -1014,6 +1108,19 @@ def run_deep_agent(
     if rejected is not None:
         return rejected
 
+    # Complaint / re-send detection (2026-09-23 WhaleDock incident): a re-sent
+    # message or an agent-directed complaint must not be executed as a fresh
+    # task spec. The re-send note rides the user message (context the model
+    # reads before acting); the complaint flag makes the harness demand a
+    # written understanding + repair plan before the first tool result
+    # returns. Detection runs BEFORE session.append so it compares against
+    # PRIOR messages only.
+    _turn_text = _user_text(user_input)
+    _resent = _is_resent(_turn_text, session.messages)
+    _complaint = _is_complaint(_turn_text)
+    if _resent and isinstance(user_input, str):
+        user_input = user_input + _RESENT_NOTE
+
     plan_artifact, user_input = _prepare_plan_artifact(spec.harness_enabled, project_dir, user_input)
     session.append(Message.user(user_input))
 
@@ -1030,6 +1137,8 @@ def run_deep_agent(
     for mw in middleware:
         if isinstance(mw, HarnessMiddleware):
             mw.seed_from_history(session.messages)
+            if _complaint:
+                mw.request_restate_first()
     backend = build_backend(spec)
     subagents = build_subagents(spec, stream, hook_runner, project_dir)
     extra_lc_tools = _build_extra_tools(spec.tools, spec.skill_store, spec.active_skills, anchor_dir=project_dir)
@@ -1065,7 +1174,7 @@ def run_deep_agent(
     _turn_writes: list[str] = []
     try:
         agent = create_deep_agent(**build_kwargs)
-        inputs = _build_inputs(checkpointer, user_input, session)
+        inputs = _build_inputs(checkpointer, user_input, session, thread_id)
         if hasattr(stream, "on_step_start"):
             stream.on_step_start()
         # Bridge the stream handler's interrupt flag into the stream loop:

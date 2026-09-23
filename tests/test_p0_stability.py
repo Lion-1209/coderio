@@ -68,10 +68,18 @@ class TestConfigValidation:
             _from_dict({"tools": {"permission_mode": "confim"}})  # typo
 
     def test_valid_permission_modes_accepted(self):
-        for mode in ("confirm", "plan", "auto"):
+        for mode in ("confirm", "plan", "full", "auto_edit"):
             cfg = _from_dict({"tools": {"permission_mode": mode}})
             assert cfg.tools.permission_mode == mode
 
+    def test_permission_mode_auto_rejected_with_migration(self):
+        """'auto' is retired (WhaleDock incident 2026-09-23): it silently
+        meant FULL. The loader must fail loudly with the migration path."""
+        import pytest
+
+        with pytest.raises(ValueError, match="auto_edit"):
+            _from_dict({"tools": {"permission_mode": "auto"}})
+
     def test_permission_mode_case_insensitive(self):
-        cfg = _from_dict({"tools": {"permission_mode": "AUTO"}})
-        assert cfg.tools.permission_mode == "auto"
+        cfg = _from_dict({"tools": {"permission_mode": "CONFIRM"}})
+        assert cfg.tools.permission_mode == "confirm"

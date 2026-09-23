@@ -463,3 +463,39 @@ def test_citation_of_never_read_file_still_force_continues(tmp_path):
     continues = [s for s in stream.harness_signals if s["type"] == "harness_continue"]
     assert continues, f"citing a never-read file must still force-continue; signals: {stream.harness_signals}"
     assert "other.py" in continues[0]["reason"]
+
+
+@pytest.mark.skipif(not deepagents, reason="deepagents not installed")
+def test_resent_message_injects_harness_note(tmp_path):
+    """WhaleDock incident wiring check: when the user RE-SENDS an earlier
+    message (typically after interrupting a bad turn), the persisted user
+    message must carry the harness note telling the model this is a
+    complaint/retry, not a new task."""
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+
+    session = make_session(tmp_path)
+    stream = NoOpStream()
+    complaint = "你犯了重大错误，把仓库推错了"
+
+    # Turn 1: the complaint is delivered once (fresh message, no note).
+    run_deep_agent(
+        complaint,
+        TurnSpec(model=make_model(AIMessage(content="收到，我来处理。")), harness_enabled=False, workdir=str(tmp_path)),
+        session,
+        stream=stream,
+    )
+    first = [m for m in session.messages if m.role == "user"][-1]
+    assert "RE-SENT" not in str(first.content)
+
+    # Turn 2: same text re-sent → the harness note rides the message.
+    run_deep_agent(
+        complaint,
+        TurnSpec(
+            model=make_model(AIMessage(content="我理解了问题所在。")), harness_enabled=False, workdir=str(tmp_path)
+        ),
+        session,
+        stream=stream,
+    )
+    resent = [m for m in session.messages if m.role == "user"][-1]
+    assert "RE-SENT" in str(resent.content)
+    assert "NOT a new task" in str(resent.content)

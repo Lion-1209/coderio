@@ -197,13 +197,65 @@ class _FakeSession:
         self.messages = messages
 
 
-def test_build_inputs_with_checkpointer_only_new_message():
-    """When a checkpointer is present, deepagents restores prior state from
-    sqlite — so we pass ONLY the new user message (not full history)."""
+class _FakeCheckpointer:
+    """Checkpointer stub: ``state`` simulates whether the thread has a checkpoint."""
+
+    def __init__(self, state=True):
+        self.state = state
+
+    def get_tuple(self, config):
+        return object() if self.state else None
+
+
+def test_build_inputs_with_checkpointer_state_only_new_message():
+    """When the checkpointer ACTUALLY holds state for this thread, deepagents
+    restores prior state from sqlite — so we pass ONLY the new user message."""
     session = _FakeSession([HumanMessage(content="old"), AIMessage(content="msg")])
-    inputs = _build_inputs(object(), "new question", session)  # type: ignore[arg-type]
+    inputs = _build_inputs(_FakeCheckpointer(state=True), "new question", session, thread_id="t1")  # type: ignore[arg-type]
     assert len(inputs["messages"]) == 1
     assert inputs["messages"][0].content == "new question"
+
+
+def test_build_inputs_interrupt_deleted_thread_passes_full_history():
+    """2026-09-23 WhaleDock incident regression: an Esc-interrupt DELETES the
+    thread's checkpoints; the next turn must fall back to FULL session
+    history. The old code checked only "checkpointer object exists" and sent
+    just the new message into an EMPTY graph — the model cold-started,
+    read a re-sent complaint as a brand-new task, and replayed the entire
+    destructive sequence with zero memory of the failure. (The new user
+    message is already in session.messages — run_deep_agent appends it
+    before building inputs.)"""
+    resent = "你犯了重大错误……（重发）"
+    session = _FakeSession(
+        [
+            SimpleNamespace(role="user", content="hi", tool_calls=None, tool_call_id=None, kind=None),
+            SimpleNamespace(role="assistant", content="hello", tool_calls=None, tool_call_id=None, kind=None),
+            SimpleNamespace(role="user", content=resent, tool_calls=None, tool_call_id=None, kind=None),
+        ]
+    )
+    cp = _FakeCheckpointer(state=False)  # thread deleted by the interrupt
+    inputs = _build_inputs(cp, resent, session, thread_id="t1")  # type: ignore[arg-type]
+    assert len(inputs["messages"]) == 3  # full history, resent message included
+    contents = [m.content for m in inputs["messages"]]
+    assert "hi" in contents and "重大错误" in str(contents[-1])
+
+
+def test_build_inputs_checkpointer_probe_failure_is_safe():
+    """If the state probe itself raises, assume NO state (full history) —
+    duplicating a message is recoverable, losing history is not."""
+    session = _FakeSession(
+        [
+            SimpleNamespace(role="user", content="q", tool_calls=None, tool_call_id=None, kind=None),
+            SimpleNamespace(role="user", content="new", tool_calls=None, tool_call_id=None, kind=None),
+        ]
+    )
+
+    class _Boom:
+        def get_tuple(self, config):
+            raise RuntimeError("probe failed")
+
+    inputs = _build_inputs(_Boom(), "new", session, thread_id="t1")  # type: ignore[arg-type]
+    assert len(inputs["messages"]) >= 2
 
 
 def test_build_inputs_without_checkpointer_passes_full_history():
@@ -687,3 +739,32 @@ def test_interrupt_drops_thread_checkpoint_and_surfaces_writes(tmp_path, monkeyp
     assert turn_ends and turn_ends[0] == ["/tmp/x.py"], (
         f"on_turn_end must still fire with the writes so far (audit #10), got {turn_ends}"
     )
+
+
+# ------------------------------------------- complaint / re-send detection (WhaleDock incident)
+def test_is_resent_detects_exact_duplicate():
+    from coderio.agent.deep_loop import _is_resent
+
+    hist = [
+        SimpleNamespace(role="user", content="你犯了重大错误，首先当前路径本来是公开仓库", tool_calls=None),
+        SimpleNamespace(role="assistant", content="sorry", tool_calls=None),
+    ]
+    assert _is_resent("你犯了重大错误，首先当前路径本来是公开仓库", hist) is True
+    # Whitespace normalization.
+    assert _is_resent("你犯了重大错误，  首先当前路径本来是公开仓库", hist) is True
+    assert _is_resent("一条全新的消息", hist) is False
+    # Only user messages count.
+    hist2 = [SimpleNamespace(role="assistant", content="repeat me", tool_calls=None)]
+    assert _is_resent("repeat me", hist2) is False
+
+
+def test_is_complaint_matches_agent_directed_markers():
+    from coderio.agent.deep_loop import _is_complaint
+
+    assert _is_complaint("你犯了重大错误，先把仓库推错了") is True
+    assert _is_complaint("我让你只推一个审计报告啊？？") is True
+    assert _is_complaint("You made a mistake and deleted my files") is True
+    # Normal TASK text must not match (recall-leaning is fine, but plain
+    # tasks shouldn't trip it).
+    assert _is_complaint("修复 calc.py 里的加法 bug 并跑测试") is False
+    assert _is_complaint("帮我重构这个模块") is False

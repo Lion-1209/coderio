@@ -180,7 +180,18 @@ def _from_dict(data: dict) -> Config:
     perm = t.get("permission_mode", cfg.tools.permission_mode)
     if isinstance(perm, str):
         perm_lower = perm.lower()
-        valid = ("confirm", "plan", "auto", "full", "auto_edit")
+        valid = ("confirm", "plan", "full", "auto_edit")
+        if perm_lower == "auto":
+            # NOT silently mapped (2026-09-23, WhaleDock incident): the old
+            # "auto" meant FULL — zero prompts. A user writing the intuitive
+            # "auto" (meaning auto_edit) getting silent FULL is how a whole
+            # working tree got force-pushed and rm -rf'd without one
+            # confirmation. Fail loudly with the migration path instead.
+            raise ValueError(
+                "config.toml [tools] permission_mode='auto' 已停用（旧语义 = full，零确认）。"
+                "请改为：plan / confirm / auto_edit / full 之一。"
+                "想要'自动改文件但命令仍确认'用 auto_edit；明确要零确认才用 full。"
+            )
         if perm_lower not in valid:
             raise ValueError(f"config.toml [tools] permission_mode='{perm}' 无效。可选值: {', '.join(valid)}")
         perm = perm_lower
