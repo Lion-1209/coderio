@@ -6,7 +6,7 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
-## [Unreleased]
+## [0.6.0] — 2026-09-23
 
 ### Added — 2026-09-20/21 change-plan batch (D1-1…D1-4, Phase 2, Phase 3)
 
@@ -57,6 +57,38 @@ All notable changes to coderio are documented here. The format follows
   与文件行数预算变成 AST 检查；**baseline 语义：只卡新增违规**，存量 4 个
   超大文件入库不阻塞；`llm→cli` 等 4 处现存向上导入升级为带理由和移除
   条件的显式例外。含变异测试（注入新违规必须变红）。
+
+### Fixed — 2026-09-23 WhaleDock incident batch
+
+A real-world session (auditing the WhaleDock project, model water18-0910)
+ended with the agent force-pushing the public repo over a private docs
+repo and `rm -rf`-ing the local working tree — then REPLAYING the entire
+destructive sequence after the user's explicit error report. Four fixes,
+root-caused from the session jsonl:
+
+- **Esc 中断后的上下文失忆（P0）**：`_handle_interrupt` 按设计删除整条
+  checkpoint（防悬空 tool_calls），但 `_build_inputs` 只检查"checkpointer
+  对象存在"就只发新消息——中断后的下一轮，模型在空图里只看到重发的
+  那条消息（内容复述了任务意图），把它当全新任务执行，原样重放了整个
+  破坏序列（证据：模型对怒斥的回应是"你好！有什么我可以帮你的？"）。
+  现在 `_build_inputs` 用 `get_tuple` 探测线程是否真有状态，无状态则
+  回退完整会话历史——这才是注释里一直宣称的"falls back to full session
+  history"。
+- **`permission_mode="auto"` 静默映射 FULL（P0）**：旧值 "auto" 被
+  normalize 成 FULL（零确认档），而它字面直觉像 auto_edit——事故
+  session 里 `git push --force`/`rm -rf`/`git clean -fd`/`git reset
+  --hard` 全部零提示执行。现在 loader 与 normalize 双双拒绝该值并给出
+  迁移指引（plan/confirm/auto_edit/full）。宁可启动报错，不要静默
+  FULL。
+- **失控守卫（harness 第 5/6 道防线）**：同一工具同参 ≥3 次 → 结果附
+  带"STOP repeating，用文字说明你要什么"指令 + harness_warn；单 turn
+  execute 超 40 次 → "停下来向用户汇报"指令 + harness_warn。针对事故
+  中 30 条自比较命令的螺旋与 60+ 命令的重放轮。
+- **投诉/重发保护**：用户重发此前消息（空白归一化精确匹配）→ 用户消息
+  附带 harness 注记"这是投诉/重试，不是新任务，先复述理解再动手"；
+  用户消息含 agent 指向的投诉标记（你犯了/我让你/what did you do 等）
+  → 首个工具结果携带"先用文字说明 (1) 错在哪 (2) 修复计划"的一次性
+  强制要求。均为软注入，不阻断。
 
 ### Fixed
 
@@ -946,7 +978,8 @@ weaker than the documentation's promise. All fixed and double-checked:
 - Rich stream UI + Textual TUI with foldable thinking.
 - jsonl session persistence with compression truncation.
 
-[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Lion-1209/coderio/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Lion-1209/coderio/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.4
 [0.4.3]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.3
