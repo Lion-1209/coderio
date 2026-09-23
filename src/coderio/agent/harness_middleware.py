@@ -30,7 +30,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from coderio.agent._content import result_to_text as _result_to_text
 from coderio.agent._deepagents_compat import get_state_todos
-from coderio.agent.harness import Harness, HarnessState
+from coderio.agent.harness import Harness, HarnessState, seed_read_state
 from coderio.agent.sync_only import SyncOnlyMiddleware
 
 # Engine↔harness tool-name mapping. Single source of truth:
@@ -110,6 +110,17 @@ class HarnessMiddleware(SyncOnlyMiddleware):
         """
         gate = self._permission_gate
         return gate is not None and getattr(gate, "mode", "") == "plan"
+
+    def seed_from_history(self, messages) -> int:
+        """Pre-fill harness read-state from conversation history (resume path).
+
+        Called once per turn by run_deep_agent. A fresh session seeds nothing;
+        a resumed session keeps its GroundingGate honest about files the model
+        read BEFORE the resume (they are in its context — the gate must not
+        force a re-read). Idempotent: live observe() calls dedupe via the same
+        normalized set.
+        """
+        return seed_read_state(self.harness.state, messages)
 
     def _emit(self, runtime: Any, payload: dict) -> None:
         """Send a custom stream event (harness_continue / harness_warn).

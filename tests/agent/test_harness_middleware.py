@@ -116,6 +116,7 @@ def test_build_middleware_wires_gate_into_harness_middleware():
     spec.gate = gate
     spec.harness_enabled = True
     spec.command_policy = None
+    spec.context_limit = 0  # unknown window → microcompact stays off
 
     stack = build_middleware(spec, stream=None, hook_runner=MagicMock(specs=[]), plan_artifact=None)
     harness_mws = [m for m in stack if type(m).__name__ == "HarnessMiddleware"]
@@ -479,3 +480,37 @@ def test_wrap_tool_call_no_artifact_falls_back_to_text():
     req = _tool_call_request("execute", {"command": "python a.py"})
     mw.wrap_tool_call(req, lambda r: msg)
     assert mw.harness.state.writes_since_verify == [], "text fallback must still clear on exit 0"
+
+
+# --- seed_from_history: resume path (change plan D1-1) ---
+
+
+def _hist_msg(path: str, tc_id: str = "tc1"):
+    from coderio.session.message import Message, ToolCall
+
+    return Message.assistant("", tool_calls=[ToolCall(id=tc_id, name="read_file", args={"path": path})])
+
+
+def test_seed_from_history_populates_harness_state():
+    """The middleware entry point seeds the harness read-state so a resumed
+    session's GroundingGate sees pre-resume reads."""
+    mw = HarnessMiddleware(stream=None)
+    seeded = mw.seed_from_history([_hist_msg("src/agent/loader.py")])
+    assert seeded == 1
+    assert "src/agent/loader.py" in mw.harness.state.content_read_files
+
+
+def test_seed_from_history_empty_history_is_noop():
+    mw = HarnessMiddleware(stream=None)
+    assert mw.seed_from_history([]) == 0
+    assert mw.harness.state.content_read_files == set()
+
+
+def test_seed_from_history_idempotent():
+    """Seeding twice (two turns over the same history) must not duplicate or
+    drift — sets dedupe, and the count is stable."""
+    mw = HarnessMiddleware(stream=None)
+    history = [_hist_msg("a.py", tc_id="t1"), _hist_msg("b.py", tc_id="t2")]
+    assert mw.seed_from_history(history) == 2
+    assert mw.seed_from_history(history) == 0
+    assert mw.harness.state.content_read_files == {"a.py", "b.py"}

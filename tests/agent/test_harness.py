@@ -6,7 +6,8 @@ These test Harness in isolation — no loop, no model. The loop-integration test
 
 import pytest
 
-from coderio.agent.harness import Harness, HarnessState
+from coderio.agent.harness import Harness, HarnessState, seed_read_state
+from coderio.session.message import Message, ToolCall
 from coderio.tools.todo import Todo, TodoStore
 
 
@@ -974,3 +975,105 @@ def test_verify_gate_text_parsing_fallback_exit_zero():
     h.observe("bash", {"command": "python a.py"}, "output\n[exit_code: 0]")
     cont, _, _ = h.check_termination("done")
     assert cont is False, "text-marker exit 0 must clear writes"
+
+
+# ------------------------------------------------- seed_read_state (resume path, D1-1)
+def _hist_read(path: str, tc_id: str = "tc1") -> Message:
+    """An assistant message carrying a read_file tool call (as persisted)."""
+    return Message.assistant("", tool_calls=[ToolCall(id=tc_id, name="read_file", args={"path": path})])
+
+
+def test_seed_read_state_grounds_citation_from_history():
+    """Core resume regression: the model read loader.py in a PREVIOUS session
+    (it is in the model's context after /resume), so citing it must not be
+    force-continued by GroundingGate. Before seeding, the fresh HarnessState
+    was blind and every pre-resume citation cost a wasted round."""
+    h = _harness(with_write=True)
+    history = [_hist_read("src/agent/loader.py")]
+    seeded = seed_read_state(h.state, history)
+    assert seeded == 1
+    cont, inject, warn = h.check_termination("分析发现 loader.py:81 已接入 config.harness。")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_seed_read_state_empty_history_seeds_nothing():
+    h = _harness(with_write=True)
+    assert seed_read_state(h.state, []) == 0
+    cont, _, _ = h.check_termination("loader.py:81 已接入。")
+    assert cont is True, "no history → citation stays ungrounded"
+
+
+def test_seed_read_state_grep_and_ls_do_not_ground_citations():
+    """Seeding mirrors observe()'s semantics: only content reads ground a
+    citation. A history of grep/ls calls must NOT silence GroundingGate."""
+    h = _harness(with_write=True)
+    history = [
+        Message.assistant(
+            "",
+            tool_calls=[
+                ToolCall(id="t1", name="grep", args={"pattern": "harness", "path": "src/agent"}),
+                ToolCall(id="t2", name="ls", args={"path": "src/agent"}),
+            ],
+        )
+    ]
+    seed_read_state(h.state, history)
+    assert h.state.content_read_files == set()
+    assert h.state.read_files, "grep/ls still populate the name-level read set"
+    cont, _, _ = h.check_termination("src/agent/harness.py 定义了四道门。")
+    assert cont is True
+
+
+def test_seed_read_state_not_found_from_tool_result():
+    """A read_file whose RESULT says not-found seeds not_found_files (paired
+    via tool_call_id), so the gate stops demanding a read of a path that was
+    already confirmed missing. Mirrors observe(): the path also lands in
+    content_read_files (the model did open it), and not_found_files is what
+    exempts it — exactly the live-path behavior."""
+    h = _harness(with_write=True)
+    history = [
+        _hist_read("docs/missing.py", tc_id="tc9"),
+        Message.tool_result("tc9", "read_file", "Error: file not found: docs/missing.py"),
+    ]
+    seed_read_state(h.state, history)
+    assert "docs/missing.py" in h.state.not_found_files
+    cont, _, _ = h.check_termination("docs/missing.py 里有说明。")
+    assert cont is False
+
+
+def test_seed_read_state_does_not_seed_writes_since_verify():
+    """Per-turn state is deliberately NOT seeded: files may have changed since
+    the previous session, so a resumed turn must not inherit a stale
+    unverified-write obligation (it would nag about disk state the user saw
+    resolved)."""
+    h = _harness()
+    history = [
+        Message.assistant("", tool_calls=[ToolCall(id="w1", name="write_file", args={"path": "a.py"})]),
+    ]
+    seed_read_state(h.state, history)
+    assert h.state.writes_since_verify == []
+    assert h.state.has_wrote_this_turn is False
+    cont, _, _ = h.check_termination("done")
+    assert cont is False
+
+
+def test_seed_read_state_normalizes_paths():
+    """Case/slash normalization applies to seeded paths exactly as to live
+    ones: reading 'SRC/Agent/Loop.py' (backslash form) grounds a 'loop.py:1' citation."""
+    h = _harness(with_write=True)
+    seed_read_state(h.state, [_hist_read(r"SRC\Agent\Loop.py")])
+    cont, _, _ = h.check_termination("loop.py:1 处理循环。")
+    assert cont is False
+
+
+def test_seed_read_state_accepts_langchain_dict_tool_calls():
+    """The seeder is duck-typed: langchain-style dict tool_calls (id/name/args)
+    seed identically, so any caller holding either representation works."""
+    h = _harness(with_write=True)
+    history = [
+        Message(role="assistant", content="", tool_calls=None),
+    ]
+    # Simulate a langchain AIMessage shape directly (dicts, not ToolCall).
+    history[0].tool_calls = [{"id": "x1", "name": "read_file", "args": {"path": "src/x.py"}}]
+    seed_read_state(h.state, history)
+    cont, _, _ = h.check_termination("src/x.py:10 做了这件事。")
+    assert cont is False

@@ -25,13 +25,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 from coderio.tools.command_policy import _norm_exe, _skip_exec_prefixes, _unwrap_wrapper
 
 # Tool names/categories: single source of truth in tools/taxonomy.py
 # (2026-08-28 audit A2 — six ad-hoc copies had drifted apart).
-from coderio.tools.taxonomy import CONTENT_READ_TOOLS, READ_TOOLS, WRITE_TOOLS
+from coderio.tools.taxonomy import CONTENT_READ_TOOLS, READ_TOOLS, WRITE_TOOLS, to_harness_name
 from coderio.tools.taxonomy import LEGACY_SHELL as VERIFY_TOOL
 
 if TYPE_CHECKING:
@@ -504,6 +504,89 @@ class HarnessState:
     # README analysis) that aren't real files. Once the agent has confirmed a
     # path doesn't exist, the gate stops forcing it to "read" it again.
     not_found_files: set[str] = field(default_factory=set)
+
+
+def _tool_call_fields(tc: Any) -> tuple[str, dict, str]:
+    """(name, args, id) from either a session ToolCall or a langchain dict."""
+    if isinstance(tc, dict):
+        return str(tc.get("name", "")), dict(tc.get("args", {}) or {}), str(tc.get("id", ""))
+    return str(getattr(tc, "name", "")), dict(getattr(tc, "args", {}) or {}), str(getattr(tc, "id", ""))
+
+
+def _message_text(content: Any) -> str:
+    """Text view of a message content (str, or a list of content blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return str(content)
+
+
+def seed_read_state(state: HarnessState, messages: Iterable[Any]) -> int:
+    """Pre-fill the read-state sets from conversation history (resume path).
+
+    WHY THIS EXISTS: HarnessState is a middleware INSTANCE attribute
+    (harness_middleware.py), never part of graph state — the SqliteSaver
+    checkpointer does not persist it. After ``/resume`` (or any history replay
+    that rebuilds the middleware), the model's context still contains the
+    earlier turns, but the harness sees an EMPTY read set: the model cites a
+    file it read before the resume, GroundingGate finds it in neither
+    content_read_files nor not_found_files, and force-continues with "read it
+    first". Every citation costs a wasted round and the gate looks broken when
+    it is actually blind. The design anticipated this — the _norm_path
+    docstring documents the "cross-turn pre-fill" — but no implementation
+    existed until now (2026-09-20, change plan D1-1).
+
+    SEMANTICS (mirrors observe(), so seeded and live state are
+    indistinguishable to the gates):
+      - only content-level reads (read_file) seed content_read_files —
+        grep/glob/ls populate read_files only, exactly like the live path;
+      - not_found_files is rebuilt from tool RESULTS (a read_file whose result
+        contains "not found"), paired to its args via tool_call_id;
+      - per-turn state (writes_since_verify, attempts, has_wrote_this_turn)
+        is deliberately NOT seeded: a resumed turn starts with no unverified
+        writes — files may have changed since the previous session, so
+        inheriting that obligation would nag about stale disk state.
+
+    Returns the number of content-read paths seeded (logging/tests).
+    """
+    # tool_call_id → args, so a tool RESULT can be paired with the args that
+    # produced it (not-found detection needs the path the read was aimed at).
+    call_args: dict[str, dict] = {}
+    seeded = 0
+    for m in messages:
+        role = getattr(m, "role", "")
+        tool_calls = getattr(m, "tool_calls", None) or []
+        if role == "assistant" and tool_calls:
+            for tc in tool_calls:
+                name, args, tc_id = _tool_call_fields(tc)
+                if tc_id:
+                    call_args[tc_id] = args
+                harness_name = to_harness_name(name)
+                if harness_name not in READ_TOOLS:
+                    continue
+                for key in ("path", "file_path", "pattern"):
+                    v = str(args.get(key, "")).strip()
+                    if v:
+                        state.read_files.add(v)
+                if harness_name in CONTENT_READ_TOOLS:
+                    for key in ("path", "file_path"):
+                        v = str(args.get(key, "")).strip()
+                        if v:
+                            np = _norm_path(v)
+                            if np and np not in state.content_read_files:
+                                state.content_read_files.add(np)
+                                seeded += 1
+        elif role == "tool":
+            content = _message_text(getattr(m, "content", ""))
+            if "not found" not in content.lower():
+                continue
+            args = call_args.get(str(getattr(m, "tool_call_id", "") or ""), {})
+            for key in ("path", "file_path"):
+                v = str(args.get(key, "")).strip()
+                if v:
+                    state.not_found_files.add(_norm_path(v))
+    return seeded
 
 
 @dataclass
