@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "violations": [
+    {
+      "rule": "max-file-lines",
+      "file": "src/coderio/agent/deep_loop.py",
+      "detail": "1321 lines > 800",
+      "fp": "8577555914322dbc"
+    },
+    {
+      "rule": "max-file-lines",
+      "file": "src/coderio/agent/harness.py",
+      "detail": "1000 lines > 800",
+      "fp": "64dd04a616d0e18f"
+    },
+    {
+      "rule": "max-file-lines",
+      "file": "src/coderio/cli/tui.py",
+      "detail": "1052 lines > 800",
+      "fp": "f09385663099718b"
+    },
+    {
+      "rule": "max-file-lines",
+      "file": "src/coderio/tools/command_policy.py",
+      "detail": "868 lines > 800",
+      "fp": "82d2e3361a5295e8"
+    }
+  ]
+}

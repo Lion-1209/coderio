@@ -1,0 +1,98 @@
+# coderio architecture policy (executable — see scripts/architecture/check.py)
+#
+# The layering this file encodes is the one documented in
+# docs/coderio-architecture.md §1: dependencies flow DOWNWARD only
+# (cli → agent → capability modules). This file makes that documented rule
+# executable instead of aspirational.
+#
+# Pattern borrowed from ZCode (2026-09-21 source study): declare the policy
+# as data, check it with a small AST script, and keep a BASELINE of existing
+# violations — only NEW violations fail the check. That is what makes an
+# architecture gate adoptable on a project with history: you tighten from
+# today forward instead of demanding a zero-violation rewrite first.
+#
+# Run:  .venv/Scripts/python.exe scripts/architecture/check.py
+#       .venv/Scripts/python.exe scripts/architecture/check.py --changed
+#       .venv/Scripts/python.exe scripts/architecture/check.py --update-baseline
+
+version: 1
+
+# Layer order: a module may import from its OWN layer or a LOWER one.
+# Lower number = higher in the stack.
+modules:
+  cli:
+    roots: [src/coderio/cli]
+    layer: 1
+  agent:
+    roots: [src/coderio/agent]
+    layer: 2
+  tools:
+    roots: [src/coderio/tools]
+    layer: 3
+  skills:
+    roots: [src/coderio/skills]
+    layer: 3
+  session:
+    roots: [src/coderio/session]
+    layer: 3
+  config:
+    roots: [src/coderio/config]
+    layer: 3
+  llm:
+    roots: [src/coderio/llm]
+    layer: 3
+  mcp_loader:
+    roots: [src/coderio/mcp_loader.py]
+    layer: 3
+
+# Global budgets. Violations present when the baseline was created are
+# recorded in .architecture-baseline.json and do not fail the check; any
+# NEW violation does.
+budgets:
+  # Max lines per source file. The documented promise is "each security
+  # layer can be read on its own" — a 1300-line module is not that.
+  max_file_lines: 800
+
+# Known, accepted exceptions. Each carries the reason and (where relevant)
+# the removal condition. Prefer fixing over excepting; prefer an expiring
+# exception over a permanent one.
+exceptions:
+  - id: llm-imports-cli-providers
+    rule: layer-direction
+    detail: "llm -> cli (providers/credentials lazy imports)"
+    reason: >
+      factory.py resolves provider registry entries and API keys through
+      coderio.cli.providers / coderio.cli.credentials with function-level
+      lazy imports (import-time cycles otherwise). The registry and the
+      credential store genuinely live under cli/ today.
+    removal: move ProviderInfo + credentials into a capability-layer module
+      (e.g. llm/providers.py or a new providers/ package) and re-point both
+      sides; then delete this exception.
+  - id: config-imports-agent
+    rule: layer-direction
+    detail: "config -> agent (HookSpec parsing)"
+    reason: >
+      config/loader.py parses [[hooks]] tables into agent.hooks.HookSpec —
+      the dataclass the agent layer defines. Parsing config into an agent
+      type is the one natural upward read; the alternative (defining hook
+      config types in config/ and translating) adds a mapping layer for one
+      dataclass.
+    removal: if a second agent-defined config type appears, move the shared
+      types to a capability module instead of growing this exception.
+  - id: config-imports-cli
+    rule: layer-direction
+    detail: "config -> cli (credential permission hardening)"
+    reason: >
+      trust.py hardens the trust-store file via cli.credentials'
+      _restrict_permissions — the same owner-only helper the credentials
+      store uses. Function-level lazy import (import-time cycle otherwise).
+    removal: extract _restrict_permissions into a small capability module
+      (e.g. tools/fs_perms.py) once a third caller appears.
+  - id: session-imports-cli
+    rule: layer-direction
+    detail: "session -> cli (session file permission hardening)"
+    reason: >
+      store.py applies the same owner-only restriction to session jsonl
+      files (audit P2, 2026-09-04: sessions have leaked pasted secrets).
+      Same helper, same lazy-import shape as config-imports-cli.
+    removal: shared with config-imports-cli — one extraction fixes both.
