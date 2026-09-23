@@ -101,3 +101,51 @@ def test_build_user_content_reuses_preextracted_images(tmp_path, monkeypatch):
         "type": "image",
         "source": {"type": "base64", "media_type": "image/png", "data": pre[0][2]},
     }
+
+
+# ------------------------------------------------- D1-2: provider-kind gating
+def test_build_user_content_openai_kind_uses_image_url_shape(tmp_path):
+    """D1-2: OpenAI-protocol providers get image_url data-URL blocks, not
+    Anthropic image blocks (the latter is a guaranteed 400 there)."""
+    img = _make_img(tmp_path, "photo.jpg", b"JFIF data")
+    text = f"分析这张图 @{img}"
+    result = build_user_content(text, provider_kind="openai_compatible")
+    assert isinstance(result, list)
+    assert result[0] == {"type": "text", "text": text}
+    assert result[1]["type"] == "image_url"
+    assert result[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_build_user_content_anthropic_kind_uses_image_blocks(tmp_path):
+    """Anthropic-protocol providers keep the native image-block shape."""
+    img = _make_img(tmp_path, "photo.png")
+    result = build_user_content(f"看 @{img}", provider_kind="anthropic")
+    assert result[1]["type"] == "image"
+    assert result[1]["source"]["type"] == "base64"
+    assert result[1]["source"]["media_type"] == "image/png"
+
+
+def test_build_user_content_default_kind_is_anthropic(tmp_path):
+    """Back-compat: callers that don't pass provider_kind keep the historical
+    Anthropic shape (all existing call sites/tests rely on this default)."""
+    img = _make_img(tmp_path, "photo.png")
+    result = build_user_content(f"看 @{img}")
+    assert result[1]["type"] == "image"
+
+
+def test_build_user_content_kind_irrelevant_without_images():
+    """No images → plain text regardless of kind (zero overhead path)."""
+    assert build_user_content("hello", provider_kind="openai_compatible") == "hello"
+
+
+def test_build_user_content_multiple_images_both_kinds(tmp_path):
+    """Every attached image is converted, in order, for either shape."""
+    _make_img(tmp_path, "a.png")
+    _make_img(tmp_path, "b.jpg", b"JFIF")
+    text = f"图1 {tmp_path}/a.png 图2 {tmp_path}/b.jpg"
+    anthropic = build_user_content(text, provider_kind="anthropic")
+    openai = build_user_content(text, provider_kind="openai_compatible")
+    assert [b["type"] for b in anthropic[1:]] == ["image", "image"]
+    assert [b["type"] for b in openai[1:]] == ["image_url", "image_url"]
+    assert "image/png" in openai[1]["image_url"]["url"]
+    assert "image/jpeg" in openai[2]["image_url"]["url"]

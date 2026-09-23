@@ -285,6 +285,7 @@ class TuiRuntime:
         from coderio.agent.deep_loop import run_deep_agent
         from coderio.cli.multimodal import build_user_content, extract_images
         from coderio.cli.repl import build_turn_spec
+        from coderio.llm.factory import resolved_provider_kind
 
         rt = self.rt
         imgs = extract_images(line)
@@ -296,7 +297,11 @@ class TuiRuntime:
         # Reuse the extraction result for content building — the audit found
         # every image being read + base64-encoded twice per message
         # (once for the display list, once inside build_user_content).
-        user_content = build_user_content(line, images=imgs)
+        # Image blocks are protocol-specific (D1-2): Anthropic image blocks
+        # against an OpenAI-protocol provider are a guaranteed 400 whose error
+        # never names the cause, so branch on the kind the ACTIVE profile
+        # resolves to (same layer build_chat_model uses).
+        user_content = build_user_content(line, images=imgs, provider_kind=resolved_provider_kind(rt["cfg"]))
         # deepagents engine: provides context management, subagents, filesystem.
         # coderio's harness + permission + command review run as middleware.
         # Rebuilt per turn via the SAME factory as headless runs (P2-1):
@@ -337,7 +342,8 @@ class TuiRuntime:
         # Render the resumed conversation into the history pane so the user sees
         # context they're continuing, not a blank screen.
         # Count only conversation messages (exclude system-role metadata like
-        # phase_timeline / context_summary so the count matches what's displayed).
+        # phase_timeline / the legacy context_summary kind so the count matches
+        # what's displayed).
         convo_msgs = [m for m in rt["session"].messages if m.role != "system"]
         self.tui._add_text(f"↩ 已恢复会话 {sid}（{len(convo_msgs)} 条历史消息）", style="bold green")
         for m in rt["session"].messages:

@@ -76,6 +76,58 @@ def resolved_model_name(cfg: Config) -> str:
     return cfg.model.default
 
 
+def resolved_provider_kind(cfg: Config) -> str:
+    """The provider KIND ("anthropic" | "openai_compatible") the active
+    profile/registry entry resolves to — the same layer resolution
+    build_chat_model performs.
+
+    Callers that build wire-format-dependent payloads must branch on THIS,
+    not on ``cfg.model.provider``: with a named profile active, the raw field
+    can disagree with the client actually serving requests (the same class of
+    bug as #24's model-name display). The multimodal image-block builder is
+    the first such caller (D1-2): Anthropic image blocks sent to an
+    OpenAI-protocol provider are a guaranteed 400 with an error that never
+    mentions the real cause.
+
+    getattr throughout: callers (and tests) pass duck-typed config stubs
+    that carry only the fields their path touches.
+    """
+    profile = _resolve_profile(cfg)
+    if profile is not None:
+        from coderio.cli.providers import get_provider
+
+        info = get_provider(getattr(profile, "provider_id", ""))
+        if info is not None:
+            return info.kind
+        return getattr(profile, "kind", "") or "openai_compatible"
+    if getattr(cfg.model, "provider_id", ""):
+        from coderio.cli.providers import get_provider
+
+        info = get_provider(cfg.model.provider_id)
+        if info is not None:
+            return info.kind
+        # Custom provider_id not in the registry — config.toml's provider
+        # field decides (mirrors build_chat_model's layer-2 fallthrough).
+        return getattr(cfg.model, "provider", "") or "openai_compatible"
+    return getattr(cfg.model, "provider", "") or "openai_compatible"
+
+
+def resolved_context_limit(cfg: Config) -> int:
+    """The context window (tokens) for the model the active profile resolves
+    to, or 0 when unknown (never probed / never configured).
+
+    Mirrors build_chat_model's layer resolution (same as
+    resolved_model_name/resolved_provider_kind). Consumers must treat 0 as
+    "unknown" — e.g. MicrocompactMiddleware stays off rather than guessing a
+    window. getattr throughout for duck-typed config stubs.
+    """
+    profile = _resolve_profile(cfg)
+    if profile is not None:
+        return int(getattr(profile, "context_limit", 0) or 0)
+    model_cfg = getattr(cfg, "model", None)
+    return int(getattr(model_cfg, "context_limit", 0) or 0)
+
+
 def _resolve_profile(cfg: Config):
     """Pick the Profile to build from, or None to fall through to the legacy path.
 
@@ -85,13 +137,18 @@ def _resolve_profile(cfg: Config):
       freshly-onboarded user with one profile and no explicit active_profile
       still uses it.
     - no profiles → None (legacy [model] path, unchanged behavior).
+
+    getattr: callers include test/CLI stubs that carry only the fields their
+    path touches (a SimpleNamespace without `profiles` must resolve to the
+    legacy path, not AttributeError).
     """
-    profiles = cfg.profiles or []
+    profiles = getattr(cfg, "profiles", None) or []
     if not profiles:
         return None
-    if cfg.active_profile:
+    active = getattr(cfg, "active_profile", "") or ""
+    if active:
         for p in profiles:
-            if p.name == cfg.active_profile:
+            if p.name == active:
                 return p
         # Stale active_profile name — fall through rather than crash.
         return None

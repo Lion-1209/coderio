@@ -63,3 +63,60 @@ def test_get_unknown_returns_none():
 
 def test_no_zai_in_registry():
     assert all(not p.id.startswith("zai") for p in PROVIDERS)
+
+
+# ------------------------------------------------- resolved_provider_kind (D1-2)
+def test_resolved_provider_kind_default_openai_compatible():
+    from coderio.config.models import Config
+    from coderio.llm.factory import resolved_provider_kind
+
+    cfg = Config()
+    cfg.model.provider = "openai_compatible"
+    assert resolved_provider_kind(cfg) == "openai_compatible"
+
+
+def test_resolved_provider_kind_legacy_model_section():
+    from coderio.config.models import Config
+    from coderio.llm.factory import resolved_provider_kind
+
+    cfg = Config()
+    cfg.model.provider = "anthropic"
+    assert resolved_provider_kind(cfg) == "anthropic"
+
+
+def test_resolved_provider_kind_registry_provider_id():
+    """A known provider_id resolves through the REGISTRY's kind — the raw
+    [model].provider field must not decide (that's the #24 class of bug:
+    display/payload built from a field the active client doesn't use)."""
+    from coderio.config.models import Config
+    from coderio.llm.factory import resolved_provider_kind
+
+    cfg = Config()
+    cfg.model.provider_id = "bigmodel_coding_plan"  # registry kind = anthropic
+    cfg.model.provider = "openai_compatible"  # stale raw field
+    assert resolved_provider_kind(cfg) == "anthropic"
+
+
+def test_resolved_provider_kind_named_profile_wins():
+    """With a named profile active, the PROFILE's provider decides — even
+    when [model] points somewhere else."""
+    from coderio.config.models import Config, Profile
+    from coderio.llm.factory import resolved_provider_kind
+
+    cfg = Config()
+    cfg.model.provider = "anthropic"
+    cfg.profiles = [Profile(name="sf", provider_id="stepfun_api", model="step-3.7-flash")]
+    cfg.active_profile = "sf"
+    assert resolved_provider_kind(cfg) == "openai_compatible"
+
+
+def test_resolved_provider_kind_profile_custom_provider():
+    """A custom profile (provider_id not in the registry) falls back to the
+    profile's own kind field, mirroring build_chat_model's layer-0 path."""
+    from coderio.config.models import Config, Profile
+    from coderio.llm.factory import resolved_provider_kind
+
+    cfg = Config()
+    cfg.profiles = [Profile(name="gw", provider_id="my-gateway", model="m", kind="anthropic")]
+    cfg.active_profile = "gw"
+    assert resolved_provider_kind(cfg) == "anthropic"
