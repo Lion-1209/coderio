@@ -8,6 +8,69 @@ All notable changes to coderio are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — 2026-09-20/21 change-plan batch (D1-1…D1-4, Phase 2, Phase 3)
+
+- **`/resume` 后重建 harness ground-truth（D1-1）**：`HarnessState` 是
+  middleware 实例属性、不随 checkpointer 持久化，恢复会话后模型引用上一轮
+  读过的文件会被 GroundingGate 强制重读——门看起来在抽风，实际是失明。
+  新增 `harness.seed_read_state()`：resume 时从会话历史扫描 `read_file`
+  工具调用，经 `_norm_path()` 归一化后 seed 进 `content_read_files` 与
+  `not_found_files`（语义与 `observe()` 完全一致：grep/ls 只进 read_files，
+  失败读取进 not_found_files；per-turn 状态刻意不 seed）。`run_deep_agent`
+  每轮接线一次（幂等，新会话 seed 为空）。端到端正反两向测试：恢复会话
+  引用旧文件不再强制续跑；从未读过的文件仍被拦。
+- **多模态 provider 能力门控（D1-2）**：`build_user_content` 此前对所有
+  provider 一律发 Anthropic image block——OpenAI 协议 profile 发图是 guaranteed
+  400 且错误信息不提示真实原因。现在按 `provider_kind` 分流：anthropic 走
+  image block，其余转 OpenAI `image_url` data-URL 形状。kind 解析新增
+  `llm.factory.resolved_provider_kind()`，与 `build_chat_model` 同层解析
+  （named profile → registry → config），修的是 #24 同类"用原始字段代替实际
+  客户端"的 bug 类。
+- **live eval 证据体系（Phase 2）**：`scripts/live_eval/`——10 个真实
+  provider 任务（fix-and-test ×3 / known-bug / read-and-answer ×2 /
+  **对抗性 ×4**：写完不跑就说完成、`echo pytest` 假验证、无据引用等），
+  每个任务自带可自动判定判据（测试通过 / 输出匹配 / Gate 信号），行为断言
+  不断言 prose，结果记录模型版本。运行器复用 `TurnSpec` + 用户自己的
+  ~/.coderio 配置与 key。首轮真实运行（stepfun_api / water18-0910）：
+  **9/10 通过**；唯一 FAIL 经查是任务设计缺陷（对抗前提"模型不会读"不成立
+  ——模型自读了，引用有据，Gate 的沉默是正确的），D3 v2 重跑通过，
+  **修正后任务集 10/10**。报告：`docs/live-eval/results-2026-09-21-water18-0910.md`。
+  同一轮还抓到一次真实 429 限流——正是 mock 测试结构上不可能覆盖的
+  provider 行为。
+- **deepagents 兼容摸底（D1-3）**：PyPI 上 0.8 尚不存在（最新 0.7.15），
+  真正未验证的敞口是 `>=0.7.6` 区间只测过 0.7.6。一次性 venv 装 0.7.15
+  跑全量：**1352 passed / 0 failed**——钉死区间干净，维持
+  `deepagents>=0.7.6,<0.8`，"0.8 发布时重跑摸底"转为显式跟踪项。
+- **上游怪癖命名化（Phase 3）**：`_deepagents_compat.ensure_todos_middleware()`
+  收编 deepagents 0.7.6 移除 `write_todos` 的 re-add，带上游版本、原因、
+  移除条件与测试——"一个上游怪癖 = 一个命名条目"，替代散落的 inline 补丁
+  （2026-07-28 事故的根因模式）。
+- **microcompact middleware（Phase 3）**：本地零模型调用的上下文修剪——
+  估算超上下文窗口 90% 时把最旧 tool result 换成占位串（保留最近 5 个），
+  只操作副本（图状态与 session jsonl 保留全量），节省 <256 token 则不动。
+  推迟 deepagents 的昂贵摘要。仅在 context_limit 已知时启用。
+- **command_policy 黄金判定表（Phase 3）**：`tests/tools/test_command_policy_golden.py`
+  ——50 个 curated 案例（每个规则族的 must-block + 必须放行的正常命令）
+  机械绑定真实 `CommandPolicy`，防"改一个正则静默削弱/过度拦截"的漂移。
+- **可执行架构门（Phase 3）**：`architecture-policy.yaml` +
+  `scripts/architecture/check.py`——把架构文档的分层规则（cli→agent→能力层）
+  与文件行数预算变成 AST 检查；**baseline 语义：只卡新增违规**，存量 4 个
+  超大文件入库不阻塞；`llm→cli` 等 4 处现存向上导入升级为带理由和移除
+  条件的显式例外。含变异测试（注入新违规必须变红）。
+
+### Fixed
+
+- **README 订阅额度表述（D1-4）**：中英 README 的"订阅额度跑本地 agent"改为
+  不依赖智谱白名单的"用你自己的订阅 key 直连官方端点"——白名单口径未经智谱
+  确认前，不替用户主张未验证的计费行为（问询邮件草稿在改动计划文档里）。
+
+### Removed
+
+- **`context_summary` 死代码（Phase 3）**：`session/store.py` 的压缩截断管道
+  自 deepagents 迁移后没有任何生产者（grep 只见读取方/skip 逻辑）——删除
+  函数与调用点，各引用处注释标注为 legacy kind。旧会话文件仍完整加载
+  （不再静默丢弃被摘要取代的消息）。
+
 ### Security
 
 - **Corrupt credentials backup permissions**: restrict a newly created

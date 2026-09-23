@@ -37,7 +37,7 @@ coderio    # 首次启动进入 onboarding 向导（选 provider、填 API key�
 
 ### 原生支持中文 Coding Plan
 
-智谱 **GLM Coding Plan** 和阶跃 **StepFun Step Plan** 开箱即用（Anthropic 协议直连）——你的订阅额度跑本地 agent，不需要转发、不需要中间层。同时支持 OpenAI / Anthropic / Ollama / 任意 OpenAI 兼容端点，多 profile 一键切换。
+智谱 **GLM Coding Plan** 和阶跃 **StepFun Step Plan** 开箱即用（Anthropic 协议直连）——用你自己的订阅 key 直连官方端点，不需要转发、不需要中间层。同时支持 OpenAI / Anthropic / Ollama / 任意 OpenAI 兼容端点，多 profile 一键切换。
 
 ### 多模态输入
 

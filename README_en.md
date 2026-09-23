@@ -37,7 +37,7 @@ Not prompt-level soft rules — a system-level control based on tool-call ground
 
 ### Where coderio fits
 
-- **Your endpoint, no middleman.** Bring the API you already pay for: Zhipu **GLM Coding Plan** and StepFun **Step Plan** connect directly over the Anthropic protocol (subscription quota runs a local agent — no proxy layer), and OpenAI / Anthropic / Ollama / any OpenAI-compatible endpoint work the same way, with multi-profile switching.
+- **Your endpoint, no middleman.** Bring the API you already pay for: Zhipu **GLM Coding Plan** and StepFun **Step Plan** connect directly over the Anthropic protocol with your own subscription key (no proxy layer), and OpenAI / Anthropic / Ollama / any OpenAI-compatible endpoint work the same way, with multi-profile switching.
 - **Enforcement, not vibes.** Verified completion, trust-gated repo config, four-tier permissions, a command blacklist for accident prevention, SSRF-protected web_fetch — each layer isolated in its own module.
 - **A reference you can actually read.** A layered monolith (~16k lines of Python) where harness, permissions, sandbox and trust are separate, individually tested modules — built as a working reference for people building their own agents.
 
