@@ -6,6 +6,14 @@ Centralizes all usage of deepagents internals (non-public APIs) so that:
    cryptic AttributeError/ImportError deep in a call stack.
 3. Future migration to public APIs (if/when available) is a single-file change.
 
+This module follows the "one upstream quirk = one named entry" convention
+(2026-09-20, borrowed from ZCode's adapters/src/model/): every known upstream
+behaviour coderio works around gets its own function with the upstream
+package + version, the reason, and the REMOVAL CONDITION — plus a test that
+fails when the upstream behaviour changes. The alternative (inline patches
+scattered at call sites) is what made the 2026-07-28 StepFun incident take
+days to diagnose.
+
 Current internal dependencies:
 - BASE_AGENT_PROMPT (deepagents.graph): module-level string, monkey-patched
   to empty to prevent prompt conflicts. Public alternative not yet available.
@@ -15,6 +23,8 @@ Current internal dependencies:
   centralized here (TODOS_STATE_KEY + get_state_todos) so a rename upstream
   only requires updating this one constant instead of scattered state.get()
   reads across harness_middleware.
+- TodoListMiddleware absent from the default graph (deepagents 0.7.6+): see
+  ensure_todos_middleware below.
 
 The research subagent's tool isolation (_ToolWhitelistMiddleware below) is
 NOT a deepagents internal dependency — it subclasses the public AgentMiddleware
@@ -54,6 +64,41 @@ def get_state_todos(state: Any) -> list | None:
     if hasattr(state, "get"):
         return state.get(TODOS_STATE_KEY)
     return getattr(state, TODOS_STATE_KEY, None)
+
+
+# UPSTREAM QUIRK #1 — deepagents removed write_todos from the default graph.
+#
+# Upstream: deepagents >= 0.7.6 (graph.py). The default agent graph stopped
+# including TodoListMiddleware, so the model's write_todos calls fail with
+# "not a valid tool" — while coderio's system prompt still teaches the tool
+# and the CompletionGate/plan.md mirror depend on it (2026-08-26 review).
+# coderio therefore RE-ADDS the middleware itself.
+#
+# REMOVAL CONDITION: when deepagents restores TodoListMiddleware to the
+# default graph (or exposes a public flag to opt in), delete this function
+# and the append in build_middleware. The test
+# tests/agent/test_deepagents_compat.py::test_todos_middleware_re_added
+# asserts the shim's contract today; a test that detects "upstream already
+# provides it" should be added when the upstream behaviour is observed
+# changing — until then the re-add is harmless (a second identical
+# TodoListMiddleware is idempotent for the state key).
+
+
+def ensure_todos_middleware(middleware: list) -> list:
+    """Re-add deepagents' TodoListMiddleware when the default graph lacks it.
+
+    Returns the same list with the planning middleware appended. Import and
+    construction failures degrade to the unchanged list (logged) — a missing
+    planning tool is a feature regression, not a crash; the harness's
+    CompletionGate simply sees no todos.
+    """
+    try:
+        from langchain.agents.middleware import TodoListMiddleware
+    except ImportError as e:  # pragma: no cover - langchain layout change
+        _log.warning("TodoListMiddleware import failed (planning tool unavailable): %s", e)
+        return middleware
+    middleware.append(TodoListMiddleware(system_prompt=""))
+    return middleware
 
 
 # NOTE: neutralize_base_prompt() was removed (P2 cleanup, 2026-09-04).

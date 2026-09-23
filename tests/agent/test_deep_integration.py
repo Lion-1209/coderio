@@ -372,3 +372,94 @@ def test_harness_enabled_fire_continue_signal(tmp_path):
     assert any(s["type"] == "harness_continue" for s in stream.harness_signals), (
         f"expected harness_continue via custom mode, got: {stream.harness_signals}"
     )
+
+
+def _resume_session_with_read(tmp_path, path="/loader.py", tc_id="tc0"):
+    """A session whose history contains a read_file of `path` (as /resume
+    would restore): the file's contents are in the model's context, but a
+    freshly-built HarnessState knows nothing about it."""
+    from coderio.session.message import Message, ToolCall
+
+    session = make_session(tmp_path)
+    session.append(Message.assistant("", tool_calls=[ToolCall(id=tc_id, name="read_file", args={"path": path})]))
+    session.append(Message.tool_result(tc_id, "read_file", "def load():\n    return 1\n"))
+    return session
+
+
+def _cite_after_doc_write(cited_text: str):
+    """A fake model that (1) writes a .md file — CODE mode without an
+    unverified write (docs don't trip VerifyGate, but has_wrote_this_turn
+    activates GroundingGate) — then (2) answers with `cited_text`."""
+    return make_model(
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "write_file",
+                    "args": {"file_path": "/notes.md", "content": "notes"},
+                    "id": "tw1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        AIMessage(content=cited_text),
+    )
+
+
+@pytest.mark.skipif(not deepagents, reason="deepagents not installed")
+def test_resume_seeds_harness_read_state_no_force_continue(tmp_path):
+    """D1-1 acceptance (change plan): after /resume the model cites a file it
+    read BEFORE the resume. GroundingGate must NOT force-continue — the file's
+    contents are in the model's context via the replayed history. Before the
+    seeding fix, every pre-resume citation cost a wasted "read it first" round
+    and made the gate look broken."""
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+    from coderio.tools.permission import AutoPermissionGate
+
+    session = _resume_session_with_read(tmp_path)
+    stream = NoOpStream()
+
+    run_deep_agent(
+        "loader.py 是干什么的？",
+        TurnSpec(
+            model=_cite_after_doc_write("loader.py:2 返回 1，已确认。"),
+            gate=AutoPermissionGate(),
+            harness_enabled=True,
+            workdir=str(tmp_path),
+        ),
+        session,
+        stream=stream,
+    )
+
+    continues = [s for s in stream.harness_signals if s["type"] == "harness_continue"]
+    assert not continues, (
+        f"citing a file read before /resume must not force-continue; signals: {stream.harness_signals}"
+    )
+
+
+@pytest.mark.skipif(not deepagents, reason="deepagents not installed")
+def test_citation_of_never_read_file_still_force_continues(tmp_path):
+    """Control for the test above: the seeding must not silently disable
+    GroundingGate. A citation of a file that was NEVER read (not in history,
+    not this turn) still force-continues."""
+    from coderio.agent.deep_loop import TurnSpec, run_deep_agent
+    from coderio.tools.permission import AutoPermissionGate
+
+    session = _resume_session_with_read(tmp_path)  # history read /loader.py only
+    stream = NoOpStream()
+
+    run_deep_agent(
+        "其他文件呢？",
+        TurnSpec(
+            model=_cite_after_doc_write("other.py:7 里有另一套逻辑。"),
+            gate=AutoPermissionGate(),
+            harness_enabled=True,
+            workdir=str(tmp_path),
+        ),
+        session,
+        stream=stream,
+    )
+
+    continues = [s for s in stream.harness_signals if s["type"] == "harness_continue"]
+    assert continues, f"citing a never-read file must still force-continue; signals: {stream.harness_signals}"
+    assert "other.py" in continues[0]["reason"]

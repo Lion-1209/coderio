@@ -301,7 +301,7 @@ def _cmd_export(ctx, arg: str) -> CommandResult:
         lines.append(f"*Model: {model}*\n")
     for m in session.messages:
         if m.role == "system":
-            continue  # skip phase_timeline / context_summary metadata
+            continue  # skip system-role metadata (phase_timeline, legacy context_summary)
         if m.role == "user":
             # text_of_content: a multimodal prompt's content-block list must
             # collapse to its text parts — str(list) would dump megabytes of

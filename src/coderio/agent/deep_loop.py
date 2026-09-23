@@ -29,6 +29,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from coderio.agent._content import content_to_text as _content_to_text
+from coderio.agent._deepagents_compat import ensure_todos_middleware
 from coderio.agent.harness_middleware import HarnessMiddleware
 from coderio.agent.hooks import HookRunner
 from coderio.agent.stream import NullStream
@@ -730,6 +731,9 @@ class TurnSpec:
     fs_config: Any = None
     bash_shell: str = ""  # explicit bash path ([tools].bash_shell); empty = auto-detect
     hooks: list | None = None  # HookSpec list (agent/hooks.py)
+    # Known context window (tokens) for the active model, probed at setup.
+    # 0 = unknown → MicrocompactMiddleware stays off (never guess a window).
+    context_limit: int = 0
 
 
 def build_middleware(spec: TurnSpec, stream, hook_runner, plan_artifact) -> list:
@@ -758,13 +762,12 @@ def build_middleware(spec: TurnSpec, stream, hook_runner, plan_artifact) -> list
         )
     )
     # Planning middleware (write_todos tool): deepagents 0.7.6 REMOVED it from
-    # the default graph (graph.py only mentions TodoListMiddleware in a stale
-    # comment) — without re-adding it, the model's write_todos calls fail with
-    # "not a valid tool" and the plan.md artifact's agent→file direction is
-    # dead while the system prompt still teaches the tool (2026-08-26 review).
-    from langchain.agents.middleware import TodoListMiddleware
-
-    middleware.append(TodoListMiddleware(system_prompt=""))
+    # the default graph — without re-adding it, the model's write_todos calls
+    # fail with "not a valid tool" and the plan.md artifact's agent→file
+    # direction is dead while the system prompt still teaches the tool
+    # (2026-08-26 review). The re-add + its removal condition live in the
+    # named compat shim (one upstream quirk = one named entry).
+    ensure_todos_middleware(middleware)
     if spec.gate is not None:
         from coderio.agent.permission_middleware import PermissionMiddleware
 
@@ -779,6 +782,13 @@ def build_middleware(spec: TurnSpec, stream, hook_runner, plan_artifact) -> list
 
     policy = spec.command_policy or CommandPolicy.default()
     middleware.append(CommandReviewMiddleware(policy, gate=spec.gate))
+    # Microcompact INNERMOST: it trims the message list at the last moment
+    # before the model call, after every other layer has had its chance.
+    # Off unless the context window is known (context_limit > 0).
+    if spec.context_limit > 0:
+        from coderio.agent.microcompact import MicrocompactMiddleware
+
+        middleware.append(MicrocompactMiddleware(spec.context_limit))
     return middleware
 
 
@@ -1009,6 +1019,17 @@ def run_deep_agent(
 
     sp = _resolve_system_prompt(spec.system_prompt, spec.skill_store, spec.active_skills, workdir=spec.workdir)
     middleware = build_middleware(spec, stream, hook_runner, plan_artifact)
+    # Resume path: HarnessState is a middleware instance attribute the
+    # checkpointer never persists, so a resumed session starts with an empty
+    # read set while the model's context still contains the earlier turns —
+    # GroundingGate would force-continue on every pre-resume citation ("read
+    # it first"), which reads as the gate malfunctioning. Re-seed from the
+    # session history (change plan D1-1; idempotent, fresh sessions seed
+    # nothing). Subagents keep their own fresh harness — they start with a
+    # clean context and no obligation to the parent's history.
+    for mw in middleware:
+        if isinstance(mw, HarnessMiddleware):
+            mw.seed_from_history(session.messages)
     backend = build_backend(spec)
     subagents = build_subagents(spec, stream, hook_runner, project_dir)
     extra_lc_tools = _build_extra_tools(spec.tools, spec.skill_store, spec.active_skills, anchor_dir=project_dir)
@@ -1123,10 +1144,12 @@ def _build_history_messages(session_messages: list) -> list:
     returns user/assistant/tool messages — the system prompt is injected
     separately by create_deep_agent's system_prompt parameter.
 
-    Drops phase_timeline system messages (observability metadata). Keeps
-    context_summary system messages (they carry compacted history the model
-    needs). The current turn's user message is the LAST element (already
-    appended to session before this call).
+    Drops phase_timeline system messages (observability metadata). Other
+    system-role messages are shown as HumanMessages — that includes the
+    LEGACY kind="context_summary" (no producer since the deepagents
+    migration owns compaction; old sessions on disk may still carry one).
+    The current turn's user message is the LAST element (already appended
+    to session before this call).
     """
     msgs: list = []
     for m in session_messages:

@@ -247,3 +247,38 @@ def test_research_subagent_carries_permission_and_review():
     # caller's — a FULL-mode caller must not be able to upgrade it.
     perm = next(m for m in spec["middleware"] if type(m).__name__ == "PermissionMiddleware")
     assert perm.gate.mode == "plan", f"research subagent must always be PLAN, got {perm.gate.mode}"
+
+
+# ------------------------------------------- ensure_todos_middleware (upstream quirk #1)
+def test_todos_middleware_re_added():
+    """The named shim re-adds TodoListMiddleware to a middleware list (the
+    deepagents 0.7.6 default graph dropped it; the write_todos tool, the
+    CompletionGate and the plan.md mirror all depend on it)."""
+    from coderio.agent._deepagents_compat import ensure_todos_middleware
+
+    mw = ensure_todos_middleware([])
+    assert len(mw) == 1
+    assert type(mw[0]).__name__ == "TodoListMiddleware"
+
+
+def test_todos_middleware_appends_without_clobbering():
+    """The shim appends to an existing stack — build_middleware composes it
+    with hooks/harness/permission layers."""
+    from coderio.agent._deepagents_compat import ensure_todos_middleware
+
+    existing = [object()]
+    mw = ensure_todos_middleware(existing)
+    assert mw[0] is existing[0]
+    assert len(mw) == 2
+
+
+def test_build_middleware_includes_todos_middleware():
+    """End of the seam: the MAIN agent's middleware stack carries the planning
+    tool. Without it the model's write_todos calls fail as 'not a valid tool'
+    while the system prompt still teaches the tool."""
+    from coderio.agent.deep_loop import TurnSpec, build_middleware
+    from coderio.agent.hooks import HookRunner
+
+    mw = build_middleware(TurnSpec(model=object()), None, HookRunner([], project_dir="."), None)
+    names = [type(m).__name__ for m in mw]
+    assert "TodoListMiddleware" in names, names

@@ -46,9 +46,10 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
-    # Sub-kind for system-role messages: "phase_timeline" (turn-end phase record),
-    # "context_summary" (compacted history), "restart_checkpoint". Empty for
-    # non-system messages. Lets loaders filter system messages by purpose.
+    # Sub-kind for system-role messages: "phase_timeline" (turn-end phase
+    # record), "restart_checkpoint". "context_summary" is LEGACY — produced
+    # by the pre-deepagents compaction, no writer since the migration (kept
+    # so old session files still load). Empty for non-system messages.
     kind: str = ""
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
 
