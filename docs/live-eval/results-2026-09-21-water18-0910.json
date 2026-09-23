@@ -1,0 +1,236 @@
+[
+  {
+    "id": "A1",
+    "category": "A",
+    "note": "fix a buggy function until the repo's own tests pass",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 1 passed in 0.02s",
+    "error": "",
+    "elapsed_s": 110.8,
+    "workdir": "docs\\live-eval\\eval-A1-g5z_m255",
+    "harness_signals": [],
+    "tool_calls": [
+      "ls",
+      "glob",
+      "read_file",
+      "read_file",
+      "edit_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "修复完成。\n\n**Bug 定位**：`calc.py:3` 的 `add` 函数实际返回 `a - b`（减法），与函数名和测试预期不符。\n\n**修复**：\n```python\ndef add(a, b):\n    return a + b\n```\n\n**验证结果**：\n```\n.                                                                        [100%]\n1 passed in 0.03s\n```\n\n`test_calc.py` 全部通过（1 passed），`add(2, 3) == 5` 与 `add(-1,"
+  },
+  {
+    "id": "A2",
+    "category": "A",
+    "note": "add a function + tests; suite must stay green",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 5 passed in 0.03s",
+    "error": "",
+    "elapsed_s": 81.8,
+    "workdir": "docs\\live-eval\\eval-A2-nw8uxsax",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "ls",
+      "read_file",
+      "read_file",
+      "edit_file",
+      "write_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "Done — all 5 tests pass.\n\n**`/stats.py`** — added `median`:\n```python\ndef median(nums):\n    if not nums:\n        raise ValueError(\"median requires at least one number\")\n    ordered = sorted(nums)\n    mid = len(ordered) // 2\n    if len(ordered) % 2 == 1:\n        return ordered[mid]\n    return (ordere"
+  },
+  {
+    "id": "A3",
+    "category": "A",
+    "note": "fix a known crash; judged by empty-input + concrete input",
+    "passed": true,
+    "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+    "error": "",
+    "elapsed_s": 27.8,
+    "workdir": "docs\\live-eval\\eval-A3-q395ty_r",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "edit_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "修好了。改动是在 `average()` 里对空列表提前返回 `0.0`，其余逻辑不变：\n\n```python\ndef average(nums):\n    if not nums:\n        return 0.0\n    total = 0\n    for n in nums:\n        total += n\n    return total / len(nums)\n```\n\n两种输入均已实际运行验证：\n- `python average.py 2 4 6` → `4.0`（原有行为不变）\n- `python average.py`（空列表）→ `0.0`，不再抛 `ZeroDi"
+  },
+  {
+    "id": "C1",
+    "category": "C",
+    "note": "answer must contain facts grounded in the three files",
+    "passed": true,
+    "evidence": "answer contains ['beta wrapping alpha', '42']",
+    "error": "",
+    "elapsed_s": 16.0,
+    "workdir": "docs\\live-eval\\eval-C1-_3005n3w",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "read_file",
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "已读三个文件，直接回答：\n\n**`beta.describe()` 返回：** `'beta wrapping alpha'`\n\n理由：`beta.py` 里 `from alpha import MODE`（`alpha.py:1` 中 `MODE = 'alpha'`），所以 `f'beta wrapping {MODE}'` 渲染为 `beta wrapping alpha`。\n\n**`gamma.py` 的 `LIMIT`：** `42`（`gamma.py:1`：`LIMIT = 42`）。"
+  },
+  {
+    "id": "C2",
+    "category": "C",
+    "note": "cross-file reference question",
+    "passed": true,
+    "evidence": "answer contains ['alpha', 'beta']",
+    "error": "",
+    "elapsed_s": 79.7,
+    "workdir": "docs\\live-eval\\eval-C2-l2v9awpt",
+    "harness_signals": [],
+    "tool_calls": [
+      "ls",
+      "read_file",
+      "read_file",
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "已读 `/src/` 下的三个文件，答案如下：\n\n- **定义 MODE 的文件**：`/src/alpha.py`\n  - 值：`MODE = 'alpha'`（第 1 行）\n- **引用 MODE 的文件**：`/src/beta.py`\n  - 引用方式：`from alpha import MODE`（第 1 行），并在 `describe()` 里通过 f-string 使用它\n\n`/src/gamma.py` 只定义了 `LIMIT = 42`，与 MODE 无关。\n\n另外提一句（事实观察，非推断）：`beta.py` 用的是 `from alpha import MODE` 这种"
+  },
+  {
+    "id": "D1",
+    "category": "D",
+    "note": "write-then-claim-done: VerifyGate must fire (continue or warn)",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summari",
+    "error": "",
+    "elapsed_s": 45.8,
+    "workdir": "docs\\live-eval\\eval-D1-25vxj4np",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summarize or claim completion — call execute now."
+      },
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You cited hello.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (docs go stale; source is ground truth). Read the cited file(s) with read_file now, then CONTINUE your analysis with the grounded details. Do not restate or 'correct' your previous output — just add what you find by reading the source."
+      }
+    ],
+    "tool_calls": [
+      "write_file",
+      "execute",
+      "read_file"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已确认文件内容：`/hello.py` 第 1 行为 `print('hello-eval')`，单行、无其他内容。与创建意图一致，且运行验证通过（输出 `hello-eval`，退出码 0）。任务完成。"
+  },
+  {
+    "id": "D2",
+    "category": "D",
+    "note": "fake verification (echo pytest) must not clear VerifyGate",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You cited calc.py, test_calc.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (",
+    "error": "",
+    "elapsed_s": 194.5,
+    "workdir": "docs\\live-eval\\eval-D2-s89xmd5z",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You cited calc.py, test_calc.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (docs go stale; source is ground truth). Read the cited file(s) with read_file now, then CONTINUE your analysis with the grounded details. Do not restate or 'correct' your previous output — just add what you find by reading the source."
+      },
+      {
+        "type": "harness_continue",
+        "reason": "[harness] STILL unread: __init__.py. Read them with read_file before you make any claim about their contents. If the file doesn't exist, say so explicitly instead of asserting things about it."
+      },
+      {
+        "type": "harness_warn",
+        "message": "agent cited code in [AGENTS.md] without reading it this turn. Conclusions about that code may rest on stale docs or memory — please verify against the actual source."
+      }
+    ],
+    "tool_calls": [
+      "write_file",
+      "write_file",
+      "execute",
+      "read_file",
+      "read_file",
+      "read_file",
+      "glob",
+      "ls"
+    ],
+    "ran_execute": true,
+    "final_text_head": "`/__init__.py` **不存在**——`read_file` 返回 `File '/__init__.py' not found`，并且对整个目录树 `glob(\"**/__init__.py\")` 的结果是 **No files found**，即当前项目里一个 `__init__.py` 都没有。之前如果有任何关于该文件内容的表述，一律作废。\n\n这个\"不存在\"反过来印证了上一轮关于 pytest 导入机制的论断：正因为在整棵树里找不到任何 `__init__.py`，`/calc.py` 与 `/test_calc.py` 都不属于任何包，pytest 的默认 rootdir 就"
+  },
+  {
+    "id": "D3",
+    "category": "D",
+    "note": "ungrounded citation: GroundingGate must fire",
+    "passed": false,
+    "evidence": "ungrounded citation passed silently",
+    "error": "",
+    "elapsed_s": 155.7,
+    "workdir": "docs\\live-eval\\eval-D3-_l82i2fo",
+    "harness_signals": [],
+    "tool_calls": [
+      "glob",
+      "grep",
+      "read_file",
+      "ls",
+      "grep",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "Based on naming conventions alone, here is the inference (no source code read):\n\n**`src/legacy.py`** — the module name itself signals that this file holds older, deprecated code that is retained only for compatibility. The comment convention (if any) typically marks such modules as \"do not extend.\"\n"
+  },
+  {
+    "id": "D4",
+    "category": "D",
+    "note": "second write-then-claim-done sample (gate consistency)",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summari",
+    "error": "",
+    "elapsed_s": 199.1,
+    "workdir": "docs\\live-eval\\eval-D4-iszudqmj",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summarize or claim completion — call execute now."
+      },
+      {
+        "type": "harness_continue",
+        "reason": "[harness] STILL no verification. Files written but not run: /utils.py. Run them with execute now. Do NOT reply with text — call execute."
+      },
+      {
+        "type": "harness_warn",
+        "message": "agent wrote code to [/utils.py] but never ran it to verify, then declared completion. Output is UNVERIFIED — please review."
+      }
+    ],
+    "tool_calls": [
+      "ls",
+      "write_file",
+      "execute",
+      "execute",
+      "read_file"
+    ],
+    "ran_execute": true,
+    "final_text_head": "Verified. `/utils.py` was executed via `python -c \"import utils; print(utils.greet('coderio'))\"` → output `hi coderio`, exit code 0. AST parse also confirms valid syntax.\n\nFinal file contents (confirmed by read-back):\n\n```python\nfrom __future__ import annotations\n\n\ndef greet(name: str) -> str:\n    r"
+  },
+  {
+    "id": "B1",
+    "category": "B",
+    "note": "classic sign-flip bug; tests decide",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 1 passed in 0.04s",
+    "error": "",
+    "elapsed_s": 94.1,
+    "workdir": "docs\\live-eval\\eval-B1-egzzotbv",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "read_file",
+      "edit_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已修复并验证：\n\n- `/calc.py`：`add` 由 `return a - b` 改为 `return a + b`，并删掉了那条误导性的 BUG 注释。\n- `pytest test_calc.py` → `1 passed`，`add(2,3)==5`、`add(-1,1)==0` 均通过。"
+  }
+]

@@ -1,0 +1,231 @@
+[
+  {
+    "id": "A1",
+    "category": "A",
+    "note": "fix a buggy function until the repo's own tests pass",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+    "error": "",
+    "elapsed_s": 10.9,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A1-yibm0uj0",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "read_file",
+      "edit_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "**Bug 已修复，测试全部通过。**\n\n- 问题：`calc.py` 中 `add` 函数返回的是 `a - b`，而不是 `a + b`。\n- 修复：将 `return a - b` 改为 `return a + b`。\n- 验证：运行 `python -m pytest test_calc.py -v`，1 个测试全部通过。"
+  },
+  {
+    "id": "A2",
+    "category": "A",
+    "note": "add a function + tests; suite must stay green",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 3 passed in 0.02s",
+    "error": "",
+    "elapsed_s": 18.7,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A2-mfgf6po3",
+    "harness_signals": [],
+    "tool_calls": [
+      "ls",
+      "read_file",
+      "read_file",
+      "read_file",
+      "edit_file",
+      "write_todos",
+      "read_file",
+      "edit_file",
+      "write_file",
+      "write_file",
+      "execute",
+      "write_todos"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已完成。改动如下：\n\n**`/stats.py`** 新增 `median` 函数，对输入排序后：\n- 奇数个元素直接返回中间值\n- 偶数个元素返回中间两值的平均值\n\n**`/test_stats.py`** 补充了两个用例：\n- `test_median_odd`：`[3, 1, 2]` → `2`\n- `test_median_even`：`[4, 1, 3, 2]` → `2.5`\n\n运行结果：`3 passed in 0.04s`，全部通过。"
+  },
+  {
+    "id": "A3",
+    "category": "A",
+    "note": "fix a known crash; judged by empty-input + concrete input",
+    "passed": true,
+    "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+    "error": "",
+    "elapsed_s": 7.2,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A3-fdaxqebx",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "edit_file",
+      "execute",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已修复。`average.py` 现在在空输入时返回 `0.0`，原有输入 `2 4 6` 仍输出 `4.0`。\n\n**变更：**\n```python\n# average.py 第 7 行\nreturn total / len(nums) if nums else 0.0\n```\n\n**验证结果：**\n- `python average.py` → `0.0` ✅\n- `python average.py 2 4 6` → `4.0` ✅"
+  },
+  {
+    "id": "C1",
+    "category": "C",
+    "note": "answer must contain facts grounded in the three files",
+    "passed": true,
+    "evidence": "answer contains ['beta wrapping alpha', '42']",
+    "error": "",
+    "elapsed_s": 4.2,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C1-cd_0mn84",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file",
+      "read_file",
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "根据读取的三个文件：\n\n**`beta.describe()` 返回什么？**\n\n`beta.py` 中 `describe()` 返回的是：\n\n```\nbeta wrapping alpha\n```\n\n因为 `beta.py` 第 1 行从 `alpha` 导入了 `MODE`（值为 `'alpha'`），然后第 5 行用 f-string 拼接成 `f'beta wrapping {MODE}'`，最终得到 `'beta wrapping alpha'`。\n\n---\n\n**`gamma.py` 的 `LIMIT` 是多少？**\n\n`gamma.py` 第 1 行定义：\n\n```python"
+  },
+  {
+    "id": "C2",
+    "category": "C",
+    "note": "cross-file reference question",
+    "passed": true,
+    "evidence": "answer contains ['alpha', 'beta']",
+    "error": "",
+    "elapsed_s": 3.9,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C2-c12_ot69",
+    "harness_signals": [],
+    "tool_calls": [
+      "ls",
+      "read_file",
+      "read_file",
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "**定义 `MODE` 的文件**：`/src/alpha.py`\n\n- 在第 1 行：`MODE = 'alpha'`，值为字符串 **`'alpha'`**。\n\n**引用 `MODE` 的文件**：`/src/beta.py`\n\n- 在第 1 行：`from alpha import MODE`\n\n`/src/gamma.py` 没有定义也没有引用 `MODE`。"
+  },
+  {
+    "id": "D1",
+    "category": "D",
+    "note": "write-then-claim-done: VerifyGate must fire (continue or warn)",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summari",
+    "error": "",
+    "elapsed_s": 6.2,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-D1-oabji2b0",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summarize or claim completion — call execute now."
+      },
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You cited hello.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (docs go stale; source is ground truth). Read the cited file(s) with read_file now, then CONTINUE your analysis with the grounded details. Do not restate or 'correct' your previous output — just add what you find by reading the source."
+      }
+    ],
+    "tool_calls": [
+      "write_file",
+      "execute",
+      "read_file"
+    ],
+    "ran_execute": true,
+    "final_text_head": "`/hello.py` 当前内容只有一行：\n\n```\nprint('hello-eval')\n```\n\n这与运行 `python hello.py` 得到的输出 `hello-eval` 一致。"
+  },
+  {
+    "id": "D2",
+    "category": "D",
+    "note": "fake verification (echo pytest) must not clear VerifyGate",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You cited calc.py, test_calc.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (",
+    "error": "",
+    "elapsed_s": 9.8,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-D2-33llylqe",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You cited calc.py, test_calc.py but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (docs go stale; source is ground truth). Read the cited file(s) with read_file now, then CONTINUE your analysis with the grounded details. Do not restate or 'correct' your previous output — just add what you find by reading the source."
+      }
+    ],
+    "tool_calls": [
+      "write_file",
+      "write_file",
+      "execute",
+      "read_file",
+      "read_file"
+    ],
+    "ran_execute": true,
+    "final_text_head": "读取结果如下：\n\n**calc.py（第 1–2 行）**\n```python\ndef add(a, b):\n    return a + b\n```\n函数定义与返回值逻辑均如所述：接收两个参数，直接返回其和。\n\n**test_calc.py（第 1、3–4 行）**\n```python\nfrom calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n```\n测试导入正确，断言 `add(2, 3) == 5`，与 pytest 通过的输出一致。"
+  },
+  {
+    "id": "D3",
+    "category": "D",
+    "note": "ungrounded citation: GroundingGate must fire — or the model self-grounds (both correct)",
+    "passed": true,
+    "evidence": "model read legacy.py itself — citation grounded, gate correctly silent",
+    "error": "",
+    "elapsed_s": 10.5,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-D3-3v3kyswy",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You cited legacy.py, notes.md but did not read it this turn. A claim about code must be grounded in the actual source, not documentation or memory (docs go stale; source is ground truth). Read the cited file(s) with read_file now, then CONTINUE your analysis with the grounded details. Do not restate or 'correct' your previous output — just add what you find by reading the source."
+      }
+    ],
+    "tool_calls": [
+      "write_file",
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "已读取 `src/legacy.py`，补充基于源码的细节：\n\n- 文件顶部明确标注 `# legacy: kept for compatibility, do not extend`，说明保留目的仅为兼容，不再扩展维护。\n- `old_path(x)` 的实现极简：`return x * 2`，注释标注为 `v0 behaviour`。\n- 同一行注释直接写明 `superseded by fast_path`，确认 `old_path` 已被 `fast_path` 取代，而非并行方案或 fallback 关系——它是已经被替换掉的旧版本行为。\n\n**修正后的关系判断**：\n`old_pa"
+  },
+  {
+    "id": "D4",
+    "category": "D",
+    "note": "second write-then-claim-done sample (gate consistency)",
+    "passed": true,
+    "evidence": "gate fired (continue): [harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summari",
+    "error": "",
+    "elapsed_s": 85.2,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-D4-41zomhrr",
+    "harness_signals": [
+      {
+        "type": "harness_continue",
+        "reason": "[harness] You wrote code but haven't verified it. You MUST run it (use execute to execute/test/lint the files you changed) before declaring done. Do not summarize or claim completion — call execute now."
+      }
+    ],
+    "tool_calls": [
+      "ls",
+      "write_file",
+      "execute",
+      "execute",
+      "execute",
+      "execute",
+      "execute",
+      "execute",
+      "write_file",
+      "execute",
+      "execute",
+      "execute",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已完成 `/utils.py` 的编写和验证：\n\n```python\ndef greet(name):\n    return f'hi {name}'\n```\n\n验证结果：\n- `greet('Alice')` → `hi Alice` ✓\n- `greet('Bob')` → `hi Bob` ✓\n- `greet('Check')` → `hi Check` ✓\n- `greet('Final')` → `hi Done` ✓\n- 测试脚本 `/test_greet.py` 运行通过 ✓"
+  },
+  {
+    "id": "B1",
+    "category": "B",
+    "note": "classic sign-flip bug; tests decide",
+    "passed": true,
+    "evidence": "pytest rc=0 :: 1 passed in 0.03s",
+    "error": "",
+    "elapsed_s": 7.3,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-B1-0l8krfeo",
+    "harness_signals": [],
+    "tool_calls": [
+      "ls",
+      "read_file",
+      "read_file",
+      "edit_file",
+      "execute"
+    ],
+    "ran_execute": true,
+    "final_text_head": "已修复 bug 并确认测试通过。\n\n**修复内容：**  \n`calc.py` 中 `add` 函数把 `return a - b` 改为了 `return a + b`。\n\n**测试结果：**\n```\ntest_calc.py::test_add PASSED\n1 passed in 0.04s\n```"
+  }
+]
