@@ -71,6 +71,7 @@ def build_turn_spec(
     skill_store,
     active_skills,
     tools,
+    creds_path: Path | str | None = None,
 ):
     """Build the engine TurnSpec from a loaded config (P2-1, 2026-09-02 audit
     finding 8: run_cmd.py and tui_runtime.py carried two field-identical
@@ -81,7 +82,7 @@ def build_turn_spec(
     fields are snapshots.
     """
     from coderio.agent.deep_loop import TurnSpec
-    from coderio.llm.factory import resolved_context_limit
+    from coderio.llm.factory import ensure_context_limit
     from coderio.tools.command_policy import CommandPolicy
 
     cmd_policy = CommandPolicy(
@@ -104,9 +105,11 @@ def build_turn_spec(
         fs_config=cfg.tools.sandbox_fs,
         bash_shell=cfg.tools.bash_shell,
         hooks=cfg.hooks,
-        # Known context window (probed at setup) enables the local
-        # microcompact trim; 0 = unknown = middleware off.
-        context_limit=resolved_context_limit(cfg),
+        # Known context window (probed at setup, or lazily probed once here
+        # for models/profiles that never were — WhaleDock follow-up: without
+        # this, /model or hand-added profiles ran with microcompact off
+        # forever). 0 = unknown = middleware off.
+        context_limit=ensure_context_limit(cfg, creds_path),
     )
 
 

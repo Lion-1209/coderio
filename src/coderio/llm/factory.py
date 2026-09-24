@@ -128,6 +128,104 @@ def resolved_context_limit(cfg: Config) -> int:
     return int(getattr(model_cfg, "context_limit", 0) or 0)
 
 
+# In-process memo for ensure_context_limit: (kind, base_url, model) -> probed
+# limit (0 = probe FAILED and is also memoized — a provider without the
+# models endpoint must not add probe latency to EVERY turn). Process-scoped
+# on purpose: a transient failure deserves a retry next launch, not a retry
+# every turn; a success is persisted to config and never re-probed.
+_PROBE_MEMO: dict[tuple[str, str, str], int] = {}
+
+
+def ensure_context_limit(cfg: Config, creds_path: Path | str | None = None) -> int:
+    """resolved_context_limit, probing and persisting when unknown.
+
+    WHY THIS EXISTS (WhaleDock incident follow-up, 2026-09-24): onboarding
+    probes the context window once at setup, but switching models via
+    /model, adding profiles, or hand-editing config leaves context_limit=0
+    forever — microcompact silently stays off for that profile. This runs
+    at the build_turn_spec choke point: first turn on an unprobed model
+    pays one probe (≤4s), the value is persisted into config.toml, and
+    every later turn is a dict lookup.
+
+    Failure semantics match probe_context_limit: 0 = unknown, never raises,
+    callers treat 0 as "stay off" — identical to the pre-existing behavior.
+    """
+    known = resolved_context_limit(cfg)
+    if known > 0:
+        return known
+    from coderio.llm.probe import probe_context_limit
+
+    profile = _resolve_profile(cfg)
+    kind = base_url = api_key = model = ""
+    if profile is not None:
+        from coderio.cli.credentials import get_key
+        from coderio.cli.providers import get_provider
+
+        info = get_provider(getattr(profile, "provider_id", ""))
+        kind = info.kind if info else (getattr(profile, "kind", "") or "openai_compatible")
+        base_url = (info.base_url if info and info.base_url else getattr(profile, "base_url", "")) or ""
+        model = getattr(profile, "model", "") or (info.default_model if info else "") or ""
+        api_key = get_key(getattr(profile, "provider_id", ""), creds_path) or _pick_api_key(kind) or ""
+    else:
+        m = getattr(cfg, "model", None)
+        if m is None:
+            return 0
+        from coderio.cli.credentials import get_key
+        from coderio.cli.providers import get_provider
+
+        info = get_provider(getattr(m, "provider_id", ""))
+        kind = info.kind if info else (getattr(m, "provider", "") or "openai_compatible")
+        base_url = (info.base_url if info else getattr(m, "base_url", "")) or ""
+        model = getattr(m, "default", "") or (info.default_model if info else "") or ""
+        api_key = get_key(getattr(m, "provider_id", ""), creds_path) or _pick_api_key(getattr(m, "provider", "")) or ""
+
+    memo_key = (kind, base_url, model)
+    if memo_key in _PROBE_MEMO:
+        return _PROBE_MEMO[memo_key]
+    limit = probe_context_limit(kind, base_url, api_key, model, timeout=4.0)
+    _PROBE_MEMO[memo_key] = limit
+    if limit > 0:
+        try:
+            _persist_context_limit(cfg, limit, creds_path)
+        except Exception:  # noqa: BLE001, S110 — best-effort; the memo already holds this process's value
+            pass
+    return limit
+
+
+def _persist_context_limit(cfg: Config, limit: int, creds_path: Path | str | None) -> None:
+    """Write the probed limit into the user's config.toml (read-modify-write,
+    preserving every other section — same pattern as _save_profile_to_config).
+
+    Targets the ACTIVE profile entry when profiles exist, else [model].
+    """
+    import tomllib
+
+    import tomli_w
+
+    path = Path(creds_path).parent / "config.toml" if creds_path else Path.home() / ".coderio" / "config.toml"
+    if not path.is_file():
+        return  # nothing to update — onboarding owns creating the file
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    profiles = data.get("profiles")
+    if isinstance(profiles, list) and profiles:
+        active = data.get("active_profile") or (profiles[0].get("name") if isinstance(profiles[0], dict) else "")
+        for p in profiles:
+            if isinstance(p, dict) and p.get("name") == active:
+                # Only write when meaningfully different — avoid churn.
+                if p.get("context_limit") != limit:
+                    p["context_limit"] = limit
+                    with open(path, "wb") as f:
+                        tomli_w.dump(data, f)
+                return
+        return
+    m = data.get("model")
+    if isinstance(m, dict) and m.get("context_limit") != limit:
+        m["context_limit"] = limit
+        with open(path, "wb") as f:
+            tomli_w.dump(data, f)
+
+
 def _resolve_profile(cfg: Config):
     """Pick the Profile to build from, or None to fall through to the legacy path.
 

@@ -120,3 +120,119 @@ def test_resolved_provider_kind_profile_custom_provider():
     cfg.profiles = [Profile(name="gw", provider_id="my-gateway", model="m", kind="anthropic")]
     cfg.active_profile = "gw"
     assert resolved_provider_kind(cfg) == "anthropic"
+
+
+# ------------------------------------------------- ensure_context_limit (WhaleDock follow-up)
+def _cfg_for_probe(tmp_path, monkeypatch, *, profiles=True):
+    """Config + HOME pointed at tmp so persistence lands in the sandbox."""
+    import coderio.llm.factory as factory
+    from coderio.config.models import Config, ModelConfig, Profile
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / ".coderio").mkdir(exist_ok=True)
+    factory._PROBE_MEMO.clear()
+    if profiles:
+        cfg = Config()
+        cfg.profiles = [Profile(name="sf", provider_id="stepfun_api", model="m1")]
+        cfg.active_profile = "sf"
+    else:
+        cfg = Config()
+        cfg.model = ModelConfig(default="m1", provider_id="stepfun_api")
+    return cfg
+
+
+def test_ensure_context_limit_early_returns_known_value(tmp_path, monkeypatch):
+    """A profile with context_limit already set must NEVER probe."""
+    import coderio.llm.factory as factory
+    from coderio.config.models import Config, Profile
+
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    cfg.profiles = [Profile(name="sf", provider_id="stepfun_api", model="m1", context_limit=256000)]
+    cfg.active_profile = "sf"
+    factory._PROBE_MEMO.clear()
+
+    def _no_probe(*a, **kw):
+        raise AssertionError("must not probe when the value is known")
+
+    # ensure() imports probe lazily from coderio.llm.probe — patch the source module.
+    import coderio.llm.probe as probe_mod
+
+    monkeypatch.setattr(probe_mod, "probe_context_limit", _no_probe)
+    assert factory.ensure_context_limit(cfg) == 256000
+
+
+def test_ensure_context_limit_probes_persists_and_caches(tmp_path, monkeypatch):
+    """Unknown → probe once → persist into the ACTIVE profile entry →
+    subsequent calls hit the in-process memo (probe called exactly once)."""
+    import tomllib
+
+    import coderio.llm.factory as factory
+    import coderio.llm.probe as probe_mod
+
+    cfg = _cfg_for_probe(tmp_path, monkeypatch)
+    # Real-world shape: the config file EXISTS (hand-edited or from an older
+    # onboarding) but the profile lacks context_limit. Persistence is
+    # read-modify-write; a missing file stays missing (onboarding owns creating it).
+    (tmp_path / ".coderio" / "config.toml").write_text(
+        'active_profile = "sf"\n\n[[profiles]]\nname = "sf"\nprovider_id = "stepfun_api"\nmodel = "m1"\n',
+        encoding="utf-8",
+    )
+    calls = []
+
+    def _fake_probe(kind, base_url, api_key, model, timeout=5.0):
+        calls.append((kind, base_url, model))
+        return 256000
+
+    monkeypatch.setattr(probe_mod, "probe_context_limit", _fake_probe)
+    # credentials: no creds file → falls to env key; not needed by fake probe.
+    assert factory.ensure_context_limit(cfg) == 256000
+    assert factory.ensure_context_limit(cfg) == 256000
+    assert len(calls) == 1, "second call must hit the memo"
+    assert calls[0][2] == "m1"
+
+    cfg_path = tmp_path / ".coderio" / "config.toml"
+    assert cfg_path.is_file(), "probed limit must be persisted"
+    with open(cfg_path, "rb") as f:
+        data = tomllib.load(f)
+    assert data["profiles"][0]["context_limit"] == 256000
+    assert data["profiles"][0]["name"] == "sf"
+
+
+def test_ensure_context_limit_failure_is_memoized_not_persisted(tmp_path, monkeypatch):
+    """Probe failure → 0, no config write, and no re-probe within the process
+    (a provider without the models endpoint must not pay probe latency every
+    turn)."""
+    import coderio.llm.factory as factory
+    import coderio.llm.probe as probe_mod
+
+    cfg = _cfg_for_probe(tmp_path, monkeypatch)
+    calls = []
+
+    def _failing_probe(*a, **kw):
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(probe_mod, "probe_context_limit", _failing_probe)
+    assert factory.ensure_context_limit(cfg) == 0
+    assert factory.ensure_context_limit(cfg) == 0
+    assert len(calls) == 1, "failed probe is memoized for the process"
+    assert not (tmp_path / ".coderio" / "config.toml").exists(), "failure must not persist"
+
+
+def test_ensure_context_limit_legacy_model_section(tmp_path, monkeypatch):
+    """The no-profiles path persists into [model].context_limit."""
+    import tomllib
+
+    import coderio.llm.factory as factory
+    import coderio.llm.probe as probe_mod
+
+    cfg = _cfg_for_probe(tmp_path, monkeypatch, profiles=False)
+    (tmp_path / ".coderio" / "config.toml").write_bytes(b'[model]\nprovider_id = "stepfun_api"\ndefault = "m1"\n')
+    monkeypatch.setattr(probe_mod, "probe_context_limit", lambda *a, **kw: 128000)
+    assert factory.ensure_context_limit(cfg) == 128000
+    with open(tmp_path / ".coderio" / "config.toml", "rb") as f:
+        data = tomllib.load(f)
+    assert data["model"]["context_limit"] == 128000
+    assert data["model"]["default"] == "m1", "other fields preserved"
