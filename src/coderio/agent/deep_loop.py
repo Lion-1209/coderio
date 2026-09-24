@@ -713,6 +713,22 @@ def _run_stream(agent, inputs, thread_id, recursion_limit, stream, session, seen
     chunk_usage: dict = {}
     while True:
         if should_abort is not None and should_abort():
+            # Deterministic teardown of the abandoned stream generator. Without
+            # this, `raise` leaves chunk_iter to the GC — langgraph's cleanup
+            # (including any pending checkpoint write) then runs at an
+            # arbitrary later moment, racing the caller's conn.close() in the
+            # C layer. Observed as a py3.12/Windows SEGFAULT at the NEXT
+            # turn's _close_checkpointer_conn (CI 2026-09-24, run 35943551905:
+            # interrupt → conn closed → lingering generator task used the
+            # closed conn → next turn's innocent close crashed the process).
+            # Closing the generator HERE runs the cleanup while the conn is
+            # still open, before run_deep_agent's finally.
+            close = getattr(chunk_iter, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001, S110 — teardown must never mask the interrupt
+                    pass
             raise InterruptedError("interrupted by user")
         try:
             mode, event = next(chunk_iter)

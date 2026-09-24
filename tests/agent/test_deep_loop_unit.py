@@ -768,3 +768,43 @@ def test_is_complaint_matches_agent_directed_markers():
     # tasks shouldn't trip it).
     assert _is_complaint("修复 calc.py 里的加法 bug 并跑测试") is False
     assert _is_complaint("帮我重构这个模块") is False
+
+
+def test_run_stream_abort_closes_the_stream_generator():
+    """2026-09-24 CI segfault regression (run 35943551905, win/py3.12): an
+    abort used to RAISE past the abandoned agent.stream() generator, leaving
+    langgraph cleanup to the GC — which raced the caller's conn.close() in C.
+    The abort path must close the generator deterministically first."""
+    from coderio.agent.deep_loop import _run_stream
+
+    closed = {"flag": False}
+
+    class _GenAgent:
+        def stream(self, inputs, config=None, stream_mode=None):
+            try:
+                yield ("updates", {"messages": []})  # suspended here at abort
+                yield ("updates", {"messages": []})  # never reached
+            finally:
+                # Runs on close() — the deterministic-teardown assertion point.
+                closed["flag"] = True
+
+    gen_agent = _GenAgent()
+    calls = {"n": 0}
+
+    def _abort():
+        calls["n"] += 1
+        return calls["n"] > 1  # abort on the SECOND gate check (after chunk 1)
+
+    with pytest.raises(InterruptedError):
+        _run_stream(
+            gen_agent,
+            {"messages": []},
+            "t",
+            20,
+            NoOpStream(),
+            _FakeSession([]),
+            set(),
+            [],
+            _abort,
+        )
+    assert closed["flag"] is True, "generator.close() must run BEFORE the interrupt propagates"
