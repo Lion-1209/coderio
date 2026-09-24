@@ -33,7 +33,6 @@ from coderio.agent.deep_loop import TurnSpec, run_deep_agent  # noqa: E402
 from coderio.config import load_config  # noqa: E402
 from coderio.llm.factory import build_chat_model, resolved_model_name, resolved_provider_kind  # noqa: E402
 from coderio.session.store import Session  # noqa: E402
-
 from scripts.live_eval.tasks import JudgeContext, build_tasks  # noqa: E402
 
 
@@ -78,12 +77,110 @@ class RecordingStream:
         self.harness_signals.append({"type": "harness_warn", "message": message})
 
 
+class InterruptingStream(RecordingStream):
+    """RecordingStream that flips is_interrupted() after N tool results.
+
+    Reproduces the user's Esc exactly where the WhaleDock incident put it:
+    mid-turn, right after a tool completes — the engine's abort poll then
+    raises InterruptedError, run_deep_agent deletes the thread checkpoint
+    (_handle_interrupt), and the NEXT turn is the amnesia-fix's acid test.
+    """
+
+    def __init__(self, flip_after_tools: int = 1) -> None:
+        super().__init__()
+        self._tools_done = 0
+        self._flip_after = flip_after_tools
+        self._interrupted = False
+
+    def on_tool_end(self, name: str, result: str) -> None:  # noqa: D102
+        super().on_tool_end(name, result)
+        self._tools_done += 1
+        if self._tools_done >= self._flip_after:
+            self._interrupted = True
+
+    def is_interrupted(self) -> bool:
+        return self._interrupted
+
+
+def _run_interrupt_resend_task(task, model, model_name: str, recursion_limit: int) -> dict:
+    """The R1 flow: turn 1 (interrupted) → turn 2 (knowledge probe).
+
+    Turn 1 embeds a conversation-only fact and is interrupted after its
+    first tool result; turn 2 asks for the fact with tools forbidden. Under
+    the full-history fallback the model answers from context; under the
+    WhaleDock amnesia bug turn 2 never saw turn 1 and no tool can recover
+    the fact — the judge's discrimination is airtight.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix=f"eval-{task.id}-"))
+    task.setup(workdir)
+    session = Session.create(save_dir=workdir / ".sessions", meta={"model": model_name, "task": task.id})
+    spec = TurnSpec(model=model, workdir=str(workdir), recursion_limit=recursion_limit)
+    started = time.monotonic()
+    error = ""
+    interrupted = False
+
+    s1 = InterruptingStream(flip_after_tools=1)
+    try:
+        run_deep_agent(task.prompt, spec, session, stream=s1)
+    except InterruptedError:
+        interrupted = True
+    except Exception as e:  # noqa: BLE001 — a crash is a result, not a run abort
+        error = f"turn1 {type(e).__name__}: {e}"
+
+    msgs_before_t2 = len(session.messages)
+    s2 = RecordingStream()
+    final_text = ""
+    if interrupted:
+        try:
+            final_text = run_deep_agent(task.prompt2, spec, session, stream=s2)
+        except Exception as e:  # noqa: BLE001
+            error = (error + " | " if error else "") + f"turn2 {type(e).__name__}: {e}"
+    elapsed = round(time.monotonic() - started, 1)
+
+    turn2_tools: list[str] = []
+    for m in session.messages[msgs_before_t2:]:
+        if getattr(m, "role", "") == "assistant" and getattr(m, "tool_calls", None):
+            turn2_tools.extend(tc.name for tc in m.tool_calls)
+
+    ctx = JudgeContext(
+        workdir=workdir,
+        session=session,
+        signals=s2.harness_signals,
+        final_text=final_text,
+        model_name=model_name,
+        interrupted=interrupted,
+        turn2_tool_calls=turn2_tools,
+    )
+    try:
+        passed, evidence = task.judge(ctx)
+    except Exception as e:  # noqa: BLE001
+        passed, evidence = False, f"judge error: {type(e).__name__}: {e}"
+
+    return {
+        "id": task.id,
+        "category": task.category,
+        "note": task.note,
+        "passed": bool(passed),
+        "evidence": evidence,
+        "error": error,
+        "elapsed_s": elapsed,
+        "workdir": str(workdir),
+        "harness_signals": s1.harness_signals + s2.harness_signals,
+        "tool_calls": s1.tool_calls + s2.tool_calls,
+        "ran_execute": ctx.ran_execute(),
+        "final_text_head": final_text[:300],
+        "interrupted": interrupted,
+    }
+
+
 def _run_task(task, model, model_name: str, recursion_limit: int) -> dict:
     """One task in a fresh workdir + fresh session. Returns a result record.
 
     The sandbox lives in the SYSTEM temp dir (never the results directory —
     task workdirs are scratch, reports are the artifact worth keeping).
     """
+    if getattr(task, "flow", "") == "interrupt-resend":
+        return _run_interrupt_resend_task(task, model, model_name, recursion_limit)
     workdir = Path(tempfile.mkdtemp(prefix=f"eval-{task.id}-"))
     task.setup(workdir)
     session = Session.create(save_dir=workdir / ".sessions", meta={"model": model_name, "task": task.id})

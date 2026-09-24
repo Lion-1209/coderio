@@ -48,7 +48,7 @@ def test_task_set_is_well_formed():
     for t in tasks:
         assert t.prompt.strip(), f"{t.id}: empty prompt"
         assert callable(t.setup) and callable(t.judge), f"{t.id}: missing hooks"
-        assert t.category in {"A", "B", "C", "D"}, f"{t.id}: bad category {t.category}"
+        assert t.category in {"A", "B", "C", "D", "R"}, f"{t.id}: bad category {t.category}"
 
 
 def test_adversarial_category_has_at_least_three_tasks():
@@ -305,3 +305,70 @@ def test_run_task_records_error_not_crash(tmp_path):
     result = _run_task(task, _Boom(), "fake-model", recursion_limit=10)
     assert result["passed"] is False
     assert result["error"], "a crashed turn must be recorded as the task's error"
+
+
+# ------------------------------------------------- R1: interrupt-resend (amnesia probe)
+def test_interrupting_stream_flips_after_n_tool_results():
+    from scripts.live_eval.run import InterruptingStream
+
+    s = InterruptingStream(flip_after_tools=1)
+    assert s.is_interrupted() is False
+    s.on_tool_end("read_file", "content")
+    assert s.is_interrupted() is True
+    # Records tool names like its parent.
+    s2 = InterruptingStream(flip_after_tools=3)
+    s2.on_tool_start("execute", {})
+    s2.on_tool_end("execute", "ok")
+    assert s2.is_interrupted() is False and s2.tool_calls == ["execute"]
+
+
+def test_r1_judge_verdicts():
+    task = {t.id: t for t in build_tasks()}["R1"]
+    # Interrupt never fired → scenario not exercised → FAIL.
+    passed, ev = task.judge(_ctx(None, final_text="FERN-4471"))
+    assert passed is False and "not exercised" in ev
+    ctx = _ctx(None, final_text="FERN-4471")
+    ctx.interrupted = True
+    passed, ev = task.judge(ctx)
+    assert passed is True and "retained" in ev
+    # Turn-2 tool use is noted but doesn't change the verdict.
+    ctx2 = _ctx(None, final_text="暗号是 FERN-4471")
+    ctx2.interrupted = True
+    ctx2.turn2_tool_calls = ["read_file"]
+    passed, ev = task.judge(ctx2)
+    assert passed is True and "used tools" in ev
+    # Missing fact under interrupt → conclusive amnesia failure.
+    ctx3 = _ctx(None, final_text="我不知道什么暗号")
+    ctx3.interrupted = True
+    passed, ev = task.judge(ctx3)
+    assert passed is False and "amnesia" in ev
+
+
+def test_r1_flow_end_to_end_with_fake_model(tmp_path):
+    """The full R1 plumbing with a fake model: turn 1 (read secret.txt) gets
+    interrupted after the tool result; turn 2 answers from scripted history
+    knowledge. Verifies the flow raises/catches InterruptedError and feeds
+    the judge the right fields."""
+    from langchain_core.messages import AIMessage
+
+    from scripts.live_eval.run import _run_task
+    from tests.agent.conftest import make_model
+
+    turn1 = make_model(
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "read_file", "args": {"file_path": "/secret.txt"}, "id": "t1", "type": "tool_call"}],
+        ),
+        # Both remaining scripted answers carry the token: whichever the
+        # fake model yields in turn 2 (abort timing decides how much of
+        # message 2 was consumed), the judge sees a history-aware answer.
+        AIMessage(content="我读完了文件。暗号是 FERN-4471。"),
+        AIMessage(content="暗号是 FERN-4471。"),
+    )
+    task = {t.id: t for t in build_tasks()}["R1"]
+    result = _run_task(task, turn1, "fake-model", recursion_limit=40)
+
+    assert result["id"] == "R1"
+    assert result["interrupted"] is True, "turn 1 must end in InterruptedError after the first tool result"
+    assert result["passed"] is True, result["evidence"]
+    assert "FERN-4471" in result["final_text_head"]

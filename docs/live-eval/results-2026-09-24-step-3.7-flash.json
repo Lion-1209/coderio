@@ -1,0 +1,19 @@
+[
+  {
+    "id": "R1",
+    "category": "R",
+    "note": "conversation-only fact must survive an interrupt (amnesia regression probe)",
+    "passed": true,
+    "evidence": "conversation-only fact retained across the interrupt",
+    "error": "",
+    "elapsed_s": 5.3,
+    "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-R1-jg0qekvs",
+    "harness_signals": [],
+    "tool_calls": [
+      "read_file"
+    ],
+    "ran_execute": false,
+    "final_text_head": "FERN-4471",
+    "interrupted": true
+  }
+]

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -34,6 +34,11 @@ class JudgeContext:
     signals: list[dict]
     final_text: str
     model_name: str = ""
+    # R-flow extras (interrupt-resend scenario), set by the special runner:
+    # whether turn 1 actually ended in an interrupt, and the tool calls the
+    # model made in turn 2 (the knowledge probe).
+    interrupted: bool = False
+    turn2_tool_calls: list[str] = field(default_factory=list)
 
     def run(self, cmd: list[str]) -> subprocess.CompletedProcess:
         """Run a command inside the eval workdir (used by judges)."""
@@ -76,14 +81,24 @@ class JudgeContext:
 @dataclass
 class Task:
     id: str
-    category: str  # A fix-and-test | B known-bug | C read-and-answer | D adversarial
+    category: str  # A fix-and-test | B known-bug | C read-and-answer | D adversarial | R robustness
     prompt: str
     setup: Callable[[Path], None]
     judge: Callable[[JudgeContext], tuple[bool, str]]
     note: str = ""  # what this task proves (shown in the report)
+    flow: str = ""  # "" standard single-turn | "interrupt-resend" (run.py special)
+    prompt2: str = ""  # R-flow only: the turn-2 knowledge probe
 
 
 # ------------------------------------------------------------------ fixtures
+def _secret_fixture(wd: Path) -> None:
+    """R1 fixture: a file to read (guarantees turn 1 has a tool call to
+    interrupt after) whose CONTENT is irrelevant — the judged fact (the
+    session password) lives ONLY in the turn-1 user message, so no tool can
+    recover it: an amnesiac turn 2 cannot answer correctly by any means."""
+    (wd / "secret.txt").write_text("这只是普通内容，不含暗号。\n", encoding="utf-8")
+
+
 def _fix_buggy_module(wd: Path) -> None:
     (wd / "calc.py").write_text(
         "def add(a, b):\n    # BUG: subtracts instead of adding\n    return a - b\n",
@@ -161,6 +176,27 @@ def _fake_verify_bait(wd: Path) -> None:
 
 
 # ------------------------------------------------------------------ judges
+def _judge_secret_survives_interrupt(ctx: JudgeContext) -> tuple[bool, str]:
+    """R1: the conversation-only fact must survive an Esc-interrupt.
+
+    Airtight amnesia probe: the password exists ONLY in turn 1's user
+    message. With the full-history fallback the model answers from context;
+    under amnesia (the WhaleDock bug) turn 2 never received that message and
+    NO tool can recover the fact — a wrong answer is conclusive."""
+    if not ctx.interrupted:
+        return False, "turn 1 completed without an interrupt — scenario not exercised"
+    caveat = ""
+    if ctx.turn2_tool_calls:
+        caveat = f" (note: turn 2 used tools despite the instruction: {ctx.turn2_tool_calls[:3]})"
+    if "FERN-4471" in ctx.final_text.upper():
+        return True, f"conversation-only fact retained across the interrupt{caveat}"
+    return (
+        False,
+        f"the password was never recoverable by tools — the model's context is missing "
+        f"turn 1 (amnesia-class failure). Answer was: {ctx.final_text[:120]!r}",
+    )
+
+
 def _judge_tests_pass(ctx: JudgeContext) -> tuple[bool, str]:
     """The workdir's own pytest suite (created by setup) must pass after the turn."""
     r = ctx.run([sys.executable, "-m", "pytest", "-q"])
@@ -361,6 +397,20 @@ def build_tasks() -> list[Task]:
             setup=_fix_buggy_module,
             judge=_judge_tests_pass,
             note="classic sign-flip bug; tests decide",
+        ),
+        # ---- R: robustness — engine-level failure modes the mock suite
+        # structurally cannot exercise. R1 is the live regression probe for
+        # the 2026-09-23 WhaleDock post-interrupt amnesia bug: a
+        # conversation-only fact must survive an Esc-interrupt.
+        Task(
+            id="R1",
+            category="R",
+            flow="interrupt-resend",
+            prompt=("先读取当前目录下的 secret.txt 看一眼内容。另外请记住：本次会话的暗号是 FERN-4471，之后我会考你。"),
+            prompt2=("刚才的回合被中断了。本次会话的暗号是什么？直接回答，不要使用任何工具。"),
+            setup=_secret_fixture,
+            judge=_judge_secret_survives_interrupt,
+            note="conversation-only fact must survive an interrupt (amnesia regression probe)",
         ),
     ]
 
