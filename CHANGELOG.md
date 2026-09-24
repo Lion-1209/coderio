@@ -89,6 +89,18 @@ root-caused from the session jsonl:
   用户消息含 agent 指向的投诉标记（你犯了/我让你/what did you do 等）
   → 首个工具结果携带"先用文字说明 (1) 错在哪 (2) 修复计划"的一次性
   强制要求。均为软注入，不阻断。
+- **live eval 新增 R 类鲁棒性任务（R1，失忆回归探针）**：对话专属事实
+  （暗号）必须跨 Esc 中断存活——turn 1 读文件+记暗号后被中断（复现
+  事故的中断位置），turn 2 禁用工具考暗号。暗号只存在于 turn 1 的
+  用户消息里，失忆时任何工具都无法找回，判定无歧义。真实 provider
+  运行（step-3.7-flash，2026-09-24）通过：证据
+  `docs/live-eval/results-2026-09-24-step-3.7-flash.md`。
+- **context_limit 全 profile 覆盖**：探测原本只在 onboarding 时发生——
+  /model 切换、手工加 profile 的模型永远没有窗口数据（microcompact
+  对其静默关闭）。新增 `llm.factory.ensure_context_limit()`：在
+  build_turn_spec 单一 choke point，未知则探测一次（≤4s）、进程内
+  记忆（含失败，防止无该端点的 provider 每轮付探测延迟）、成功则
+  read-modify-write 持久化进 config.toml 的对应 profile/[model]。
 
 ### Fixed
 
