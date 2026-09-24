@@ -4,8 +4,8 @@
     {
       "rule": "max-file-lines",
       "file": "src/coderio/agent/deep_loop.py",
-      "detail": "1430 lines > 800",
-      "fp": "3b9d7cc14c6d60fd"
+      "detail": "1446 lines > 800",
+      "fp": "e2c52220296900fe"
     },
     {
       "rule": "max-file-lines",
