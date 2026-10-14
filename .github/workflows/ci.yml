@@ -76,10 +76,13 @@ jobs:
         # scan decorative — known CVEs could never turn CI red). If a flagged
         # vuln is a false positive / unfixable, add an explicit --ignore-vuln
         # with a comment rather than re-adding continue-on-error.
+        # --skip-editable: coderio itself is installed editable and a version
+        # not yet on PyPI (chicken-and-egg on every release bump) — the audit
+        # targets the DEPENDENCY set, not the project under test.
         shell: bash
         run: |
           uv pip install pip-audit
-          uv run pip-audit
+          uv run pip-audit --skip-editable
 
       - name: Run tests with coverage
         # Enforces a coverage floor so coverage can't silently regress.
