@@ -1077,3 +1077,84 @@ def test_seed_read_state_accepts_langchain_dict_tool_calls():
     seed_read_state(h.state, history)
     cont, _, _ = h.check_termination("src/x.py:10 做了这件事。")
     assert cont is False
+
+
+# ------------------------------------- RequirementsRecapGate (Terminal-Bench 2026-10-10)
+def _multi_req_harness(with_write=True):
+    h = _harness(with_write=with_write)
+    h.state.multi_requirement_task = True
+    return h
+
+
+def test_recap_gate_fires_once_on_multi_requirement_code_task():
+    """The near-miss pattern (7-of-8 requirements met, declared done): a
+    multi-requirement CODE task gets ONE forced requirement-by-requirement
+    self-audit before its first termination is accepted."""
+    h = _multi_req_harness()
+    text = "完成了，nginx 已配置好。"  # no cited files -> grounding silent
+    cont, inject, warn = h.check_termination(text)
+    assert cont is True and inject is not None and "EVERY" in inject and "requirement" in inject
+    # One-shot: the SECOND termination attempt passes (never infinite).
+    cont2, inject2, warn2 = h.check_termination(text)
+    assert (cont2, inject2, warn2) == (False, None, None)
+
+
+def test_recap_gate_skipped_for_single_ask_tasks():
+    """A trivial single-ask turn (multi_requirement_task=False) is never
+    taxed with the extra recap round."""
+    h = _harness(with_write=True)
+    h.state.multi_requirement_task = False
+    cont, inject, warn = h.check_termination("done")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_recap_gate_skipped_in_analyze_mode():
+    """Pure-read analysis turns don't get the recap either — the failure
+    pattern is a CODE-task partial completion, not analysis."""
+    h = _multi_req_harness(with_write=False)
+    cont, inject, warn = h.check_termination("分析完成。")
+    assert (cont, inject, warn) == (False, None, None)
+
+
+def test_recap_gate_after_verify_gate():
+    """Ordering: unverified writes still route to VerifyGate FIRST — the
+    recap demand only happens once verification evidence exists."""
+    h = _harness()
+    h.state.multi_requirement_task = True
+    h.observe("write_file", {"path": "app.py"}, "Wrote 10 chars")  # write, NOT verified
+    cont, inject, warn = h.check_termination("done")
+    assert cont is True and "MUST run" in inject  # VerifyGate's message, not recap's
+
+
+def test_looks_multi_requirement_heuristic():
+    from coderio.agent.harness import _looks_multi_requirement
+
+    assert (
+        _looks_multi_requirement("Install nginx.\n- serve index at 8080\n- custom 404 page\n- log format with fields")
+        is True
+    )
+    assert (
+        _looks_multi_requirement(
+            "Set up the server. It must listen on port 8080 and must log to /var/log/x and should include user field"
+        )
+        is True
+    )
+    assert _looks_multi_requirement("fix the typo in line 3") is False
+    assert _looks_multi_requirement("") is False
+
+
+def test_seed_sets_multi_requirement_from_last_user_message():
+    from coderio.agent.harness import seed_read_state
+
+    h = _harness()
+    history = [
+        Message.user("上一轮的旧消息"),
+        Message.assistant("ok"),
+        Message.user("Configure nginx:\n- listen 8080\n- index page\n- 404 page\n- log format"),
+    ]
+    seed_read_state(h.state, history)
+    assert h.state.multi_requirement_task is True
+    # Fresh single-ask conversation -> False.
+    h2 = _harness()
+    seed_read_state(h2.state, [Message.user("修一下这个 bug")])
+    assert h2.state.multi_requirement_task is False

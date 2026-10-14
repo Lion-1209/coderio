@@ -40,11 +40,32 @@ class HeadlessStream(NullStream):
     thread can still be draining the model stream while the interpreter tears
     down stdout (a closed stream raises ValueError, a closed pipe OSError) —
     a late write must not crash the thread with a noisy traceback.
+
+    ``set_deadline`` turns the wall-clock timeout into the SAME graceful
+    interrupt path the TUI's Esc uses (is_interrupted → InterruptedError →
+    deterministic generator close). Before this, the timeout exit reaped the
+    daemon thread mid-flight and langgraph's executor raced interpreter
+    teardown — every long task died with "cannot schedule new futures after
+    shutdown" (Terminal-Bench 2026-10-10 autopsy: 6 of 11 failures).
     """
 
     def __init__(self, quiet: bool = False) -> None:
         super().__init__()
         self.quiet = quiet
+        self._deadline: float | None = None
+
+    def set_deadline(self, seconds: float) -> None:
+        """Arm the wall-clock deadline; is_interrupted() flips once it passes."""
+        import time
+
+        self._deadline = time.monotonic() + seconds
+
+    def is_interrupted(self) -> bool:
+        if self._deadline is None:
+            return False
+        import time
+
+        return time.monotonic() > self._deadline
 
     def on_token(self, text: str) -> None:
         if not self.quiet:
@@ -231,20 +252,28 @@ def run_headless(
         tools=tools,
     )
 
+    # Wall-clock timeout (v3 audit #14): SIGALRM doesn't exist on Windows, so
+    # thread + join is the only portable OUTER mechanism. The timeout itself
+    # is delivered GRACEFULLY: the stream's is_interrupted() flips at the
+    # deadline and the engine's abort path (the same one the TUI's Esc uses)
+    # closes the stream generator deterministically — no daemon-thread
+    # reaping, no langgraph "cannot schedule new futures after shutdown"
+    # crash (Terminal-Bench 2026-10-10 autopsy: every long-task timeout died
+    # that way, losing all in-flight work to a teardown race).
+    import threading
+
+    _stream = HeadlessStream(quiet=quiet)
+
     def _execute() -> str:
         return run_deep_agent(
             user_input=task,
             spec=spec,
             session=session,
-            stream=HeadlessStream(quiet=quiet),
+            stream=_stream,
         )
 
-    # Wall-clock timeout (v3 audit #14): SIGALRM doesn't exist on Windows, so
-    # thread + join is the only portable mechanism. The agent thread is a
-    # daemon — on timeout we return 124 and let the process exit reap it
-    # (mid-flight subprocesses die with the parent on POSIX process groups /
-    # Windows job objects where wired; this is CI-safety, not precise cancel).
-    import threading
+    if timeout > 0:
+        _stream.set_deadline(timeout)
 
     result: dict = {}
 
@@ -256,11 +285,24 @@ def run_headless(
 
     t = threading.Thread(target=_worker, daemon=True, name="coderio-run")
     t.start()
+    # Two-tier join: (1) wait the requested budget; if the thread is still
+    # alive the deadline has already flipped is_interrupted() — the engine
+    # unwinds at its next chunk boundary. (2) a BOUNDED grace window for that
+    # unwind (in-flight model call + generator close + checkpoint cleanup),
+    # overridable for tests. Beyond the grace, hard-exit 124 as the last
+    # resort (daemon reaping — the pre-graceful behavior, now only for a
+    # stuck engine that never honors the interrupt).
     t.join(timeout=timeout if timeout > 0 else None)
-    if t.is_alive():
+    if timeout > 0 and t.is_alive():
+        import os
+
+        grace = float(os.environ.get("CODERIO_TIMEOUT_GRACE", "60"))
+        t.join(timeout=grace)
+    if timeout > 0 and t.is_alive():
         _log.warning(
-            "coderio run timed out after %ds; the agent thread is a daemon and cannot be "
-            "killed, and shell children it spawned may outlive this run — set "
+            "coderio run timed out after %ds and graceful interrupt did not land "
+            "within the grace window; the agent thread is a daemon and cannot "
+            "be killed, and shell children it spawned may outlive this run — set "
             '[tools].sandbox_mode = "job" so the job object reaps the whole process tree',
             timeout,
         )
@@ -274,6 +316,16 @@ def run_headless(
         # mypy [misc]: `e` was bound by the worker's except clause; rebinding an
         # exception variable outside except is flagged, so alias it here.
         err = result["error"]
+        if isinstance(err, InterruptedError):
+            # The deadline fired and the engine unwound cleanly — this is the
+            # timeout, not an execution failure. The session jsonl retains the
+            # partial work; partial streamed output is already above.
+            typer.secho(
+                f"Timed out after {timeout}s (--timeout). Interrupted cleanly; partial output above; exit 124.",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(124)
         typer.secho(f"Agent execution failed: {err}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2)
 

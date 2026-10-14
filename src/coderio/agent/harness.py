@@ -498,6 +498,15 @@ class HarnessState:
     content_read_files: set[str] = field(default_factory=set)
     # Times the grounding gate has force-continued this turn.
     grounding_attempts: int = 0
+    # Whether the RequirementsRecapGate has already demanded its one-shot
+    # recap this turn (the gate never fires twice — one forced self-audit,
+    # then release, matching the escalation philosophy of the other gates).
+    recap_attempts: int = 0
+    # Whether this turn's user message plausibly carries MULTIPLE explicit
+    # requirements (bulleted/numbered/imperative-heavy). Set by
+    # seed_read_state from the last user message; gates the recap demand so
+    # trivial single-ask turns are never taxed with an extra round.
+    multi_requirement_task: bool = False
     # Paths the model TRIED to read_file but got "file not found". The
     # GroundingGate skips these in its ungrounded-citation check — the regex
     # can match path-like strings in prose (e.g. '.coderio/config.toml' in a
@@ -520,6 +529,25 @@ def _message_text(content: Any) -> str:
     if isinstance(content, list):
         return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return str(content)
+
+
+def _looks_multi_requirement(text: str) -> bool:
+    """Heuristic: does this user message plausibly carry MULTIPLE explicit
+    requirements? Fires the RequirementsRecapGate only for tasks where a
+    partial completion (7-of-8 requirements met) is a real risk — bulleted or
+    numbered lists, or 3+ imperative/requirement markers in prose. Terminal-
+    Bench 2026-10-10 autopsy: the near-miss failures (nginx 7/8,
+    decommissioning 5/6, vim 4/5) were all multi-requirement tasks satisfied
+    80% and declared done; single-ask turns never showed this pattern."""
+    if not text:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    bullets = sum(1 for ln in lines if ln[:2] in ("- ", "* ") or (ln[0].isdigit() and ln[1:2] in ".)"))
+    markers = sum(
+        text.lower().count(m)
+        for m in ("must ", "should ", "required", "ensure", "确保", "必须", "需要", "分别", "每个", "并且", "同时")
+    )
+    return bullets >= 2 or markers >= 3
 
 
 def seed_read_state(state: HarnessState, messages: Iterable[Any]) -> int:
@@ -554,9 +582,14 @@ def seed_read_state(state: HarnessState, messages: Iterable[Any]) -> int:
     # produced it (not-found detection needs the path the read was aimed at).
     call_args: dict[str, dict] = {}
     seeded = 0
+    last_user_text = ""
     for m in messages:
         role = getattr(m, "role", "")
         tool_calls = getattr(m, "tool_calls", None) or []
+        if role == "user":
+            c = m.content if isinstance(m.content, str) else _message_text(m.content)
+            if c:
+                last_user_text = c
         if role == "assistant" and tool_calls:
             for tc in tool_calls:
                 name, args, tc_id = _tool_call_fields(tc)
@@ -586,6 +619,9 @@ def seed_read_state(state: HarnessState, messages: Iterable[Any]) -> int:
                 v = str(args.get(key, "")).strip()
                 if v:
                     state.not_found_files.add(_norm_path(v))
+    # RequirementsRecapGate trigger: the LAST user message is this turn's
+    # task (run_deep_agent seeds after appending it).
+    state.multi_requirement_task = _looks_multi_requirement(last_user_text)
     return seeded
 
 
@@ -781,6 +817,13 @@ class Harness:
         if cont or warn:
             return (cont, inject, warn)
 
+        # RequirementsRecapGate: before "done" on a multi-requirement CODE
+        # task, force ONE self-audit of every explicit requirement against
+        # verification evidence (see _requirements_recap_gate).
+        cont, inject, warn = self._requirements_recap_gate()
+        if cont or warn:
+            return (cont, inject, warn)
+
         # CompletionGate: only meaningful when a non-trivial todo list exists.
         cont, inject, warn = self._completion_gate()
         if cont or warn:
@@ -834,6 +877,40 @@ class Harness:
         )
 
     # ----------------------------------------------------------- CompletionGate
+    def _requirements_recap_gate(self) -> tuple[bool, str | None, str | None]:
+        """One-shot hard gate: demand a requirement-by-requirement self-audit.
+
+        WHY (Terminal-Bench 2026-10-10 autopsy): the near-miss failures were
+        all "80% done, declared complete" — nginx-request-logging met 7 of 8
+        requirements and even ran verifications, but never systematically
+        re-checked EACH explicit requirement; the miss (log-format fields)
+        was exactly the kind of detail a forced recap surfaces. VerifyGate
+        polices "did you run anything"; this polices "did you cover
+        EVERYTHING you were asked". Design borrowed from ZCode's goal
+        verifier artifact-checklist, kept as a structural forcing (the model
+        audits itself against evidence it just produced) rather than an
+        LLM-judge — no extra model call, no new failure surface.
+
+        Contract: fires at most ONCE per turn (recap_attempts), only in CODE
+        mode after verification passed, only when the user message looked
+        like a multi-requirement task. The second termination passes —
+        never infinite, never silent.
+        """
+        if not self.state.multi_requirement_task or not self.state.has_wrote_this_turn or self.state.recap_attempts > 0:
+            return (False, None, None)
+        self.state.recap_attempts = 1
+        return (
+            True,
+            "[harness] Before you finish: re-read the ORIGINAL task and list EVERY "
+            "explicit requirement in it, one by one. For each requirement, state the "
+            "exact command you ran and the output line that proves it is satisfied. "
+            "If ANY requirement has no verification evidence yet — including details "
+            "like config values, file contents, formats, and field lists — do that "
+            "work and verify it NOW. Only after every requirement has its evidence "
+            "may you declare completion.",
+            None,
+        )
+
     def _completion_gate(self) -> tuple[bool, str | None, str | None]:
         """Hard gate: pending todos may not silently end the turn.
 

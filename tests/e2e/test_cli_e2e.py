@@ -132,11 +132,16 @@ def test_run_short_session_persists(monkeypatch, tmp_path):
 
 
 def test_run_timeout_returns_124(monkeypatch, tmp_path):
-    """--timeout kills a hung engine run with the documented exit code 124."""
+    """--timeout interrupts a hung engine run with the documented exit code
+    124. Contract since the Terminal-Bench 2026-10-10 fix: the deadline is
+    delivered through the stream's is_interrupted (the Esc channel) — a
+    cooperative engine raises InterruptedError and exits CLEANLY; a stuck
+    one is reaped after the (test-shrunk) grace window. Both land on 124."""
     import time
 
     cfg = _patched_env(monkeypatch, tmp_path)
     _patch_runtime(monkeypatch, cfg)
+    monkeypatch.setenv("CODERIO_TIMEOUT_GRACE", "0.5")
 
     def _slow(**kw):
         time.sleep(5)

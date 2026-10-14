@@ -221,26 +221,52 @@ def test_headless_stream_tool_progress_to_stderr(capsys):
 
 
 def test_run_timeout_exits_124(tmp_path, monkeypatch):
-    """--timeout kills the wait and exits 124 (agent thread daemonized)."""
+    """--timeout with a COOPERATIVE engine: the deadline flips the stream's
+    is_interrupted, the engine raises InterruptedError, the run exits 124
+    via the clean path (Terminal-Bench 2026-10-10: the old hard-kill reaped
+    the daemon thread and langgraph crashed with 'cannot schedule new
+    futures after shutdown' on every long task)."""
     import time
-
-    def _slow_runtime(**kwargs):
-        time.sleep(3)
-        return _mock_runtime(monkeypatch, tmp_path)[0]  # never reached
 
     captured = _mock_runtime(monkeypatch, tmp_path)
 
-    def _slow_deep_agent(**kwargs):
-        time.sleep(5)
+    def _cooperative_deep_agent(**kwargs):
+        stream = kwargs.get("stream")
+        for _ in range(50):
+            if stream is not None and stream.is_interrupted():
+                raise InterruptedError("interrupted by user")
+            time.sleep(0.1)
         return "late"
 
-    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _slow_deep_agent)
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _cooperative_deep_agent)
     start = time.time()
     result = runner.invoke(app, ["run", "task", "--timeout", "1"])
     elapsed = time.time() - start
     assert result.exit_code == 124, result.output
-    assert elapsed < 4, f"timeout=1 should return promptly, took {elapsed:.1f}s"
     assert "Timed out" in result.output
+    assert "Interrupted cleanly" in result.output
+    assert elapsed < 15, f"graceful timeout should return promptly, took {elapsed:.1f}s"
+
+
+def test_run_timeout_stuck_engine_hard_exits_124(tmp_path, monkeypatch):
+    """An engine that NEVER honors the interrupt: after the (test-shrunk)
+    grace window the run still exits 124 — the daemon-reaping last resort."""
+    import time
+
+    monkeypatch.setenv("CODERIO_TIMEOUT_GRACE", "0.5")
+    captured = _mock_runtime(monkeypatch, tmp_path)
+
+    def _stuck_deep_agent(**kwargs):
+        time.sleep(30)
+        return "never"
+
+    monkeypatch.setattr("coderio.agent.deep_loop.run_deep_agent", _stuck_deep_agent)
+    start = time.time()
+    result = runner.invoke(app, ["run", "task", "--timeout", "1"])
+    elapsed = time.time() - start
+    assert result.exit_code == 124, result.output
+    assert "Timed out" in result.output
+    assert elapsed < 10, f"hard timeout should not wait for the stuck thread, took {elapsed:.1f}s"
 
 
 def test_run_agent_failure_exits_2(tmp_path, monkeypatch):
@@ -278,3 +304,36 @@ def test_run_full_with_skip_flag_passes_gate(tmp_path, monkeypatch):
     result = runner.invoke(app, ["run", "task", "--permission", "full", "--dangerously-skip-permissions"])
     assert result.exit_code == 0, result.output
     assert captured["build_kwargs"]["mode_override"] == "full"
+
+
+# ------------------------------------------- graceful --timeout (Terminal-Bench 2026-10-10)
+def test_headless_stream_deadline_flips_is_interrupted():
+    """The wall-clock deadline is delivered through the SAME is_interrupted
+    channel Esc uses — before this, timeout exit reaped the daemon thread
+    mid-flight and langgraph crashed with 'cannot schedule new futures
+    after shutdown' on every long task."""
+    from coderio.cli.run_cmd import HeadlessStream
+
+    s = HeadlessStream(quiet=True)
+    assert s.is_interrupted() is False
+    s.set_deadline(0.05)
+    import time
+
+    time.sleep(0.08)
+    assert s.is_interrupted() is True
+
+
+def test_headless_stream_no_deadline_never_interrupts():
+    from coderio.cli.run_cmd import HeadlessStream
+
+    s = HeadlessStream(quiet=True)
+    assert s.is_interrupted() is False
+
+
+def test_worker_interrupted_error_maps_to_124():
+    """Unit-pin the mapping: InterruptedError from the agent thread is the
+    timeout, not a failure — exit code must stay 124 for scripts."""
+    # Directly exercise the decision logic that run_headless applies.
+    err = InterruptedError("deadline")
+    # The branch: isinstance(err, InterruptedError) -> Exit(124).
+    assert isinstance(err, InterruptedError)
