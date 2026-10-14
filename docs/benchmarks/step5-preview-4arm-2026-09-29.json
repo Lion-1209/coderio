@@ -1,0 +1,1532 @@
+{
+  "coderio_on": [
+    {
+      "id": "A1",
+      "category": "A",
+      "note": "fix a buggy function until the repo's own tests pass",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 10.1,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A1-0ci3hy2w",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，测试全部通过。\n\n**结果报告：**\n\n- **Bug 定位**：`calc.py` 中 `add` 函数实际执行的是减法（`return a - b`），注释也标注了 \"BUG: subtracts instead of adding\"。\n- **修复**：将 `return a - b` 改为 `return a + b`，并移除了过时的 BUG 注释。\n- **验证**：运行 `python -m pytest test_calc.py -v`，`test_add` 通过，共 1 个用例全部 PASSED（0.02s）。",
+      "usage": {
+        "input_tokens": 29598,
+        "output_tokens": 354
+      }
+    },
+    {
+      "id": "A2",
+      "category": "A",
+      "note": "add a function + tests; suite must stay green",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 5 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 19.9,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A2-binfbrjt",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "glob",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。5 个测试全部通过。\n\n说明：文件实际位于项目根目录（`/stats.py`、`/test_stats.py`），没有 `src/` 目录，所以直接在这两个文件上改的。\n\n`stats.py` 新增：\n\n```python\ndef median(nums):\n    nums = sorted(nums)\n    n = len(nums)\n    mid = n // 2\n    if n % 2 == 1:\n        return nums[mid]\n    return (nums[mid - 1] + nums[mid]) / 2\n```\n\n要点：\n- 用 `sorted(",
+      "usage": {
+        "input_tokens": 46398,
+        "output_tokens": 1207
+      }
+    },
+    {
+      "id": "A3",
+      "category": "A",
+      "note": "fix a known crash; judged by empty-input + concrete input",
+      "passed": true,
+      "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+      "error": "",
+      "elapsed_s": 9.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A3-prgj0uj6",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，已验证两种输入：\n\n- `average.py 2 4 6` → `4.0`（原有行为不变）\n- `average.py`（空输入）→ `0.0`（不再崩溃）\n\n改动是在 `average()` 开头加了一个空列表守卫，直接返回 `0.0`，避免 `total / len(nums)` 对空列表触发 `ZeroDivisionError`：\n\n```python\ndef average(nums):\n    if not nums:\n        return 0.0\n    ...\n```",
+      "usage": {
+        "input_tokens": 29547,
+        "output_tokens": 387
+      }
+    },
+    {
+      "id": "C1",
+      "category": "C",
+      "note": "answer must contain facts grounded in the three files",
+      "passed": true,
+      "evidence": "answer contains ['beta wrapping alpha', '42']",
+      "error": "",
+      "elapsed_s": 3.2,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C1-_yy0b50d",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "ran_execute": false,
+      "final_text_head": "**beta.describe()** 返回 `'beta wrapping alpha'` —— 因为 beta.py 从 alpha.py 导入 `MODE`（值为 `'alpha'`），然后用 f-string 拼成 `f'beta wrapping {MODE}'`。\n\n**gamma.py 里的 LIMIT** 是 `42`。",
+      "usage": {
+        "input_tokens": 14404,
+        "output_tokens": 204
+      }
+    },
+    {
+      "id": "C2",
+      "category": "C",
+      "note": "cross-file reference question",
+      "passed": true,
+      "evidence": "answer contains ['alpha', 'beta']",
+      "error": "",
+      "elapsed_s": 5.3,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C2-pbu92d0x",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "ran_execute": false,
+      "final_text_head": "**定义位置**：`src/alpha.py:1`\n\n```python\nMODE = 'alpha'\n```\n\n**值**：字符串 `'alpha'`\n\n**引用位置**：`src/beta.py:1`\n\n```python\nfrom alpha import MODE\n\ndef describe():\n    return f'beta wrapping {MODE}'\n```\n\n即 `beta.py` 通过 `from alpha import MODE` 导入，并在 `describe()` 的 f-string 中使用它。\n\n`src/gamma.py` 只定义了 `LIMIT = ",
+      "usage": {
+        "input_tokens": 21593,
+        "output_tokens": 321
+      }
+    },
+    {
+      "id": "B1",
+      "category": "B",
+      "note": "classic sign-flip bug; tests decide",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 10.5,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-B1-pmvbot8l",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "Bug 已修复，测试通过。\n\n**修改内容**（`calc.py`）：\n```python\ndef add(a, b):\n    return a + b\n```\n\n将 `return a - b` 改为 `return a + b`，并移除了过时的 BUG 注释。\n\n**测试结果**：`python -m pytest test_calc.py -v` → 1 passed（`test_add` 的两个断言 `add(2, 3) == 5` 和 `add(-1, 1) == 0` 均通过）。",
+      "usage": {
+        "input_tokens": 29614,
+        "output_tokens": 363
+      }
+    },
+    {
+      "id": "M1",
+      "category": "T2",
+      "note": "cross-file rename refactor",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 12.1,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M1-v_xnbw2l",
+      "harness_signals": [],
+      "tool_calls": [
+        "grep",
+        "ls",
+        "read_file",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。2 个测试全部通过:\n\n- **`geometry.py`**: `circle_area` → `disk_area`\n- **`shapes.py`**: 同步更新 import 和 `describe()` 内的调用\n- **测试结果**: `2 passed`(`test_rename`、`test_caller_updated`)",
+      "usage": {
+        "input_tokens": 37787,
+        "output_tokens": 583
+      }
+    },
+    {
+      "id": "M2",
+      "category": "T2",
+      "note": "implement-to-tests (slugify)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 29.4,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M2-iklm6l7o",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute",
+        "execute",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。`/string_utils.py` 中实现了 `slugify(text)`：\n\n```python\ndef slugify(text):\n    text = text.lower()\n    text = re.sub(r'[^\\w\\s-]', '-', text)  # punctuation -> hyphen\n    text = re.sub(r'\\s+', '-', text)       # whitespace run -> single hyphen\n    text = re.sub(r'-+', '-', text)        # collapse repe",
+      "usage": {
+        "input_tokens": 51535,
+        "output_tokens": 2737
+      }
+    },
+    {
+      "id": "M3",
+      "category": "T2",
+      "note": "1-based pagination boundary bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 3 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 17.7,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M3-tvehk7_g",
+      "harness_signals": [
+        {
+          "type": "harness_warn",
+          "message": "repeated identical tool call x3: glob"
+        }
+      ],
+      "tool_calls": [
+        "glob",
+        "glob",
+        "read_file",
+        "glob",
+        "glob",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "3 个测试全部通过。\n\n**修复内容**（`/paginator.py`）：\n- `start = page_num * size` → `start = (page_num - 1) * size`\n\n**Bug 原因**：`page_num` 是 1-based，转成 0-based 切片索引时要先减 1。原代码使第 1 页从 `items[size]` 开始（返回 `[3,4,5]` 而非 `[0,1,2]`），第 4 页越界返回 `[]`（而非 `[9]`）——只有第 5 页因巧合通过。\n\n**验证**：`pytest test_m3.py` → 3 passed（`test_firs",
+      "usage": {
+        "input_tokens": 46320,
+        "output_tokens": 1118
+      }
+    },
+    {
+      "id": "M4",
+      "category": "T2",
+      "note": "state machine to tests",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 43.7,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M4-i9k4yzw8",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute",
+        "edit_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成，4/4 测试全部通过。\n\n**`turnstile.py`** 实现：\n\n```python\nclass AlarmError(Exception):\n    pass\n\n\nclass Turnstile:\n    def __init__(self):\n        self.locked = True\n\n    def coin(self):\n        self.locked = False\n\n    def push(self):\n        if self.locked:\n            raise AlarmError(\"push() on a locked",
+      "usage": {
+        "input_tokens": 67848,
+        "output_tokens": 2134
+      }
+    },
+    {
+      "id": "M5",
+      "category": "T2",
+      "note": "dedup refactor, behavior preserved + source check",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s; dedup confirmed (helper defined once)",
+      "error": "",
+      "elapsed_s": 15.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M5-tjf690fg",
+      "harness_signals": [],
+      "tool_calls": [
+        "glob",
+        "grep",
+        "read_file",
+        "edit_file",
+        "glob",
+        "read_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。\n\n- **去重**：两个 `_fmt_row` 定义字节级完全相同，删除了第二处（原第 9–10 行）。`render_summary` 和 `render_diff` 仍解析到同一个 `_fmt_row`，行为不变。\n- **测试**：`test_m5.py` 2 项全部通过（`test_summary`、`test_diff`）。\n\n当前 `/report.py` 结构：`_fmt_row` → `render_summary` → `render_diff`，各一个定义。",
+      "usage": {
+        "input_tokens": 53649,
+        "output_tokens": 649
+      }
+    },
+    {
+      "id": "M6",
+      "category": "T2",
+      "note": "ANY-vs-ALL dependency bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 12.7,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M6-4nbavzqe",
+      "harness_signals": [],
+      "tool_calls": [
+        "glob",
+        "glob",
+        "read_file",
+        "ls",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "已修复。`/scheduler.py:11` 的条件从 `any(d in done ...)` 改为 `all(d in done ...)`，任务只有在所有依赖都完成后才会被放行。\n\n测试结果：`test_m6.py` 2 个用例全部通过（`test_two_deps`、`test_chain`）。原 `any` 逻辑会在 `c: ['a','b']` 中只要 `a` 完成就提前执行 `c`，现在会等 `a`、`b`都完成；循环检测（`not progressed` → `ValueError('cycle')`）逻辑未受影响。",
+      "usage": {
+        "input_tokens": 45160,
+        "output_tokens": 455
+      }
+    },
+    {
+      "id": "M7",
+      "category": "T2",
+      "note": "I/O error-contract fix",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 12.1,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M7-ix0u0ymc",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "2 个测试全部通过。\n\n修复内容（`reader.py`）：\n\n1. **文件不存在返回空 dict**：`open` 包裹在 `try/except FileNotFoundError` 中，捕获后直接 `return {}`，不再向上抛异常。\n2. **无法解析的行跳过**：改用 `partition(':')` 拆分行——没有冒号的行（如 `badline`）跳过；`int(score)` 解析失败（如 `a:xx`）也跳过；额外处理了空行和首尾空格，比原实现更稳健。\n\n验证：`python -m pytest test_m7.py -v` → `2 passed`。",
+      "usage": {
+        "input_tokens": 37793,
+        "output_tokens": 646
+      }
+    },
+    {
+      "id": "M8",
+      "category": "T2",
+      "note": "config loader semantics (defaults + int coercion)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 28.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M8-8d8ia25z",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。`/conf.py` 中的实现：\n\n```python\ndef load_config(path, defaults=None):\n    cfg = dict(defaults) if defaults else {}\n    with open(path, encoding='utf-8') as f:\n        for line in f:\n            line = line.strip()\n            if not line or '=' not in line:\n                continue\n            key, _",
+      "usage": {
+        "input_tokens": 39540,
+        "output_tokens": 1686
+      }
+    },
+    {
+      "id": "H1",
+      "category": "T3",
+      "note": "multi-file logging feature (caplog-tested)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 175.7,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H1-61kte8pg",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "glob",
+        "read_file",
+        "read_file",
+        "read_file",
+        "execute",
+        "ls",
+        "execute",
+        "execute",
+        "execute",
+        "write_file",
+        "write_file",
+        "execute",
+        "edit_file",
+        "execute",
+        "execute",
+        "read_file"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成，测试全部通过（2 passed）。\n\n**改动内容：**\n\n- `/app.py` — 模块级 `logger = logging.getLogger(__name__)`（即 `'app'`），`compute` 成功后记录 op 与结果：\n  ```python\n  logger.info('compute op=%s result=%s', op, result)\n  ```\n  无效 op 仍走 `raise ValueError(op)`，不记录。\n\n- `/runner.py` — 模块级 `logger = logging.getLogger(__name__)`（即 `'",
+      "usage": {
+        "input_tokens": 221528,
+        "output_tokens": 15901
+      }
+    },
+    {
+      "id": "H2",
+      "category": "T3",
+      "note": "mutable default arg leak",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 17.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H2-ifywruo7",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "**已修复，2 个测试全部通过。**\n\n问题根因：`basket.py` 中 `def add_item(item, items=[])` —— 默认参数 `[]` 只在函数**定义时**求值一次，之后所有不传 `items` 的调用都复用同一个列表对象。所以第一次 `add_item('a')` 返回 `['a']` 后，第二次 `add_item('b')` 会往同一个列表追加，返回 `['a', 'b']`，而非预期的 `['b']`。\n\n修复方案（`basket.py:1-5`）：\n\n```python\ndef add_item(item, items=None):\n    if it",
+      "usage": {
+        "input_tokens": 37377,
+        "output_tokens": 601
+      }
+    },
+    {
+      "id": "H3",
+      "category": "T3",
+      "note": "expression evaluator with variables",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 67.2,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H3-s2h25mgi",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "execute",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。`calc.py` 已实现并通过全部测试（4 passed）。\n\n**实现方式**：词法分析 + 递归下降解析器，未使用 `eval`/`ast`（更安全，行为完全可控）。\n\n- **优先级**：由语法层级保证 —— `expression`（`+ -`）→ `term`（`* /`）→ `unary`（一元正负号）→ `atom`（数字/变量/括号），因此 `1 + 2 * 3 == 7`、`(1 + 2) * 3 == 9`\n- **赋值**：`at_assignment()` 识别 `NAME =` 开头，求值 RHS 后存入模块级 `_vars` 字典并返回 `None`；变量跨",
+      "usage": {
+        "input_tokens": 60512,
+        "output_tokens": 6404
+      }
+    },
+    {
+      "id": "H4",
+      "category": "T3",
+      "note": "O(n²)→O(n) under a timed assertion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 29.2,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H4-99mmjmxg",
+      "harness_signals": [],
+      "tool_calls": [
+        "grep",
+        "ls",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。改动与验证结果：\n\n**改动**（`/dedupe.py`）：\n- 原来 `if x not in out` 对 list 做线性扫描，整体 O(n²)。\n- 现在用 `seen` set 判重（O(1) 查询/插入），整体 **O(n)**，首次出现顺序不变。\n- 保留了一个 `unhashable` 回退列表：对 `list`/`dict` 等不可哈希元素仍按原来的 `==` 语义去重，行为完全不变。\n\n**验证**：\n- `python -m pytest test_h4.py -v` → **2 passed**（含 60000 元素、时限 1s 的用例，全程 0.06s）。\n-",
+      "usage": {
+        "input_tokens": 49906,
+        "output_tokens": 2208
+      }
+    },
+    {
+      "id": "H5",
+      "category": "T3",
+      "note": "dict→class API migration",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 18.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H5-rtvhfm_w",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "grep",
+        "write_file",
+        "delete",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "迁移完成，2 个测试全部通过。\n\n**改动内容：**\n\n- `api.py` — 从 `users` 导入 `User`，将原 dict 记录转为 User 实例：\n  ```python\n  from users import User\n\n  USERS = [\n      User(name='ann', email='ann@x.io', active=True),\n      User(name='bob', email='bob@x.io', active=False),\n  ]\n\n  def find_active(users):\n      return [u for u in ",
+      "usage": {
+        "input_tokens": 47823,
+        "output_tokens": 1405
+      }
+    },
+    {
+      "id": "H6",
+      "category": "T3",
+      "note": "shared-state leak + deep recursion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 349.2,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H6-49ggdrh6",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "两个测试均通过，且在任意执行顺序下都通过。最终修复后的 `tree.py`：\n\n```python\ndef build(depth):\n    \"\"\"Return a nested list structure of the given depth without crashing.\"\"\"\n    node = []\n    for _ in range(depth):\n        node = [node, node]\n    return node\n\ndef total_leaves(node, acc=None):\n    # 统计叶子（空列表）数量\n    if acc is No",
+      "usage": {
+        "input_tokens": 97618,
+        "output_tokens": 9319
+      }
+    }
+  ],
+  "coderio_off": [
+    {
+      "id": "A1",
+      "category": "A",
+      "note": "fix a buggy function until the repo's own tests pass",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 15.5,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A1-awfj0dv0",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "## 结果报告\n\n**Bug 定位**：`/calc.py` 中的 `add(a, b)` 实际执行的是减法 `return a - b`（源码注释也自标了 `# BUG: subtracts instead of adding`），导致 `add(2, 3)` 返回 `-1` 而非 `5`。\n\n**修复**：将函数体改为 `return a + b`，并移除了误导性的 BUG 注释。\n\n**测试验证**：运行 `python -m pytest test_calc.py -v`\n\n```\ntest_calc.py::test_add PASSED                       ",
+      "usage": {
+        "input_tokens": 36955,
+        "output_tokens": 476
+      }
+    },
+    {
+      "id": "A2",
+      "category": "A",
+      "note": "add a function + tests; suite must stay green",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 6 passed in 0.02s",
+      "error": "",
+      "elapsed_s": 25.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A2-mfq62cmd",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "glob",
+        "ls",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。6 个测试全部通过。\n\n**说明**：`stats.py` 实际位于项目根目录（`/stats.py`），而非 `src/stats.py`，已在现有文件上直接修改。\n\n**`/stats.py`** — 新增 `median`：\n\n```python\ndef median(nums):\n    if not nums:\n        raise ValueError(\"median() arg is an empty sequence\")\n    s = sorted(nums)\n    n = len(s)\n    mid = n // 2\n    if n % 2 == 1:\n ",
+      "usage": {
+        "input_tokens": 55689,
+        "output_tokens": 1899
+      }
+    },
+    {
+      "id": "A3",
+      "category": "A",
+      "note": "fix a known crash; judged by empty-input + concrete input",
+      "passed": true,
+      "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+      "error": "",
+      "elapsed_s": 8.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-A3-9t0ydoha",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，两种输入均已验证通过：\n\n- **修改**：在 `average()` 开头增加 `if not nums: return 0.0` 守卫，空列表时直接返回 0.0，不再执行 `total / len(nums)`。\n- **验证结果**：\n  - `python average.py` → 输出 `0.0`（不再崩溃）\n  - `python average.py 2 4 6` → 输出 `4.0`（原有行为不变）",
+      "usage": {
+        "input_tokens": 29373,
+        "output_tokens": 403
+      }
+    },
+    {
+      "id": "C1",
+      "category": "C",
+      "note": "answer must contain facts grounded in the three files",
+      "passed": true,
+      "evidence": "answer contains ['beta wrapping alpha', '42']",
+      "error": "",
+      "elapsed_s": 4.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C1-i2uydqox",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "ran_execute": false,
+      "final_text_head": "已读完三个文件，答案如下：\n\n**1. `beta.describe()` 返回的字符串**\n\n`beta.py` 中：\n```python\nfrom alpha import MODE\n\ndef describe():\n    return f'beta wrapping {MODE}'\n```\n其中 `MODE` 来自 `alpha.py` 的 `MODE = 'alpha'`，所以返回值是：\n\n```\nbeta wrapping alpha\n```\n\n**2. `gamma.py` 里的 LIMIT**\n\n`gamma.py` 中定义 `LIMIT = 42`，所以 LIMIT 是 **",
+      "usage": {
+        "input_tokens": 14377,
+        "output_tokens": 286
+      }
+    },
+    {
+      "id": "C2",
+      "category": "C",
+      "note": "cross-file reference question",
+      "passed": true,
+      "evidence": "answer contains ['alpha', 'beta']",
+      "error": "",
+      "elapsed_s": 4.3,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-C2-b1b68i58",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "ran_execute": false,
+      "final_text_head": "- **定义 `MODE` 的文件**：`/src/alpha.py`（第 1 行），值为字符串 `'alpha'`。\n- **引用 `MODE` 的文件**：`/src/beta.py`（第 1 行 `from alpha import MODE`，第 5 行在 `describe()` 中用于格式化字符串）。\n- `/src/gamma.py` 只定义了 `LIMIT = 42`，与 `MODE` 无关。",
+      "usage": {
+        "input_tokens": 21529,
+        "output_tokens": 220
+      }
+    },
+    {
+      "id": "B1",
+      "category": "B",
+      "note": "classic sign-flip bug; tests decide",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 19.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-B1-71al4rl_",
+      "harness_signals": [],
+      "tool_calls": [
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "已完成：\n\n- **calc.py:3** — `return a - b` 改为 `return a + b`，并移除了标注 BUG 的注释\n- **测试结果** — `test_calc.py::test_add` 通过（1 passed），其中 `add(2, 3) == 5` 和 `add(-1, 1) == 0` 两个断言均符合预期",
+      "usage": {
+        "input_tokens": 29470,
+        "output_tokens": 327
+      }
+    },
+    {
+      "id": "M1",
+      "category": "T2",
+      "note": "cross-file rename refactor",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 12.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M1-i4rih_b3",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。两项修改均已生效，测试全部通过（2 passed）：\n\n- `/geometry.py`：`circle_area` → `disk_area`\n- `/shapes.py`：导入与调用同步更新为 `disk_area`\n- `test_m1.py`：`test_rename` 和 `test_caller_updated` 均 PASSED",
+      "usage": {
+        "input_tokens": 37332,
+        "output_tokens": 445
+      }
+    },
+    {
+      "id": "M2",
+      "category": "T2",
+      "note": "implement-to-tests (slugify)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 28.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M2-ma_6b7pu",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "已完成。`/string_utils.py` 中的 `slugify` 实现，4 个测试全部通过：\n\n- **小写**：`text.lower()`\n- **标点→连字符**：`re.sub(r'[^\\w\\s]', '-', text)`（保留单词字符与空白）\n- **连续空白→单连字符**：`re.sub(r'\\s+', '-', text)`\n- **合并连续连字符**：`re.sub(r'-+', '-', text)`（处理标点紧邻空白产生的连叠，如 `hello--world`）\n- **去首尾连字符**：`text.strip('-')`\n\n```\ntest_basic / tes",
+      "usage": {
+        "input_tokens": 42077,
+        "output_tokens": 2927
+      }
+    },
+    {
+      "id": "M3",
+      "category": "T2",
+      "note": "1-based pagination boundary bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 3 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 15.9,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M3-jzwxopzz",
+      "harness_signals": [
+        {
+          "type": "harness_warn",
+          "message": "repeated identical tool call x3: glob"
+        }
+      ],
+      "tool_calls": [
+        "glob",
+        "glob",
+        "read_file",
+        "glob",
+        "read_file",
+        "ls",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，3 个测试全部通过。\n\n**问题**：`paginator.py:3` 的 `start = page_num * size` 漏掉了 1-based 偏移——第 1 页的起始索引被算成 `size` 而不是 `0`，导致每页都向后偏移一页。\n\n**修复**：\n```python\nstart = (page_num - 1) * size\n```\n\n**验证**（`test_m3.py`，`data = range(10)`，size=3）：\n- 第 1 页 → `[0, 1, 2]` ✓\n- 第 4 页（末页残缺）→ `[9]` ✓\n- 第 5 页（越界）→ `[]` ✓",
+      "usage": {
+        "input_tokens": 45335,
+        "output_tokens": 649
+      }
+    },
+    {
+      "id": "M4",
+      "category": "T2",
+      "note": "state machine to tests",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 51.9,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M4-oej3ajie",
+      "harness_signals": [
+        {
+          "type": "harness_warn",
+          "message": "repeated identical tool call x3: edit_file"
+        },
+        {
+          "type": "harness_warn",
+          "message": "repeated identical tool call x3: read_file"
+        }
+      ],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute",
+        "execute",
+        "edit_file",
+        "edit_file",
+        "execute",
+        "read_file",
+        "edit_file",
+        "read_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成，4 个测试全部通过。\n\n**`/turnstile.py`** — 按规格实现：\n\n```python\nclass AlarmError(Exception):\n    \"\"\"Raised when push() is called while the turnstile is locked.\"\"\"\n\n\nclass Turnstile:\n    def __init__(self):\n        self.locked = True\n\n    def coin(self):\n        self.locked = False\n\n    def push(self):\n      ",
+      "usage": {
+        "input_tokens": 126188,
+        "output_tokens": 4086
+      }
+    },
+    {
+      "id": "M5",
+      "category": "T2",
+      "note": "dedup refactor, behavior preserved + source check",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s; dedup confirmed (helper defined once)",
+      "error": "",
+      "elapsed_s": 14.6,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M5-w4djvs5t",
+      "harness_signals": [],
+      "tool_calls": [
+        "glob",
+        "grep",
+        "read_file",
+        "edit_file",
+        "glob",
+        "read_file",
+        "read_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。\n\n- **去重**：删除了 `report.py` 中第二个完全相同的 `_fmt_row` 定义（原第 9–10 行），只保留文件开头的一个定义。由于两个定义字节级相同且都是模块级函数，`render_summary` 和 `render_diff` 的行为不受任何影响。\n- **测试**：`python -m pytest test_m5.py -v` → 2 passed（`test_summary`、`test_diff` 均通过）。\n\n顺带把 `render_summary` 与 `render_diff` 之间的空行补成了两个（原文件此处只有一个），保持文件其余部分的风格一",
+      "usage": {
+        "input_tokens": 54540,
+        "output_tokens": 879
+      }
+    },
+    {
+      "id": "M6",
+      "category": "T2",
+      "note": "ANY-vs-ALL dependency bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 17.8,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M6-9fa6l_ih",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，测试全部通过。\n\n**问题**：`/scheduler.py` 的 `order()` 使用 `any(d in done for d in deps)`，导致多依赖任务在**任一**依赖完成后就被放行。\n\n**修复**（第 11 行）：\n\n```python\n# Ready only when ALL deps are done\nif all(d in done for d in deps):\n```\n\n**验证**：`pytest test_m6.py` — 2 passed\n- `test_two_deps`：`{'c': ['a','b'], 'a': [], 'b': []",
+      "usage": {
+        "input_tokens": 38585,
+        "output_tokens": 910
+      }
+    },
+    {
+      "id": "M7",
+      "category": "T2",
+      "note": "I/O error-contract fix",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 19.7,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M7-91176fj2",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。修复内容与验证结果：\n\n**`/reader.py` 修复点**（对照 `test_m7.py` 契约）：\n1. **文件不存在**：`open()` 包在 `try/except FileNotFoundError` 中，返回 `{}`，不再抛异常。\n2. **无法解析的行跳过**：每行先 `strip()`，空行跳过；`split(':')` 后要求恰好 2 段（`badline`、`a:1:2` 这类结构不合法的行被跳过）；`int(score)` 包在 `try/except ValueError` 中（`x:y`、`n:` 这类值非数字的行被跳过）。\n\n**测试结果**：`py",
+      "usage": {
+        "input_tokens": 46511,
+        "output_tokens": 1280
+      }
+    },
+    {
+      "id": "M8",
+      "category": "T2",
+      "note": "config loader semantics (defaults + int coercion)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 16.2,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-M8-ppj8h9sp",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "已完成，2 个测试全部通过。\n\n**`/conf.py` 实现要点：**\n\n- `load_config(path, defaults)` — 以 `defaults` 的拷贝为起点，逐行读取文件中的 `key=value`\n- **文件值覆盖缺省值**：文件中出现的键写入结果，未出现的键保留 `defaults` 值\n- **纯数字转 int**：`isdigit()` 判定（含负数 `-42`），其余保持字符串\n- 跳过空行和不含 `=` 的行；`key`/`value` 均做 `strip()` 处理\n\n**测试结果：**\n```\ntest_missing_key_uses_defaul",
+      "usage": {
+        "input_tokens": 38494,
+        "output_tokens": 1037
+      }
+    },
+    {
+      "id": "H1",
+      "category": "T3",
+      "note": "multi-file logging feature (caplog-tested)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 141.9,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H1-ue9_snul",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "glob",
+        "read_file",
+        "read_file",
+        "read_file",
+        "execute",
+        "write_file",
+        "write_file",
+        "execute",
+        "edit_file",
+        "edit_file",
+        "execute",
+        "read_file",
+        "read_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。两个测试均通过（2 passed），功能行为未变（`mul` 正常、非法 op 仍抛 `ValueError`、无 print）。\n\n改动内容：\n\n- **`/app.py`**：模块级 `logger = logging.getLogger(__name__)`（名为 `app`），`compute` 在成功路径用 `logger.info('compute %s(%r, %r) -> %r', op, a, b, result)` 记录 op 与结果，采用 %-style 惰性格式化；`raise ValueError(op)` 分支不记日志。\n- **`/runner.py`**：",
+      "usage": {
+        "input_tokens": 137500,
+        "output_tokens": 12986
+      }
+    },
+    {
+      "id": "H2",
+      "category": "T3",
+      "note": "mutable default arg leak",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 14.1,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H2-2gqeo9p3",
+      "harness_signals": [],
+      "tool_calls": [
+        "glob",
+        "glob",
+        "read_file",
+        "read_file",
+        "ls",
+        "edit_file",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "修复完成，2 个测试全部通过。\n\n**根因**：`def add_item(item, items=[])` 中的默认列表 `[]` 只在函数定义时创建一次，之后所有省略 `items` 的调用共享同一个列表——`add_item('a')` 之后调用 `add_item('b')` 会返回 `['a', 'b']`。\n\n**修复**（`basket.py`）：改用 `None` 哨兵，在函数体内初始化新列表：\n\n```python\ndef add_item(item, items=None):\n    if items is None:\n        items = []\n    item",
+      "usage": {
+        "input_tokens": 45670,
+        "output_tokens": 842
+      }
+    },
+    {
+      "id": "H3",
+      "category": "T3",
+      "note": "expression evaluator with variables",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 56.8,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H3-oynxlftc",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "read_file",
+        "read_file",
+        "write_todos",
+        "write_file",
+        "execute",
+        "execute",
+        "write_todos"
+      ],
+      "ran_execute": true,
+      "final_text_head": "已完成。`/calc.py` 用**分词器 + 递归下降解析器**实现了 `evaluate(expr)`，测试全部通过（4 passed）。\n\n实现要点：\n- **优先级正确**：文法分层 `expr(+/-) → term(*/) → factor(数字/变量/括号/一元正负号)`，`* /` 天然高于 `+ -`，括号通过递归处理。\n- **整数与浮点**：字面量按是否含小数点解析为 `int` 或 `float`；`/` 用真除法（如 `(1+2)/2 = 1.5`，测试里 `(y+2)/2 = 3.0 == 3` 成立）。\n- **赋值**：`x = 5` 形式存入模块级字典 `_v",
+      "usage": {
+        "input_tokens": 86900,
+        "output_tokens": 6250
+      }
+    },
+    {
+      "id": "H4",
+      "category": "T3",
+      "note": "O(n²)→O(n) under a timed assertion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 65.9,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H4-7uzk3jrf",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "grep",
+        "read_file",
+        "read_file",
+        "edit_file",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "read_file"
+      ],
+      "ran_execute": true,
+      "final_text_head": "完成。\n\n**改动**（`/dedupe.py`）：把 O(n²) 的 `x not in out`（列表线性查找）换成 set 成员判断 + 列表保序，整体降为 **O(n)**：\n\n```python\ndef unique(items):\n    # 保持首次出现顺序去重\n    out = []\n    seen = set()\n    for x in items:\n        try:\n            if x not in seen:\n                seen.add(x)\n                out.append(x)\n        ex",
+      "usage": {
+        "input_tokens": 116234,
+        "output_tokens": 5410
+      }
+    },
+    {
+      "id": "H5",
+      "category": "T3",
+      "note": "dict→class API migration",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 27.0,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H5-wvtqfbfa",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "grep",
+        "write_file",
+        "delete",
+        "execute"
+      ],
+      "ran_execute": true,
+      "final_text_head": "迁移完成，测试全部通过（2 passed）。\n\n**改动内容：**\n\n- **`api.py`** — 从 `users` 模块导入 `User`，构建 `User` 实例列表（`ann` active=True，`bob` active=False，legacy 中的 int `1/0` 转为正确的 bool），并提供 `find_active(users)` 过滤活跃用户：\n\n  ```python\n  from users import User\n\n  USERS = [\n      User(name='ann', email='ann@x.io', active=True),\n   ",
+      "usage": {
+        "input_tokens": 47653,
+        "output_tokens": 1517
+      }
+    },
+    {
+      "id": "H6",
+      "category": "T3",
+      "note": "shared-state leak + deep recursion",
+      "passed": false,
+      "evidence": "pytest rc=1 :: 1 failed, 1 passed in 0.44s",
+      "error": "GraphRecursionError: Recursion limit of 60 reached without hitting a stop condition. You can increase the limit by setting the `recursion_limit` config key.\nFor troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/errors/GRAPH_RECURSION_LIMIT",
+      "elapsed_s": 247.5,
+      "workdir": "C:\\Users\\SINORAD\\AppData\\Local\\Temp\\eval-H6-rxj74oa1",
+      "harness_signals": [],
+      "tool_calls": [
+        "ls",
+        "glob",
+        "glob",
+        "read_file",
+        "read_file",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "write_file",
+        "execute",
+        "write_file",
+        "delete"
+      ],
+      "ran_execute": true,
+      "final_text_head": "",
+      "usage": {
+        "input_tokens": 171830,
+        "output_tokens": 11669
+      }
+    }
+  ],
+  "step_cli": [
+    {
+      "id": "A1",
+      "category": "A",
+      "note": "fix a buggy function until the repo's own tests pass",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 36.4,
+      "final_text_head": "任务完成。\n\n## 结果报告\n\n**问题定位**：`calc.py` 中的 `add(a, b)` 函数实际执行的是减法 `return a - b`，导致 `add(2, 3)` 返回 `-1` 而非 `5`。\n\n**修复内容**（`calc.py`）：\n```python\ndef add(a, b):\n    return a + b\n```\n（同时移除了误导性的 `# BUG:` 注释）\n\n**验证过程**：\n1. 修复前运行测试：`test_calc.py::test_add FAILED` — `assert -1 == 5`\n2. 修复后运行 `python -m pytest t",
+      "usage": null
+    },
+    {
+      "id": "A2",
+      "category": "A",
+      "note": "add a function + tests; suite must stay green",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 5 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 58.6,
+      "final_text_head": "完成。5 个测试全部通过（`5 passed in 0.06s`）。\n\n**改动内容：**\n\n`stats.py` — 新增 `median` 函数：\n```python\ndef median(nums):\n    s = sorted(nums)\n    n = len(s)\n    mid = n // 2\n    if n % 2 == 1:\n        return s[mid]\n    return (s[mid - 1] + s[mid]) / 2\n```\n- 先排序，奇数个取中间元素；偶数个取中间两值的平均（如 `[4,1,3,2]` → `(2+3)/2 = 2.5`）。\n",
+      "usage": null
+    },
+    {
+      "id": "A3",
+      "category": "A",
+      "note": "fix a known crash; judged by empty-input + concrete input",
+      "passed": true,
+      "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+      "error": "",
+      "elapsed_s": 56.5,
+      "final_text_head": "修复完成并验证通过。\n\n## 修改内容\n\n`average.py` 的 `average()` 函数开头增加了空列表守卫，其余逻辑（求和循环、除法）完全不动：\n\n```python\ndef average(nums):\n    if not nums:\n        return 0.0\n    total = 0\n    for n in nums:\n        total += n\n    return total / len(nums)\n```\n\n## 验证结果\n\n| 输入 | 修复前 | 修复后 |\n|------|--------|--------|\n| `python ave",
+      "usage": null
+    },
+    {
+      "id": "C1",
+      "category": "C",
+      "note": "answer must contain facts grounded in the three files",
+      "passed": true,
+      "evidence": "answer contains ['beta wrapping alpha', '42']",
+      "error": "",
+      "elapsed_s": 73.8,
+      "final_text_head": "已阅读三个文件并实际运行验证。\n\n**文件内容**\n\n- `src/alpha.py`\n  ```python\n  MODE = 'alpha'\n\n  def describe():\n      return 'alpha module v1'\n  ```\n- `src/beta.py`\n  ```python\n  from alpha import MODE\n\n  def describe():\n      return f'beta wrapping {MODE}'\n  ```\n- `src/gamma.py`\n  ```python\n  LIMIT = 42\n  ```\n\n**答案**\n",
+      "usage": null
+    },
+    {
+      "id": "C2",
+      "category": "C",
+      "note": "cross-file reference question",
+      "passed": true,
+      "evidence": "answer contains ['alpha', 'beta']",
+      "error": "",
+      "elapsed_s": 75.2,
+      "final_text_head": "已通过直接读取 + 子串比对核实三个文件（探针均为 search==replace 的空操作，未改动文件）。\n\n## 结论\n\n| 文件 | 内容 | 是否涉及 MODE |\n|---|---|---|\n| `src/alpha.py` | `MODE = 'alpha'` | **定义处** |\n| `src/beta.py` | `from alpha import MODE`，并在 `describe()` 里以 f-string 使用（含 `beta wrapping`、`{MODE}`） | **引用处** |\n| `src/gamma.py` | 只有 `LIMIT = 42` | ",
+      "usage": null
+    },
+    {
+      "id": "B1",
+      "category": "B",
+      "note": "classic sign-flip bug; tests decide",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 93.5,
+      "final_text_head": "Bug 已修复，测试通过。\n\n**修复内容**（`calc.py`）：\n```python\ndef add(a, b):\n    # Returns the sum of a and b\n    return a + b\n```\n原先 `add` 返回的是 `a - b`，已改为 `a + b`（同时保留了文件的 CRLF 行尾）。\n\n**测试结果**（`python -m pytest test_calc.py -v`）：\n```\ncollected 1 item\ntest_calc.py::test_add PASSED  [100%]\n==========================",
+      "usage": null
+    },
+    {
+      "id": "M1",
+      "category": "T2",
+      "note": "cross-file rename refactor",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 91.5,
+      "final_text_head": "任务已完成，验证结果如下：\n\n**代码改动（已生效）**\n- `geometry.py:4` — `def circle_area(r):` → `def disk_area(r):`\n- `shapes.py:1` — `from geometry import circle_area` → `from geometry import disk_area`\n- `shapes.py:5` — 调用处 `circle_area(r)` → `disk_area(r)`\n\n**验证结果**\n- 残留检查：`grep -rn circle_area --include=*.py .` 和 `fin",
+      "usage": null
+    },
+    {
+      "id": "M2",
+      "category": "T2",
+      "note": "implement-to-tests (slugify)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 144.6,
+      "final_text_head": "`slugify` 已在 `string_utils.py:17-19` 实现，测试全部通过。\n\n**实现**（`string_utils.py`）\n```python\ndef slugify(text):\n    text = text.lower()\n    text = re.sub(r\"[^a-z0-9]+\", \"-\", text)\n    return text.strip(\"-\")\n```\n\n**设计要点**：不是把标点、空白分别替换（那会产生 `hello--world`），而是把「任意连续的非字母数字字符（标点 + 空白混排）」整体压成一个连字符——这正好同时满足「标点→连字符",
+      "usage": null
+    },
+    {
+      "id": "M3",
+      "category": "T2",
+      "note": "1-based pagination boundary bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 3 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 66.4,
+      "final_text_head": "完成。3/3 测试通过（修复前为 2 failed, 1 passed）。\n\n**Bug 根因**：`paginator.py` 的 `page()` 接收 1-based 的 `page_num`，但切片起点用的是 0-based 算式 `start = page_num * size`，导致每页都向后偏移一页——`page(data, 1, 3)` 返回 `[3, 4, 5]` 而非 `[0, 1, 2]`。\n\n**修复**（`paginator.py:3`，保留原 CRLF 行尾）：\n\n```diff\n-    start = page_num * size\n+    start = (",
+      "usage": null
+    },
+    {
+      "id": "M4",
+      "category": "T2",
+      "note": "state machine to tests",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 119.0,
+      "final_text_head": "`turnstile.py` 中的实现已存在且符合规格：\n\n- `AlarmError(Exception)` — 在模块级别定义（`turnstile.py:8`）\n- `Turnstile.__init__` → `self.locked = True`（第 16 行）\n- `coin()` → `self.locked = False`（第 20 行）\n- `push()` → 锁定时 `raise AlarmError(\"转门已锁止，请先投入硬币\")`，否则置 `locked = True` 重新锁上（第 27-29 行）\n\n**验证结果**：`python -m pytest tes",
+      "usage": null
+    },
+    {
+      "id": "M5",
+      "category": "T2",
+      "note": "dedup refactor, behavior preserved + source check",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s; dedup confirmed (helper defined once)",
+      "error": "",
+      "elapsed_s": 95.1,
+      "final_text_head": "Done. 去重完成，测试通过。\n\n**改动** (`report.py`)：删除了第二个 `_fmt_row` 定义（原第 8–10 行），保留第一个。两个定义字节级完全相同，因此行为无任何变化；文件从 15 行降到 12 行，顶层函数间保持两个空行的格式一致。文件是 CRLF 行尾，编辑时已按原行尾处理。\n\n**改动后的 `report.py`**：\n```python\ndef _fmt_row(label, value):\n    return f'{label:<12} | {value:>8}'\n\n\ndef render_summary(stats):\n    lines = [_f",
+      "usage": null
+    },
+    {
+      "id": "M6",
+      "category": "T2",
+      "note": "ANY-vs-ALL dependency bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 126.0,
+      "final_text_head": "## 完成\n\n**工作区**：`C:\\Users\\SINORAD\\AppData\\Local\\Temp\\bench-stepcli-M6-fl8352sq`\n\n### 问题定位\n`scheduler.py` 的 `order()` 在多依赖场景下提前放行任务。修复点在第 11 行的就绪判定条件上——一个任务只有在**所有**依赖都完成后才可执行。\n\n### 修复后的代码（第 11 行）\n```python\n# Ready only once ALL deps are done (empty deps -> vacuously ready)\nif all(d in done for d in d",
+      "usage": null
+    },
+    {
+      "id": "M7",
+      "category": "T2",
+      "note": "I/O error-contract fix",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 91.1,
+      "final_text_head": "Done. `reader.read_scores` now satisfies the contract in `test_m7.py`.\n\n**Root cause (two bugs in `reader.py`):**\n1. `open(path)` was called unguarded → `FileNotFoundError` propagated instead of returning `{}`.\n2. `line.strip().split(':')` unpacked into exactly two names → any line without a `:` rai",
+      "usage": null
+    },
+    {
+      "id": "M8",
+      "category": "T2",
+      "note": "config loader semantics (defaults + int coercion)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.04s",
+      "error": "",
+      "elapsed_s": 384.4,
+      "final_text_head": "`conf.py` 已实现 `load_config(path, defaults)`，测试通过。\n\n**实现要点**（`conf.py`）：\n- `load_config(path, defaults=None)`：`defaults` 先铺底得到新 dict（`dict(defaults)`，不修改调用方对象，`defaults=None` 时为空），再用文件内容覆盖。\n- 逐行 `splitlines()`，跳过空行、`#`/`;` 注释行和无 `=` 的行；按**第一个** `=` 用 `partition` 切分，所以 `url=http://h/p?a=b` 这类值不会被拆坏。\n-",
+      "usage": null
+    },
+    {
+      "id": "H1",
+      "category": "T3",
+      "note": "multi-file logging feature (caplog-tested)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 391.1,
+      "final_text_head": "完成。需求已满足并验证通过：\n\n**实现状态**（`app.py` / `runner.py`）：\n\n- **模块级 logger**：两个文件均使用 `logger = logging.getLogger(__name__)`（名称即各自模块名），并设 `logger.setLevel(logging.INFO)`，确保记录以 INFO 级发出。\n- **compute 记录 op 与结果**（app.py:14）：\n  ```python\n  logger.info(\"compute op=%s a=%s b=%s result=%s\", op, a, b, result)\n  ```\n-",
+      "usage": null
+    },
+    {
+      "id": "H2",
+      "category": "T3",
+      "note": "mutable default arg leak",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 22.6,
+      "final_text_head": "完成。\n\n**Bug 定位**：`basket.py` 中 `def add_item(item, items=[])` 使用了可变对象（`[]`）作为默认参数。Python 的默认参数只在函数**定义时**求值一次，该列表被所有未显式传参的调用共享，导致第二次调用 `add_item('b')` 返回 `['a', 'b']`——即经典的 mutable-default 状态泄漏。\n\n**修复**（basket.py）：\n\n```python\ndef add_item(item, items=None):\n    if items is None:\n        items = []\n  ",
+      "usage": null
+    },
+    {
+      "id": "H3",
+      "category": "T3",
+      "note": "expression evaluator with variables",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.02s",
+      "error": "",
+      "elapsed_s": 192.2,
+      "final_text_head": "`calc.py` 中已实现 `evaluate(expr)`（tokenizer + 递归下降求值），测试已全部通过。\n\n**实现要点**（`calc.py`）\n- `_tokenize()`（calc.py:30）：用正则切出 `NUMBER` / `NAME` / `OP`，数字按 `.`、`e`/`E` 判定 int 或 float；非法字符与残留在 `EOF` 前的多余 token 都会抛 `ValueError`。\n- 文法与优先级（calc.py:56-62）：`statement := NAME '=' expr | expr`；`expr` 处理 `+/-`（左结合），`te",
+      "usage": null
+    },
+    {
+      "id": "H4",
+      "category": "T3",
+      "note": "O(n²)→O(n) under a timed assertion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.02s",
+      "error": "",
+      "elapsed_s": 256.7,
+      "final_text_head": "Done. `dedupe.py` 已改为 O(n)，测试全绿。\n\n**改动**（`dedupe.py`，保留原 CRLF 行尾）：\n\n```python\ndef unique(items):\n    # 保持首次出现顺序去重；用 set 判重做到 O(n)\n    seen = set()\n    out = []\n    for x in items:\n        try:\n            if x not in seen:\n                seen.add(x)\n                out.append(x)\n        except Type",
+      "usage": null
+    },
+    {
+      "id": "H5",
+      "category": "T3",
+      "note": "dict→class API migration",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 47.5,
+      "final_text_head": "Migration complete. Summary of changes:\n\n**`api.py`** (rewritten — was just a placeholder comment):\n```python\nfrom users import User\n\nUSERS = [\n    User(name='ann', email='ann@x.io', active=True),\n    User(name='bob', email='bob@x.io', active=False),\n]\n\n\ndef find_active(users):\n    return [u for u i",
+      "usage": null
+    },
+    {
+      "id": "H6",
+      "category": "T3",
+      "note": "shared-state leak + deep recursion",
+      "passed": false,
+      "evidence": "pytest rc=1 :: 1 failed, 1 passed in 0.29s",
+      "error": "timeout after 900s",
+      "elapsed_s": 2258.3,
+      "final_text_head": "",
+      "usage": null
+    }
+  ],
+  "dsh": [
+    {
+      "id": "A1",
+      "category": "A",
+      "note": "fix a buggy function until the repo's own tests pass",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 21.4,
+      "final_text_head": "✅ 修复完成，测试全部通过。\n\n**结果报告：**\n\n| 项目 | 详情 |\n|------|------|\n| Bug 位置 | `calc.py` 的 `add()` 函数 |\n| Bug 原因 | 函数体实际执行的是减法 `return a - b`，与函数名语义不符 |\n| 修复内容 | 将 `return a - b` 改为 `return a + b`，并移除了误导性的 BUG 注释 |\n| 测试结果 | `test_calc.py::test_add` **PASSED** — 1 passed in 0.06s |\n\n**修复后的代码：**\n\n```python\ndef add",
+      "usage": null
+    },
+    {
+      "id": "A2",
+      "category": "A",
+      "note": "add a function + tests; suite must stay green",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 3 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 31.7,
+      "final_text_head": "完成，3 个测试全部通过。\n\n**说明一点**：你提到的是 `src/stats.py`，但实际仓库里 `stats.py` 在根目录（`test_stats.py` 里是 `from stats import mean`，也印证了这一点），所以我按实际结构修改。\n\n**`stats.py`** — 新增 `median` 函数：\n```python\ndef median(nums):\n    ordered = sorted(nums)\n    n = len(ordered)\n    mid = n // 2\n    if n % 2 == 1:\n        return ordere",
+      "usage": null
+    },
+    {
+      "id": "A3",
+      "category": "A",
+      "note": "fix a known crash; judged by empty-input + concrete input",
+      "passed": true,
+      "evidence": "empty rc=0 out='0.0' | normal rc=0 out='4.0'",
+      "error": "",
+      "elapsed_s": 37.4,
+      "final_text_head": "修复完成，两种输入均已验证通过。\n\n**修改内容**（`average.py` 第 7-8 行）：在除法前增加空列表判断，空输入返回 `0.0`。\n\n```python\ndef average(nums):\n    total = 0\n    for n in nums:\n        total += n\n    if not nums:\n        return 0.0\n    return total / len(nums)\n```\n\n**验证结果**：\n- `python average.py 2 4 6` → 输出 `4.0`（原有行为不变）✅\n- `python averag",
+      "usage": null
+    },
+    {
+      "id": "C1",
+      "category": "C",
+      "note": "answer must contain facts grounded in the three files",
+      "passed": true,
+      "evidence": "answer contains ['beta wrapping alpha', '42']",
+      "error": "",
+      "elapsed_s": 14.3,
+      "final_text_head": "已读取三个文件并实际运行验证，结论如下：\n\n- **`beta.describe()` 返回 `'beta wrapping alpha'`**\n  - `beta.py` 从 `alpha` 导入 `MODE`，而 `alpha.py` 中 `MODE = 'alpha'`，所以 `describe()` 返回 f-string `f'beta wrapping {MODE}'`，即 `'beta wrapping alpha'`。\n- **`gamma.py` 中的 `LIMIT` 是 `42`**（`LIMIT = 42`）。\n",
+      "usage": null
+    },
+    {
+      "id": "C2",
+      "category": "C",
+      "note": "cross-file reference question",
+      "passed": true,
+      "evidence": "answer contains ['alpha', 'beta']",
+      "error": "",
+      "elapsed_s": 19.1,
+      "final_text_head": "已阅读 `src/` 下的三个文件，结论如下：\n\n## 定义 MODE 的文件\n\n**`src/alpha.py`**（第 1 行）：\n\n```python\nMODE = 'alpha'\n```\n\n值为字符串 **`'alpha'`**。\n\n## 引用 MODE 的文件\n\n**`src/beta.py`**：\n\n```python\nfrom alpha import MODE          # 第 1 行：导入\n\n\ndef describe():\n    return f'beta wrapping {MODE}'   # 第 5 行：在 f-string 中使用\n```\n\n它在模块顶部通",
+      "usage": null
+    },
+    {
+      "id": "B1",
+      "category": "B",
+      "note": "classic sign-flip bug; tests decide",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 1 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 31.4,
+      "final_text_head": "Bug 已修复，测试通过。\n\n**修改内容**（`calc.py`）：\n```python\ndef add(a, b):\n    return a + b\n```\n原来函数体中误写为 `return a - b`（复制粘贴 bug），已改为 `return a + b`，并移除了误导性的注释。\n\n**测试结果**：\n```\ntest_calc.py::test_add PASSED                                            [100%]\n============================== 1 passed in 0.02s ========",
+      "usage": null
+    },
+    {
+      "id": "M1",
+      "category": "T2",
+      "note": "cross-file rename refactor",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 39.8,
+      "final_text_head": "完成 — 两个测试均已通过。\n\n**已修改：**\n\n1. **geometry.py** — `circle_area(r)` → `disk_area(r)`\n2. **shapes.py** — 更新了 import (`from geometry import disk_area`) 以及 `describe()` 内部的调用 (`f'area={disk_area(r):.2f}'`)\n\n**测试结果：**\n```\ntest_m1.py::test_rename PASSED          [ 50%]\ntest_m1.py::test_caller_updated PASSED ",
+      "usage": null
+    },
+    {
+      "id": "M2",
+      "category": "T2",
+      "note": "implement-to-tests (slugify)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 68.5,
+      "final_text_head": "完成。\n\n**实现** (`string_utils.py`)：一条正则 `re.sub(r'[\\W_]+', '-', text.lower()).strip('-')` 覆盖全部四条规则——先转小写，再把任意连续的非字母数字字符（标点、空白、符号）压成一个连字符，最后去掉首尾连字符。\n\n**测试结果** — `python -m pytest test_m2.py -v`：\n\n```\ntest_m2.py::test_basic PASSED\ntest_m2.py::test_punct_and_case PASSED\ntest_m2.py::test_squeeze_spaces PAS",
+      "usage": null
+    },
+    {
+      "id": "M3",
+      "category": "T2",
+      "note": "1-based pagination boundary bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 3 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 49.5,
+      "final_text_head": "修复完成，测试全部通过。\n\n**Bug 分析**：`page()` 的注释和测试都约定 `page_num` 是 1-based，但原代码 `start = page_num * size` 直接把它当 0-based 下标用了，导致：\n- 第 1 页返回了第 2 页的内容（`[3,4,5]` 而非 `[0,1,2]`）\n- 最后一页被整体跳过（第 4 页返回 `[]` 而非 `[9]`）\n- 只有\"超出末尾为空\"这一条碰巧通过\n\n**修复**（`paginator.py` 第 3 行）：\n```python\nstart = (page_num - 1) * size\n```\n\n**验证结果*",
+      "usage": null
+    },
+    {
+      "id": "M4",
+      "category": "T2",
+      "note": "state machine to tests",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 30.3,
+      "final_text_head": "完成。4 个测试全部通过。\n\n**`turnstile.py`** 实现：\n- `AlarmError(Exception)` — 模块内定义的异常\n- `Turnstile` 类：初始 `locked=True`；`coin()` 解锁（`locked=False`）；`push()` 通过后重新锁上（`locked=True`）；`locked` 状态下 `push()` 抛出 `AlarmError`\n\n**关于测试文件的说明**：原 `test_push_locked_raises_alarm` 直接调用 `t.push()` 却没有断言异常（注释表明本意是“应当抛出 AlarmErr",
+      "usage": null
+    },
+    {
+      "id": "M5",
+      "category": "T2",
+      "note": "dedup refactor, behavior preserved + source check",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s; dedup confirmed (helper defined once)",
+      "error": "",
+      "elapsed_s": 19.8,
+      "final_text_head": "完成。\n\n**改动**：`report.py` 中 `_fmt_row` 原本定义了两次（第 1–2 行和第 9–10 行，内容完全相同）。删除了第二个定义，只保留文件顶部的一个。由于两个定义逐字节相同，`render_summary` 和 `render_diff` 的行为完全不变——之前运行时实际生效的本来就是后一个定义，但它们等价。\n\n**测试**：`pytest test_m5.py -v` → 2 passed（`test_summary`、`test_diff` 均通过）。\n",
+      "usage": null
+    },
+    {
+      "id": "M6",
+      "category": "T2",
+      "note": "ANY-vs-ALL dependency bug",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 39.2,
+      "final_text_head": "修复完成，测试全部通过。\n\n## 问题与修复\n\n**Bug**：`scheduler.py` 第 11 行用 `any()` 判断依赖完成情况，任务只要有**任意一个**依赖完成就被放行。例如 `{'c': ['a','b'], 'a': [], 'b': []}` 中，`a` 一完成 `c` 就会被排到 `b` 前面，违反依赖约束。\n\n**修复**：将 `any(d in done for d in deps)` 改为 `all(d in done for d in deps)`——只有**所有**依赖都完成后任务才可执行。空依赖列表的任务 `all([])` 为 `True`，保持立即就绪",
+      "usage": null
+    },
+    {
+      "id": "M7",
+      "category": "T2",
+      "note": "I/O error-contract fix",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.04s",
+      "error": "",
+      "elapsed_s": 28.1,
+      "final_text_head": "两个测试全部通过。\n\n**修复内容**（`reader.py`）：\n\n1. **文件不存在 → 返回空 dict**：把 `open(path)` 包进 `try/except FileNotFoundError`，命中即 `return {}`，不再向外抛异常。\n2. **无法解析的行跳过**：\n   - 空行（`strip()` 后为空）直接跳过；\n   - 用 `partition(':')` 代替 `split(':')` 解包——没有 `:` 分隔符的行（如 `badline`）跳过，含多个 `:` 的行也只按第一个 `:` 切分；\n   - `int(score)` 包进 `try",
+      "usage": null
+    },
+    {
+      "id": "M8",
+      "category": "T2",
+      "note": "config loader semantics (defaults + int coercion)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.03s",
+      "error": "",
+      "elapsed_s": 36.5,
+      "final_text_head": "已完成 `conf.py` 的实现并跑通测试。\n\n**实现要点**（[conf.py](conf.py)）：\n- 以 `defaults` 为起点（`dict(defaults)`，兼容 `defaults=None`），文件中的值覆盖同名默认值；文件中缺失的键保留默认值\n- 逐行解析 `key=value`：跳过空行、`#` 注释行和不含 `=` 的行；对 key/value 做 strip\n- 纯数字值（`value.isdigit()`）转 `int`，其余保持字符串\n\n**测试结果**：\n```\ntest_m8.py::test_missing_key_uses_default PAS",
+      "usage": null
+    },
+    {
+      "id": "H1",
+      "category": "T3",
+      "note": "multi-file logging feature (caplog-tested)",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 308.3,
+      "final_text_head": "完成。两个测试均通过，改动如下：\n\n**app.py**\n```python\nimport logging\n\nlogger = logging.getLogger(__name__)\n# The root logger defaults to WARNING, which would silently drop this\n# module's INFO records when the application has no logging config.\nlogger.setLevel(logging.INFO)\n\n\ndef compute(op, a, b):\n    if op == 'a",
+      "usage": null
+    },
+    {
+      "id": "H2",
+      "category": "T3",
+      "note": "mutable default arg leak",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 64.7,
+      "final_text_head": "修复完成，两个测试全部通过。\n\n**Bug 定位**：`basket.py` 中的 `def add_item(item, items=[])` 踩了 Python 经典的可变默认参数陷阱——默认值 `[]` 只在函数**定义时**求值一次，之后所有不传 `items` 的调用都共享同一个列表对象。所以第二次 `add_item('b')` 拿到的是被上一次调用 append 过的列表，返回 `['a', 'b']`。\n\n**修复**（basket.py）：\n\n```python\ndef add_item(item, items=None):\n    if items is None:\n   ",
+      "usage": null
+    },
+    {
+      "id": "H3",
+      "category": "T3",
+      "note": "expression evaluator with variables",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 4 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 125.6,
+      "final_text_head": "完成。`calc.py` 已实现并通过全部测试。\n\n## 实现方式\n\n采用**词法分析 + 递归下降解析器**（直接求值，无 AST 中间层）：\n\n```\nexpression := term (('+' | '-') term)*      # 加减，最低优先级\nterm       := unary (('*' | '/') unary)*    # 乘除\nunary      := ('+' | '-') unary | primary   # 一元正负号\nprimary    := NUMBER | NAME | '(' expression ')'\n```\n\n每个语法层级对应一个方法",
+      "usage": null
+    },
+    {
+      "id": "H4",
+      "category": "T3",
+      "note": "O(n²)→O(n) under a timed assertion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.02s",
+      "error": "",
+      "elapsed_s": 43.4,
+      "final_text_head": "完成。修改与验证结果：\n\n**改动**（`dedupe.py`）：\n- 原实现用 `if x not in out` 在结果列表里线性查找，整体是 O(n²)。\n- 新增 `seen` 集合记录已出现的元素，成员判断平均 O(1)，整体降为 **O(n)**；首次出现顺序不变（`out.append` 时机与原逻辑一致）。\n- 保留了一个 `try/except TypeError` 回退分支：遇到不可哈希元素（如 list、dict）时退回原来的逐项比较，保证这类输入的行为与原实现完全一致。\n\n**测试结果**：\n- `test_correct` 与 `test_fast_on_large_",
+      "usage": null
+    },
+    {
+      "id": "H5",
+      "category": "T3",
+      "note": "dict→class API migration",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.23s",
+      "error": "",
+      "elapsed_s": 41.5,
+      "final_text_head": "迁移完成。以下是所做更改的总结：\n\n**`api.py`**（已重写）：\n- `USERS` 现在是一个由 `users.User` 实例组成的列表：`ann`（默认为激活）和 `bob`（`active=False`）——替换了来自 `legacy.py` 的旧字典记录。\n- `find_active(users)` 返回过滤后的列表 `[u for u in users if u.is_active]`，利用 `User.is_active` 属性。\n\n**`legacy.py`**：已删除 — 不再被任何地方引用（已通过 `grep` 在整个工作区中验证，无匹配项）。\n\n**测试**：`",
+      "usage": null
+    },
+    {
+      "id": "H6",
+      "category": "T3",
+      "note": "shared-state leak + deep recursion",
+      "passed": true,
+      "evidence": "pytest rc=0 :: 2 passed in 0.01s",
+      "error": "",
+      "elapsed_s": 327.4,
+      "final_text_head": "完成。`test_h6.py` 两个测试现已全部通过（2 passed）。\n\n## 定位到的两个 bug 及修复\n\n**Bug 1 — 计数跨调用泄漏（`total_leaves`）**\n`def total_leaves(node, acc=[])` 用了可变默认参数：这个列表在函数定义时只创建一次，被所有省略 `acc` 的调用共享，导致叶子计数不断累积。失败现场：`len(total_leaves(build(1)))` 得到 `4098`（上一次 `build(12)` 调用泄漏的 4096 + 本次的 2）。它还会让深构建的计数依赖于测试执行顺序。\n修复：改用 `acc=None` ",
+      "usage": null
+    }
+  ]
+}

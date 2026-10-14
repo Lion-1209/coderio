@@ -1,0 +1,50 @@
+{
+  "overall": "14/34",
+  "on_ran": "14/25",
+  "categories": {
+    "resolved": [
+      "blind-maze-explorer-5x5",
+      "blind-maze-explorer-algorithm.easy",
+      "chess-best-move",
+      "fibonacci-server",
+      "get-bitcoin-nodes",
+      "git-workflow-hack",
+      "grid-pattern-transform",
+      "heterogeneous-dates",
+      "modernize-fortran-build",
+      "openssl-selfsigned-cert",
+      "processing-pipeline",
+      "simple-sheets-put",
+      "sqlite-with-gcov",
+      "tmux-advanced-workflow"
+    ],
+    "real_fail": [
+      "decommissioning-service-with-sensitive-data",
+      "nginx-request-logging",
+      "pytorch-model-cli (ec=2)",
+      "run-pdp11-code",
+      "solana-data",
+      "vim-terminal-task"
+    ],
+    "coderio_timeout": [
+      "build-tcc-qemu",
+      "extract-moves-from-video",
+      "password-recovery",
+      "path-tracing-reverse",
+      "raman-fitting.easy"
+    ],
+    "test_infra": [
+      "build-initramfs-qemu (test_timeout)",
+      "cron-broken-network (parse_error)",
+      "pytorch-model-cli.hard (test_timeout)"
+    ],
+    "never_ran": [
+      "configure-git-webserver",
+      "eval-mteb",
+      "fix-pandas-version",
+      "intrusion-detection",
+      "polyglot-c-py",
+      "swe-bench-fsspec"
+    ]
+  }
+}
