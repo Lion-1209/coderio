@@ -48,6 +48,14 @@ class RecordingStream:
         self.harness_signals: list[dict] = []
         self.tool_calls: list[str] = []
         self.finished = False
+        # Token accounting: the engine calls add_usage(meta) per model call
+        # when the stream exposes it (same hook the TUI StatusBar uses).
+        self.usage = {"input_tokens": 0, "output_tokens": 0}
+
+    def add_usage(self, meta: dict) -> None:
+        for k in ("input_tokens", "output_tokens"):
+            if k in meta:
+                self.usage[k] += int(meta[k] or 0)
 
     def on_step_start(self, step: int = 1) -> None:  # noqa: D102
         pass
@@ -173,11 +181,13 @@ def _run_interrupt_resend_task(task, model, model_name: str, recursion_limit: in
     }
 
 
-def _run_task(task, model, model_name: str, recursion_limit: int) -> dict:
+def _run_task(task, model, model_name: str, recursion_limit: int, harness_enabled: bool = True) -> dict:
     """One task in a fresh workdir + fresh session. Returns a result record.
 
     The sandbox lives in the SYSTEM temp dir (never the results directory —
     task workdirs are scratch, reports are the artifact worth keeping).
+    ``harness_enabled=False`` is the benchmark's harness-off arm: identical
+    engine, identical tools, four gates + nudges disabled.
     """
     if getattr(task, "flow", "") == "interrupt-resend":
         return _run_interrupt_resend_task(task, model, model_name, recursion_limit)
@@ -191,7 +201,8 @@ def _run_task(task, model, model_name: str, recursion_limit: int) -> dict:
     try:
         final_text = run_deep_agent(
             task.prompt,
-            TurnSpec(model=model, workdir=str(workdir), recursion_limit=recursion_limit),
+            TurnSpec(model=model, workdir=str(workdir), recursion_limit=recursion_limit,
+                     harness_enabled=harness_enabled),
             session,
             stream=stream,
         )
@@ -224,6 +235,7 @@ def _run_task(task, model, model_name: str, recursion_limit: int) -> dict:
         "tool_calls": stream.tool_calls,
         "ran_execute": ctx.ran_execute(),
         "final_text_head": final_text[:300],
+        "usage": dict(stream.usage),
     }
 
 
