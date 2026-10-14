@@ -6,6 +6,35 @@ All notable changes to coderio are documented here. The format follows
 `pyproject.toml`'s `[project].version` — `coderio.__version__` reads it via
 `importlib.metadata`.
 
+## [0.6.1] — 2026-10-13
+
+### Fixed — Terminal-Bench 2026-10-10 bench-driven optimization batch
+
+Root-caused from the first Terminal-Bench run (terminal-bench-core 0.1.1,
+40-task deterministic subset, coderio × step-5-preview). Full autopsy,
+protocol, and before/after data: `docs/benchmarks/`.
+
+- **`coderio run --timeout` 超时改为优雅中断**：原实现超时后直接退出
+  进程、daemon 线程在解释器拆解中继续调度 langgraph futures——每个长
+  任务都死于 `RuntimeError: cannot schedule new futures after shutdown`
+  撕毁竞态（bench 尸检：11 个失败中 6 个此模式）。现在 deadline 走
+  HeadlessStream 的 `is_interrupted()`（与 TUI Esc 同一通道），引擎在
+  下一个 chunk 边界干净中断、确定性关闭 stream 生成器；两级 join
+  （预算 + 可配宽限 CODERIO_TIMEOUT_GRACE），不配合的引擎超宽限才硬
+  退 124。实证：password-recovery 从崩溃死亡转通过。
+- **RequirementsRecapGate（harness 第 5 道门）**：多需求 CODE 任务
+  首次宣布 done 时强制一次性需求自审——逐条列出原始需求的验证证据，
+  缺证据的先补。治 bench 尸检中 "80% 完成就宣布 done" 模式（nginx
+  7/8、decommissioning 5/6、vim 4/5）。触发启发式保证单问句任务零开
+  销，一次性不重复。
+- **Terminal-Bench 适配器**：容器内绝对路径调用 coderio（修复 uv 安
+  装后 ~/.local/bin 不在 PATH 的问题）；安装脚本加 PEP 668 override、
+  apt python3-pip 兜底、PyPI 镜像。
+- **基准成绩（terminal-bench-core 0.1.1，40 题确定性子集）**：
+  优化前单轮 5/40（coderio 实跑口径 5/14=36%），修复后单轮 **12/40**
+  （+140%）。细节见 `docs/benchmarks/terminal-bench-core-0.1.1-coderio-2026-10-10.md`
+  + `terminal-bench-scoreboard-2026-10-10.json`。
+
 ## [0.6.0] — 2026-09-23
 
 ### Added — 2026-09-20/21 change-plan batch (D1-1…D1-4, Phase 2, Phase 3)
@@ -990,7 +1019,8 @@ weaker than the documentation's promise. All fixed and double-checked:
 - Rich stream UI + Textual TUI with foldable thinking.
 - jsonl session persistence with compression truncation.
 
-[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Lion-1209/coderio/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Lion-1209/coderio/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Lion-1209/coderio/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Lion-1209/coderio/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/Lion-1209/coderio/releases/tag/v0.4.4

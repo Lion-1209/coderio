@@ -10,8 +10,8 @@
     {
       "rule": "max-file-lines",
       "file": "src/coderio/agent/harness.py",
-      "detail": "1000 lines > 800",
-      "fp": "64dd04a616d0e18f"
+      "detail": "1077 lines > 800",
+      "fp": "296cf0a095b30fe5"
     },
     {
       "rule": "max-file-lines",
